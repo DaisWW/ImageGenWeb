@@ -7,7 +7,9 @@ import os
 import tempfile
 import threading
 import unittest
+import zlib
 from concurrent.futures import Future
+from contextlib import ExitStack
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -40,13 +42,23 @@ from imagegen.models import (
 from imagegen.serializers import display_amount
 from imagegen.services import ServiceError, SubmitGeneration
 from imagegen.services.conversation import CHAT_SYSTEM_PROMPT
+from imagegen.storage import InvalidImageError
 from imagegen.worker import GenerationWorker
+from scripts.backup import copy_private_file
 
 
 def png_bytes(color=(35, 160, 110)) -> bytes:
     stream = io.BytesIO()
     Image.new("RGB", (64, 48), color).save(stream, format="PNG")
     return stream.getvalue()
+
+
+def png_bytes_with_dimensions(width: int, height: int) -> bytes:
+    content = bytearray(png_bytes())
+    content[16:20] = width.to_bytes(4, "big")
+    content[20:24] = height.to_bytes(4, "big")
+    content[29:33] = zlib.crc32(content[12:29]).to_bytes(4, "big")
+    return bytes(content)
 
 
 CHANNEL_CONFIG = """\
@@ -167,9 +179,11 @@ class FakeChatClient:
     def __init__(self):
         self.calls = []
 
-    def complete(self, _model, *, system, messages, max_output_tokens=None):
+    def complete(self, model, *, system, messages, max_output_tokens=None):
         self.calls.append(
             {
+                "model_id": model.identifier,
+                "model": model.model,
                 "system": system,
                 "messages": messages,
                 "max_output_tokens": max_output_tokens,
@@ -360,6 +374,59 @@ class ImageGenPlatformTests(unittest.TestCase):
         response = client.get("/")
         self.assertEqual(response.status_code, 302)
         self.assertIn("/login", response.location)
+
+    def test_password_reset_revokes_old_remember_cookie(self):
+        client = self.app.test_client()
+        response = client.post(
+            "/login",
+            data={
+                "username": "artist",
+                "password": "StrongPass123!",
+                "remember": "1",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIsNotNone(client.get_cookie("remember_token"))
+
+        self.services.users.reset_password(
+            self.user.id,
+            "ReplacementPass123!",
+            self.admin.id,
+        )
+        client.delete_cookie(self.app.config.get("SESSION_COOKIE_NAME", "session"))
+
+        self.context.pop()
+        try:
+            response = client.get("/")
+        finally:
+            self.context.push()
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response.location)
+
+    def test_changing_own_password_refreshes_current_remember_identity(self):
+        client = self.app.test_client()
+        client.post(
+            "/login",
+            data={
+                "username": "artist",
+                "password": "StrongPass123!",
+                "remember": "1",
+            },
+        )
+        old_token = client.get_cookie("remember_token").value
+
+        response = client.post(
+            "/account/password",
+            json={
+                "current_password": "StrongPass123!",
+                "new_password": "ReplacementPass123!",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(client.get("/").status_code, 200)
+        self.assertNotEqual(client.get_cookie("remember_token").value, old_token)
 
     def test_password_can_be_short_but_not_empty(self):
         self.services.auth.set_password(self.user, "12345678")
@@ -637,6 +704,52 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertFalse(conversations.operation_state(workspace.id)["busy"])
 
+    def test_chat_operations_enforce_user_and_global_capacity(self):
+        conversations = self.services.conversations
+        own_workspaces = [
+            self.create_workspace("并发工作站一"),
+            self.create_workspace("并发工作站二"),
+            self.create_workspace("并发工作站三"),
+        ]
+        with ExitStack() as operations:
+            for workspace in own_workspaces[:2]:
+                operations.enter_context(
+                    conversations._workspace_operation(workspace, "reply", "等待回复")
+                )
+            with self.assertRaises(ServiceError) as raised:
+                with conversations._workspace_operation(own_workspaces[2], "reply", "等待回复"):
+                    pass
+            self.assertEqual(raised.exception.code, "conversation_user_limit")
+            self.assertEqual(raised.exception.status_code, 429)
+
+        other = self.services.users.create(
+            username="parallel-user",
+            password="StrongPass123!",
+            balance_rmb="5",
+            actor_user_id=self.admin.id,
+        )
+        third = self.services.users.create(
+            username="capacity-user",
+            password="StrongPass123!",
+            balance_rmb="5",
+            actor_user_id=self.admin.id,
+        )
+        other_workspaces = [
+            self.services.workspaces.create(other.id, "其他工作站一"),
+            self.services.workspaces.create(other.id, "其他工作站二"),
+        ]
+        capacity_workspace = self.services.workspaces.create(third.id, "容量工作站")
+        with ExitStack() as operations:
+            for workspace in [*own_workspaces[:2], *other_workspaces]:
+                operations.enter_context(
+                    conversations._workspace_operation(workspace, "reply", "等待回复")
+                )
+            with self.assertRaises(ServiceError) as raised:
+                with conversations._workspace_operation(capacity_workspace, "reply", "等待回复"):
+                    pass
+            self.assertEqual(raised.exception.code, "conversation_capacity")
+            self.assertEqual(raised.exception.status_code, 503)
+
     def test_chat_multiple_attachments_are_sent_persisted_and_cannot_cross_workspaces(self):
         workspace = self.create_workspace()
         other_workspace = self.create_workspace("其他工作站")
@@ -705,6 +818,25 @@ class ImageGenPlatformTests(unittest.TestCase):
         )
         self.assertEqual(len(replacement), 1)
 
+    def test_reference_upload_rejects_oversized_and_incomplete_images(self):
+        workspace = self.create_workspace()
+        client = self.user_client()
+        for content in (
+            png_bytes_with_dimensions(9000, 100),
+            png_bytes_with_dimensions(8192, 8192),
+            png_bytes()[:40],
+        ):
+            response = client.post(
+                f"/api/workspaces/{workspace.id}/assets",
+                data={"references": (io.BytesIO(content), "invalid.png")},
+                content_type="multipart/form-data",
+            )
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(response.json["code"], "invalid_image")
+
+        with self.assertRaises(InvalidImageError):
+            self.app.extensions["image_storage"].inspect(png_bytes()[:40])
+
     def test_chat_api_uploads_multiple_references_and_delete_preserves_history(self):
         workspace = self.create_workspace()
         client = self.user_client()
@@ -772,6 +904,43 @@ class ImageGenPlatformTests(unittest.TestCase):
         )
         self.assertEqual(translated.payload["language"], "en")
         self.assertIn("英文生图提示词", self.chat_client.calls[-1]["system"])
+
+    def test_admin_can_assign_a_dedicated_prompt_draft_model(self):
+        config = self.admin_client().get("/api/admin/chat-models").json["config"]
+        config["models"].append(
+            {
+                "id": "prompt-mini",
+                "label": "GPT 5.4 Mini",
+                "enabled": True,
+                "base_url": "https://chat.example",
+                "api_key": "prompt-mini-key",
+                "model": "gpt-5.4-mini",
+                "reasoning_effort": "low",
+                "timeout_seconds": 30,
+                "max_output_tokens": 1000,
+            }
+        )
+        config["prompt_draft_model_id"] = "prompt-mini"
+
+        response = self.admin_client().put("/api/admin/chat-models", json=config)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["config"]["prompt_draft_model_id"], "prompt-mini")
+        workspace = self.create_workspace()
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="电影感人物肖像",
+        )
+        draft = self.services.conversations.create_prompt_draft(
+            workspace,
+            model_id="test-chat",
+            translate_to_english=False,
+        )
+        self.assertEqual(self.chat_client.calls[-1]["model_id"], "prompt-mini")
+        self.assertEqual(self.chat_client.calls[-1]["model"], "gpt-5.4-mini")
+        self.assertEqual(draft.provider_id, "prompt-mini")
+        self.assertEqual(workspace.settings["chat_model_id"], "test-chat")
 
     def test_active_generation_blocks_chat_until_job_is_terminal(self):
         workspace = self.create_workspace()
@@ -1007,6 +1176,113 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertEqual(user.balance_rmb, Decimal("20.0000"))
         self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
 
+    def test_worker_restart_recovers_recent_claim_and_discards_late_result(self):
+        workspace = self.create_workspace()
+        job = self.submit(workspace)
+        item_id = job.items[0].id
+        old_worker = GenerationWorker(
+            self.app,
+            self.app.extensions["channel_registry"],
+            self.app.extensions["image_storage"],
+        )
+        old_worker.worker_id = "worker-before-restart"
+        old_worker.providers = BlockingProviderFactory()
+        channel = self.app.extensions["channel_registry"].get("test")
+        self.assertTrue(old_worker._claim(item_id, channel))
+
+        processing = threading.Thread(target=old_worker._process_item, args=(item_id,))
+        processing.start()
+        self.assertTrue(old_worker.providers.adapter.started.wait(5))
+        try:
+            replacement = GenerationWorker(
+                self.app,
+                self.app.extensions["channel_registry"],
+                self.app.extensions["image_storage"],
+            )
+            replacement.worker_id = "worker-after-restart"
+            replacement._recover_orphaned_items(immediate=True)
+        finally:
+            old_worker.providers.adapter.release.set()
+            processing.join(10)
+
+        self.assertFalse(processing.is_alive())
+        db.session.expire_all()
+        item = db.session.get(GenerationItem, item_id)
+        user = db.session.get(User, self.user.id)
+        self.assertEqual(item.status, "interrupted")
+        self.assertIsNone(item.output_path)
+        self.assertEqual(user.balance_rmb, Decimal("20.0000"))
+        self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
+        charge_count = db.session.scalar(
+            select(func.count(WalletLedger.id)).where(
+                WalletLedger.generation_item_id == item_id,
+                WalletLedger.entry_type == "generation_charge",
+            )
+        )
+        self.assertEqual(charge_count, 0)
+
+    def test_worker_heartbeats_only_its_active_claims(self):
+        workspace = self.create_workspace()
+        job = self.submit(workspace)
+        item_id = job.items[0].id
+        worker = GenerationWorker(
+            self.app,
+            self.app.extensions["channel_registry"],
+            self.app.extensions["image_storage"],
+        )
+        worker.worker_id = "heartbeat-worker"
+        channel = self.app.extensions["channel_registry"].get("test")
+        self.assertTrue(worker._claim(item_id, channel))
+        stale_heartbeat = utcnow() - timedelta(minutes=10)
+        db.session.get(GenerationItem, item_id).heartbeat_at = stale_heartbeat
+        db.session.commit()
+        worker._futures[item_id] = Future()
+
+        worker._heartbeat_claims()
+
+        db.session.expire_all()
+        heartbeat = db.session.get(GenerationItem, item_id).heartbeat_at
+        self.assertNotEqual(heartbeat, stale_heartbeat)
+
+    def test_worker_instances_have_unique_claim_identifiers(self):
+        first = GenerationWorker(
+            self.app,
+            self.app.extensions["channel_registry"],
+            self.app.extensions["image_storage"],
+        )
+        second = GenerationWorker(
+            self.app,
+            self.app.extensions["channel_registry"],
+            self.app.extensions["image_storage"],
+        )
+        self.assertNotEqual(first.worker_id, second.worker_id)
+
+    def test_worker_periodic_recovery_skips_live_future_and_recovers_abandoned_claim(self):
+        workspace = self.create_workspace()
+        job = self.submit(workspace)
+        item_id = job.items[0].id
+        worker = GenerationWorker(
+            self.app,
+            self.app.extensions["channel_registry"],
+            self.app.extensions["image_storage"],
+        )
+        worker.worker_id = "periodic-recovery-worker"
+        channel = self.app.extensions["channel_registry"].get("test")
+        self.assertTrue(worker._claim(item_id, channel))
+        db.session.get(GenerationItem, item_id).heartbeat_at = utcnow() - timedelta(minutes=30)
+        db.session.commit()
+        worker._futures[item_id] = Future()
+
+        worker._recover_orphaned_items(immediate=False)
+        db.session.expire_all()
+        self.assertEqual(db.session.get(GenerationItem, item_id).status, "running")
+
+        worker._futures.clear()
+        worker._recover_orphaned_items(immediate=False)
+        db.session.expire_all()
+        self.assertEqual(db.session.get(GenerationItem, item_id).status, "interrupted")
+        self.assertEqual(db.session.get(User, self.user.id).reserved_rmb, Decimal("0.0000"))
+
     def test_worker_keeps_excess_images_queued_at_user_and_channel_limits(self):
         workspace = self.create_workspace()
         job = self.submit(workspace, batch_count=4)
@@ -1208,6 +1484,18 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["title"], "设计图像中心")
         self.assertRegex(response.json["version"], r"^\d+\.\d+\.\d+")
+
+    def test_backup_copies_deployment_environment_with_private_permissions(self):
+        root = Path(self.temp.name)
+        source = root / "source.env"
+        destination = root / "deployment.env"
+        source.write_text("CONFIG_ENCRYPTION_KEY=test-only\n", encoding="utf-8")
+
+        copy_private_file(source, destination)
+
+        self.assertEqual(destination.read_bytes(), source.read_bytes())
+        if os.name != "nt":
+            self.assertEqual(destination.stat().st_mode & 0o077, 0)
 
     def test_admin_channel_config_is_encrypted_versioned_and_hot_reloaded(self):
         client = self.admin_client()
