@@ -64,6 +64,9 @@ class User(UserMixin, TimestampMixin, db.Model):
     def is_admin(self) -> bool:
         return self.role == "admin"
 
+    def get_id(self) -> str:
+        return f"{self.id}:{self.password_version or 0}"
+
 
 class Workspace(TimestampMixin, db.Model):
     __tablename__ = "workspaces"

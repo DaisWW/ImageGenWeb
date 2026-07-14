@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from flask import jsonify, redirect, render_template, request, session, url_for
+from flask import current_app, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user, login_required, login_user, logout_user
 from sqlalchemy import select
 
@@ -52,7 +52,6 @@ def login():
         )
         if user:
             login_user(user, remember=bool(request.form.get("remember")))
-            session["password_version"] = user.password_version
             return redirect(url_for("web.studio"))
         error = "用户名或密码错误"
     return render_template("pages/login.html", error=error)
@@ -62,7 +61,6 @@ def login():
 @login_required
 def logout():
     logout_user()
-    session.pop("password_version", None)
     return redirect(url_for("web.login"))
 
 
@@ -71,11 +69,15 @@ def logout():
 def change_password():
     data = json_body()
     auth: AuthService = services().auth
-    if not auth.verify_password(current_user, str(data.get("current_password", ""))):
+    user = current_user._get_current_object()
+    if not auth.verify_password(user, str(data.get("current_password", ""))):
         raise ServiceError("当前密码错误", status_code=403)
-    auth.set_password(current_user, str(data.get("new_password", "")))
+    remember_cookie = current_app.config.get("REMEMBER_COOKIE_NAME", "remember_token")
+    remember = request.cookies.get(remember_cookie) is not None
+    auth.set_password(user, str(data.get("new_password", "")))
     db.session.commit()
-    session["password_version"] = current_user.password_version
+    logout_user()
+    login_user(user, remember=remember, fresh=True)
     return jsonify(ok=True)
 
 

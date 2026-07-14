@@ -40,6 +40,7 @@ class ConversationPage:
 
 @dataclass(frozen=True)
 class ConversationOperation:
+    user_id: int
     kind: str
     label: str
     started_at: datetime
@@ -58,6 +59,8 @@ class ConversationService:
     MAX_ATTACHMENTS = 8
     MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
     MAX_ATTACHMENT_TOTAL_BYTES = 40 * 1024 * 1024
+    MAX_CONCURRENT_OPERATIONS = 4
+    MAX_CONCURRENT_PER_USER = 2
 
     def __init__(
         self,
@@ -275,11 +278,31 @@ class ConversationService:
 
     @contextmanager
     def _workspace_operation(self, workspace: Workspace, kind: str, label: str) -> Iterator[None]:
-        operation = ConversationOperation(kind=kind, label=label, started_at=utcnow())
+        operation = ConversationOperation(
+            user_id=workspace.user_id,
+            kind=kind,
+            label=label,
+            started_at=utcnow(),
+        )
         with self._operation_lock:
             active = self._operations.get(workspace.id)
             if active is not None:
                 raise self._busy_error(active)
+            user_operations = sum(
+                active.user_id == workspace.user_id for active in self._operations.values()
+            )
+            if user_operations >= self.MAX_CONCURRENT_PER_USER:
+                raise ServiceError(
+                    f"同一账户最多同时进行 {self.MAX_CONCURRENT_PER_USER} 个 AI 对话请求",
+                    code="conversation_user_limit",
+                    status_code=429,
+                )
+            if len(self._operations) >= self.MAX_CONCURRENT_OPERATIONS:
+                raise ServiceError(
+                    "当前 AI 对话请求较多，请稍后重试",
+                    code="conversation_capacity",
+                    status_code=503,
+                )
             self._operations[workspace.id] = operation
         try:
             yield

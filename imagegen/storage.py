@@ -5,6 +5,7 @@ import io
 import os
 import shutil
 import uuid
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,9 +16,15 @@ IMAGE_FORMATS = {
     "jpeg": ("jpg", "image/jpeg"),
     "webp": ("webp", "image/webp"),
 }
+MAX_IMAGE_DIMENSION = 8192
+MAX_IMAGE_PIXELS = 40_000_000
 
 
 class StorageError(RuntimeError):
+    pass
+
+
+class InvalidImageError(StorageError):
     pass
 
 
@@ -45,16 +52,26 @@ class ImageStorage:
 
     def inspect(self, content: bytes) -> StoredImage:
         if not content:
-            raise StorageError("图片内容为空")
+            raise InvalidImageError("图片内容为空")
         try:
-            with Image.open(io.BytesIO(content)) as image:
-                width, height = image.size
-                image_format = (image.format or "").lower()
-                image.verify()
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", Image.DecompressionBombWarning)
+                with Image.open(io.BytesIO(content)) as image:
+                    width, height = image.size
+                    image_format = (image.format or "").lower()
+                    if image_format not in IMAGE_FORMATS:
+                        raise InvalidImageError("仅支持 PNG、JPEG 和 WebP 图片")
+                    if width > MAX_IMAGE_DIMENSION or height > MAX_IMAGE_DIMENSION:
+                        raise InvalidImageError(f"图片单边不能超过 {MAX_IMAGE_DIMENSION} 像素")
+                    if width * height > MAX_IMAGE_PIXELS:
+                        raise InvalidImageError(f"图片总像素不能超过 {MAX_IMAGE_PIXELS:,}")
+                    image.load()
+        except InvalidImageError:
+            raise
+        except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+            raise InvalidImageError("图片像素数量超过安全限制") from exc
         except (UnidentifiedImageError, OSError, ValueError) as exc:
-            raise StorageError("文件不是有效图片") from exc
-        if image_format not in IMAGE_FORMATS:
-            raise StorageError("仅支持 PNG、JPEG 和 WebP 图片")
+            raise InvalidImageError("文件不是有效图片") from exc
         extension, mime_type = IMAGE_FORMATS[image_format]
         return StoredImage(
             relative_path="",

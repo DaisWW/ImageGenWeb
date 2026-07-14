@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
+from sqlalchemy import update
+from sqlalchemy.exc import IntegrityError
 
 from ..errors import ServiceError
 from ..extensions import db
@@ -130,13 +132,10 @@ class RuntimeConfigRepository:
         audit_action: str,
     ) -> str:
         state = db.session.get(SystemState, key)
-        current_revision = self._revision(state.value) if state and state.value else ""
+        current_value = state.value if state is not None else None
+        current_revision = self._revision(current_value) if current_value else ""
         if expected_revision != current_revision:
-            raise ServiceError(
-                "配置已被其他管理员更新，请刷新后重试",
-                code="config_conflict",
-                status_code=409,
-            )
+            self._raise_conflict()
 
         stored_document = copy.deepcopy(document)
         items = stored_document.get(collection_key)
@@ -154,12 +153,22 @@ class RuntimeConfigRepository:
             sort_keys=True,
             separators=(",", ":"),
         )
-        if state is None:
-            state = SystemState(key=key, value=serialized)
-            db.session.add(state)
+        if current_value is None:
+            db.session.add(SystemState(key=key, value=serialized))
+            try:
+                db.session.flush()
+            except IntegrityError as exc:
+                db.session.rollback()
+                raise self._conflict_error() from exc
         else:
-            state.value = serialized
-            state.updated_at = utcnow()
+            updated = db.session.execute(
+                update(SystemState)
+                .where(SystemState.key == key, SystemState.value == current_value)
+                .values(value=serialized, updated_at=utcnow())
+                .execution_options(synchronize_session=False)
+            )
+            if updated.rowcount != 1:
+                self._raise_conflict()
         revision = self._revision(serialized)
         db.session.add(
             AuditLog(
@@ -172,6 +181,18 @@ class RuntimeConfigRepository:
         )
         db.session.commit()
         return revision
+
+    @staticmethod
+    def _conflict_error() -> ServiceError:
+        return ServiceError(
+            "配置已被其他管理员更新，请刷新后重试",
+            code="config_conflict",
+            status_code=409,
+        )
+
+    def _raise_conflict(self) -> None:
+        db.session.rollback()
+        raise self._conflict_error()
 
     def _revision_for(self, key: str) -> str:
         state = db.session.get(SystemState, key)

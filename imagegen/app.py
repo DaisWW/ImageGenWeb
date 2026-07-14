@@ -4,8 +4,8 @@ import os
 import secrets
 from pathlib import Path
 
-from flask import Flask, jsonify, request, session
-from flask_login import current_user, logout_user
+from flask import Flask, jsonify, request
+from flask_login import current_user
 from flask_wtf.csrf import CSRFError
 
 from .config import (
@@ -29,7 +29,7 @@ from .services import (
     UserService,
     WorkspaceService,
 )
-from .storage import ImageStorage
+from .storage import ImageStorage, InvalidImageError
 from .version import __version__
 from .web import web
 
@@ -67,6 +67,7 @@ def create_app(config: dict | None = None) -> Flask:
         SESSION_COOKIE_SECURE=os.environ.get("COOKIE_SECURE", "").lower() in {"1", "true", "yes"},
         REMEMBER_COOKIE_HTTPONLY=True,
         REMEMBER_COOKIE_SAMESITE="Lax",
+        REMEMBER_COOKIE_SECURE=os.environ.get("COOKIE_SECURE", "").lower() in {"1", "true", "yes"},
         WTF_CSRF_TIME_LIMIT=None,
         AUTO_CREATE_DB=os.environ.get("AUTO_CREATE_DB", "true").strip().lower()
         not in {"0", "false", "no", "off"},
@@ -118,18 +119,6 @@ def create_app(config: dict | None = None) -> Flask:
     app.register_blueprint(web)
     _register_handlers(app)
 
-    @app.before_request
-    def enforce_password_version():
-        if not current_user.is_authenticated:
-            return None
-        stored = session.get("password_version")
-        if stored is None:
-            session["password_version"] = current_user.password_version
-        elif stored != current_user.password_version:
-            logout_user()
-            session.clear()
-        return None
-
     @app.after_request
     def secure_response(response):
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -161,10 +150,14 @@ def create_app(config: dict | None = None) -> Flask:
 @login_manager.user_loader
 def load_user(user_id: str) -> User | None:
     try:
-        user = db.session.get(User, int(user_id))
+        identifier, password_version = str(user_id).split(":", 1)
+        user = db.session.get(User, int(identifier))
+        expected_password_version = int(password_version)
     except (TypeError, ValueError):
         return None
-    return user if user and user.is_active else None
+    if user is None or not user.is_active or user.password_version != expected_password_version:
+        return None
+    return user
 
 
 def _register_handlers(app: Flask) -> None:
@@ -179,6 +172,12 @@ def _register_handlers(app: Flask) -> None:
         if request.path.startswith("/api/") or request.path.startswith("/account/"):
             return jsonify(error="页面凭证已失效，请刷新后重试", code="csrf_error"), 400
         return "页面凭证已失效，请刷新后重试", 400
+
+    @app.errorhandler(InvalidImageError)
+    def invalid_image(error: InvalidImageError):
+        if request.path.startswith("/api/"):
+            return jsonify(error=str(error), code="invalid_image"), 400
+        return str(error), 400
 
     @app.errorhandler(413)
     def too_large(_error):
