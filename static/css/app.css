@@ -1502,6 +1502,13 @@ select option {
   background: var(--surface-2);
 }
 
+.output-tile.has-transparency,
+.image-dialog-preview.has-transparency {
+  background:
+    conic-gradient(#d4d8d6 25%, #f2f4f3 0 50%, #d4d8d6 0 75%, #f2f4f3 0)
+    0 0 / 16px 16px;
+}
+
 .output-tile:not(:disabled):hover {
   border-color: var(--accent);
   transform: translateY(-2px);
@@ -1592,9 +1599,20 @@ select option {
   display: grid;
   max-width: 1380px;
   margin: 0 auto 9px;
-  grid-template-columns: auto minmax(190px, 1.25fr) minmax(150px, 1fr) repeat(3, minmax(105px, .65fr)) 72px;
+  grid-template-columns: auto minmax(190px, 1.25fr) minmax(150px, 1fr) repeat(3, minmax(105px, .65fr)) minmax(92px, .55fr) 72px;
   align-items: end;
   gap: 8px;
+}
+
+.generation-toggle {
+  min-width: 0;
+  align-self: end;
+  justify-content: center;
+}
+
+.generation-toggle.is-disabled {
+  cursor: not-allowed;
+  opacity: .45;
 }
 
 .compact-field {
@@ -2833,7 +2851,7 @@ tbody tr:hover td {
   .studio-shell { grid-template-columns: 215px minmax(0, 1fr); }
   .stage-header { gap: 14px; padding-inline: 17px; }
   .composer-controls {
-    grid-template-columns: auto minmax(170px, 1.2fr) minmax(135px, 1fr) repeat(3, minmax(88px, .65fr)) 65px;
+    grid-template-columns: auto minmax(170px, 1.2fr) minmax(135px, 1fr) repeat(3, minmax(88px, .65fr)) minmax(80px, .55fr) 65px;
   }
   .mode-button { min-width: 72px; padding-inline: 7px; }
   .job-body { grid-template-columns: 1fr; }

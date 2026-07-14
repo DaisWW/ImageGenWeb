@@ -46,6 +46,7 @@ class GenerationRequest:
     quality: str
     output_format: str
     compression: int
+    transparent_background: bool = False
     references: tuple[ReferencePayload, ...] = ()
 
 
@@ -72,6 +73,8 @@ class OpenAIImagesAdapter:
         }
         if request.output_format in {"jpeg", "webp"}:
             payload["output_compression"] = request.compression
+        if request.transparent_background:
+            payload["background"] = "transparent"
         headers = {"Authorization": f"Bearer {channel.api_key}"}
         request_data: dict[str, Any]
         if request.references:

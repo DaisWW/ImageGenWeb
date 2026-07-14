@@ -231,6 +231,7 @@ class GenerationWorker:
                         quality=item.job.quality,
                         output_format=item.job.output_format,
                         compression=item.job.compression,
+                        transparent_background=item.job.transparent_background,
                         references=references,
                     ),
                 )

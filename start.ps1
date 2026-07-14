@@ -58,6 +58,10 @@ $env:IMAGE_WEB_PORT = [string]$Port
 Push-Location $projectDir
 $worker = $null
 try {
+    & $python -m alembic upgrade head
+    if ($LASTEXITCODE -ne 0) {
+        throw "数据库迁移失败"
+    }
     $worker = Start-Process -FilePath $python `
         -ArgumentList "run_worker.py" `
         -WorkingDirectory $projectDir `

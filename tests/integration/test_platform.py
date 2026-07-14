@@ -90,7 +90,7 @@ channels:
       reference_field: image
       sizes: [1024x1024]
       qualities: [medium]
-      formats: [png]
+      formats: [png, jpeg, webp]
     limits:
       max_concurrency: 3
       timeout_seconds: 600
@@ -120,8 +120,10 @@ models:
 class FakeAdapter:
     def __init__(self, *, fail: bool = False):
         self.fail = fail
+        self.request = None
 
-    def generate(self, _channel, _request):
+    def generate(self, _channel, request):
+        self.request = request
         if self.fail:
             from imagegen.integrations.images import ProviderError
 
@@ -994,13 +996,18 @@ class ImageGenPlatformTests(unittest.TestCase):
         adapter.generate(channel, request)
         self.assertEqual(session.request["url"], "https://relay.example/v1/images/generations")
         self.assertEqual(session.request["json"]["n"], 1)
+        self.assertNotIn("background", session.request["json"])
         self.assertNotIn("data", session.request)
         self.assertEqual(session.request["headers"]["Content-Type"], "application/json")
+
+        adapter.generate(channel, replace(request, transparent_background=True))
+        self.assertEqual(session.request["json"]["background"], "transparent")
 
         subject = png_bytes((220, 35, 45))
         layout = png_bytes((25, 80, 220))
         edit_request = replace(
             request,
+            transparent_background=True,
             references=(
                 ReferencePayload("subject.png", subject, "image/png"),
                 ReferencePayload("layout.png", layout, "image/png"),
@@ -1009,6 +1016,7 @@ class ImageGenPlatformTests(unittest.TestCase):
         adapter.generate(channel, edit_request)
         self.assertEqual(session.request["url"], "https://relay.example/v1/images/edits")
         self.assertEqual(session.request["data"]["n"], "1")
+        self.assertEqual(session.request["data"]["background"], "transparent")
         self.assertEqual([part[0] for part in session.request["files"]], ["image", "image"])
         self.assertEqual(
             [part[1][0] for part in session.request["files"]],
@@ -1043,6 +1051,41 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertEqual(job.reserved_rmb, Decimal("3.7500"))
         self.assertEqual(user.reserved_rmb, Decimal("3.7500"))
         self.assertEqual(len(job.items), 3)
+
+    def test_transparent_background_is_validated_persisted_and_serialized(self):
+        workspace = self.create_workspace()
+        with self.assertRaisesRegex(ServiceError, "透明背景仅支持 PNG 或 WebP"):
+            self.submit(
+                workspace,
+                output_format="jpeg",
+                transparent_background=True,
+            )
+
+        client = self.user_client()
+        response = client.post(
+            "/api/generations",
+            json={
+                "workspace_id": workspace.id,
+                "channel_id": "test",
+                "model": "model-b",
+                "mode": "text2img",
+                "prompt": "极简云朵图标",
+                "size": "1024x1024",
+                "quality": "medium",
+                "output_format": "png",
+                "compression": 90,
+                "batch_count": 1,
+                "reference_ids": [],
+                "transparent_background": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(response.json["job"]["transparent_background"])
+        db.session.refresh(workspace)
+        self.assertTrue(workspace.settings["transparent_background"])
+        saved_job = db.session.get(GenerationJob, response.json["job"]["id"])
+        self.assertTrue(saved_job.transparent_background)
 
     def test_custom_size_is_accepted_and_normalized(self):
         workspace = self.create_workspace()
@@ -1129,7 +1172,7 @@ class ImageGenPlatformTests(unittest.TestCase):
 
     def test_worker_success_saves_image_and_charges_exactly_once(self):
         workspace = self.create_workspace()
-        job = self.submit(workspace)
+        job = self.submit(workspace, transparent_background=True)
         worker = GenerationWorker(
             self.app,
             self.app.extensions["channel_registry"],
@@ -1139,6 +1182,7 @@ class ImageGenPlatformTests(unittest.TestCase):
         channel = self.app.extensions["channel_registry"].get("test")
         self.assertTrue(worker._claim(job.items[0].id, channel))
         worker._process_item(job.items[0].id)
+        self.assertTrue(worker.providers.adapter.request.transparent_background)
 
         db.session.expire_all()
         item = db.session.get(GenerationItem, job.items[0].id)

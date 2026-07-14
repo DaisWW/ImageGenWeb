@@ -212,6 +212,7 @@ class GenerationJob(TimestampMixin, db.Model):
     quality: Mapped[str] = mapped_column(db.String(20))
     output_format: Mapped[str] = mapped_column(db.String(20))
     compression: Mapped[int]
+    transparent_background: Mapped[bool] = mapped_column(default=False)
     requested_count: Mapped[int]
     price_per_image_rmb: Mapped[Decimal] = mapped_column(MONEY_TYPE)
     reserved_rmb: Mapped[Decimal] = mapped_column(MONEY_TYPE)

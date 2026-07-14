@@ -37,6 +37,7 @@ class SubmitGeneration:
     compression: int
     batch_count: int
     reference_ids: tuple[str, ...]
+    transparent_background: bool = False
 
 
 class GenerationService:
@@ -119,6 +120,7 @@ class GenerationService:
             quality=request.quality,
             output_format=request.output_format,
             compression=request.compression,
+            transparent_background=request.transparent_background,
             requested_count=request.batch_count,
             price_per_image_rmb=money(channel.price_rmb),
             reserved_rmb=reserved,
@@ -165,6 +167,7 @@ class GenerationService:
                 "quality": request.quality,
                 "output_format": request.output_format,
                 "compression": request.compression,
+                "transparent_background": request.transparent_background,
                 "batch_count": request.batch_count,
             }
         )
@@ -357,6 +360,8 @@ class GenerationService:
             raise ServiceError(f"{channel.label} 不支持质量 {request.quality}")
         if request.output_format not in channel.capabilities.formats:
             raise ServiceError(f"{channel.label} 不支持格式 {request.output_format}")
+        if request.transparent_background and request.output_format not in {"png", "webp"}:
+            raise ServiceError("透明背景仅支持 PNG 或 WebP 格式")
         if not 0 <= request.compression <= 100:
             raise ServiceError("压缩质量必须在 0 到 100 之间")
         if not 1 <= request.batch_count <= 20:

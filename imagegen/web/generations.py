@@ -15,6 +15,7 @@ from .shared import (
     channels,
     image_extension,
     json_body,
+    json_bool,
     owned_workspace,
     query_limit,
     services,
@@ -51,6 +52,7 @@ def submit_generation():
             compression=compression,
             batch_count=batch_count,
             reference_ids=tuple(str(item) for item in reference_ids),
+            transparent_background=json_bool(data.get("transparent_background", False)),
         ),
     )
     positions = generation_service.queue_positions()

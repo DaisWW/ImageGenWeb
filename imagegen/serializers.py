@@ -123,6 +123,7 @@ def job_dict(
         "quality": job.quality,
         "output_format": job.output_format,
         "compression": job.compression,
+        "transparent_background": job.transparent_background,
         "requested_count": job.requested_count,
         "price_per_image_rmb": _amount(job.price_per_image_rmb),
         "charged_rmb": _amount(job.charged_rmb),

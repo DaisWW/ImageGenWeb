@@ -18,6 +18,7 @@ ALLOWED_WORKSPACE_SETTING_KEYS = {
     "quality",
     "output_format",
     "compression",
+    "transparent_background",
     "batch_count",
 }
 
@@ -35,6 +36,7 @@ def default_workspace_settings() -> dict[str, Any]:
         "quality": "auto",
         "output_format": "png",
         "compression": 90,
+        "transparent_background": False,
         "batch_count": 1,
     }
 
@@ -56,6 +58,9 @@ def sanitize_workspace_settings(raw: Any) -> dict[str, Any]:
     settings["size"] = normalize_image_size(settings["size"])
     settings["quality"] = str(settings["quality"])[:20]
     settings["output_format"] = str(settings["output_format"])[:20]
+    settings["transparent_background"] = as_bool(settings["transparent_background"])
+    if settings["output_format"] not in {"png", "webp"}:
+        settings["transparent_background"] = False
     try:
         settings["compression"] = min(100, max(0, int(settings["compression"])))
         settings["batch_count"] = min(20, max(1, int(settings["batch_count"])))

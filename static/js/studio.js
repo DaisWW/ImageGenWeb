@@ -119,6 +119,8 @@
         sizeOptions: byId("sizeOptions"),
         qualitySelect: byId("qualitySelect"),
         formatSelect: byId("formatSelect"),
+        transparentBackground: byId("transparentBackground"),
+        transparentBackgroundControl: byId("transparentBackgroundControl"),
         batchCount: byId("batchCount"),
         referenceStrip: byId("referenceStrip"),
         referenceInput: byId("referenceInput"),
@@ -183,9 +185,14 @@
       this.el.channelSelect.addEventListener("change", () => {
         this.applyChannel(null, true);
       });
-      [this.el.modelSelect, this.el.qualitySelect, this.el.formatSelect].forEach((field) => {
+      [this.el.modelSelect, this.el.qualitySelect].forEach((field) => {
         field.addEventListener("change", () => this.settingChanged());
       });
+      this.el.formatSelect.addEventListener("change", () => {
+        this.updateTransparentBackgroundState();
+        this.settingChanged();
+      });
+      this.el.transparentBackground.addEventListener("change", () => this.settingChanged());
       this.el.sizeInput.addEventListener("input", () => this.el.sizeInput.setCustomValidity(""));
       this.el.sizeInput.addEventListener("change", () => {
         if (this.validateSizeInput(true)) this.settingChanged();
@@ -385,6 +392,7 @@
       const settings = this.activeWorkspace?.settings || {};
       this.renderChatModelOptions(settings.chat_model_id);
       this.el.translatePrompt.checked = settings.translate_prompt === true;
+      this.el.transparentBackground.checked = settings.transparent_background === true;
       this.el.promptInput.value = settings.prompt || "";
       this.el.promptCounter.textContent = `${this.el.promptInput.value.length} / 8000`;
       this.el.batchCount.value = Math.min(20, Math.max(1, Number(settings.batch_count || 1)));
@@ -446,6 +454,7 @@
         this.el.sizeInput.value = "";
         this.el.sizeInput.disabled = true;
         this.el.sizeInput.setCustomValidity("");
+        this.updateTransparentBackgroundState();
         this.el.generateButton.disabled = true;
         this.updatePrice();
         return;
@@ -459,6 +468,7 @@
       this.fillSelect(this.el.formatSelect, channel.capabilities.formats, settings.output_format, null, null, {
         png: "PNG", jpeg: "JPEG", webp: "WebP",
       });
+      this.updateTransparentBackgroundState();
       document.querySelectorAll("[data-mode]").forEach((button) => {
         button.disabled = !channel.capabilities.modes.includes(button.dataset.mode);
       });
@@ -521,6 +531,16 @@
       return valid;
     }
 
+    updateTransparentBackgroundState() {
+      const available = ["png", "webp"].includes(this.el.formatSelect.value);
+      this.el.transparentBackground.disabled = !available;
+      if (!available) this.el.transparentBackground.checked = false;
+      this.el.transparentBackgroundControl.classList.toggle("is-disabled", !available);
+      this.el.transparentBackgroundControl.title = available
+        ? "生成包含 Alpha 通道的透明背景图片"
+        : "透明背景仅支持 PNG 或 WebP";
+    }
+
     setMode(mode, shouldSave) {
       const channel = this.currentChannel();
       if (channel && !channel.capabilities.modes.includes(mode)) return;
@@ -546,6 +566,7 @@
         quality: this.el.qualitySelect.value,
         output_format: this.el.formatSelect.value,
         compression: 90,
+        transparent_background: this.el.transparentBackground.checked,
         batch_count: Math.min(20, Math.max(1, Number(this.el.batchCount.value || 1))),
         chat_model_id: this.el.chatModelSelect.value,
         translate_prompt: this.el.translatePrompt.checked,
@@ -1566,7 +1587,8 @@
       const imageArrived = button.isConnected && !button.dataset.imageUrl && Boolean(imageUrl);
       const contentChanged = button.dataset.imageUrl !== imageUrl
         || (!imageUrl && button.dataset.itemStatus !== item.status);
-      button.className = `output-tile ${item.status}`;
+      const transparencyClass = job.transparent_background ? " has-transparency" : "";
+      button.className = `output-tile ${item.status}${transparencyClass}`;
       button.dataset.jobId = job.id;
       button.dataset.itemId = item.id;
       button.dataset.itemStatus = item.status;
@@ -1622,11 +1644,14 @@
     showDetail(job, item) {
       this.detailItemId = item.id;
       this.el.detailImage.src = item.image_url;
+      this.el.detailImage.closest(".image-dialog-preview")
+        ?.classList.toggle("has-transparency", job.transparent_background === true);
       this.prepareImageReveal(this.el.detailImage);
       this.el.detailPrompt.textContent = job.prompt;
+      const transparentLabel = job.transparent_background ? " · 透明背景" : "";
       const details = [
         ["渠道", `${job.channel} · ${job.model}`],
-        ["参数", `${job.size} · ${job.quality} · ${job.output_format.toUpperCase()}`],
+        ["参数", `${job.size} · ${job.quality} · ${job.output_format.toUpperCase()}${transparentLabel}`],
         ["图片", `${item.width || "-"} × ${item.height || "-"} · ${UI.formatBytes(item.bytes)}`],
         ["耗时", item.elapsed_seconds == null ? "--" : `${item.elapsed_seconds.toFixed(1)} 秒`],
         ["费用", UI.money(item.charged_rmb)],
