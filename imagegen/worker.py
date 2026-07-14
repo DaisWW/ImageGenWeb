@@ -5,12 +5,13 @@ import os
 import socket
 import threading
 import time
+import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import timedelta
 from decimal import Decimal
 
 from flask import Flask
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import selectinload
 
 from .config.channels import ChannelRegistry
@@ -29,6 +30,9 @@ LOGGER = logging.getLogger(__name__)
 
 
 class GenerationWorker:
+    HEARTBEAT_INTERVAL_SECONDS = 15.0
+    RECOVERY_INTERVAL_SECONDS = 60.0
+
     def __init__(
         self,
         app: Flask,
@@ -45,20 +49,25 @@ class GenerationWorker:
         self.retention = RetentionService(storage, channels)
         self.providers = ProviderFactory()
         self.poll_seconds = poll_seconds
-        self.worker_id = f"{socket.gethostname()}:{os.getpid()}"
+        hostname = socket.gethostname()[:60]
+        self.worker_id = f"{hostname}:{os.getpid()}:{uuid.uuid4().hex[:12]}"
         self._stopping = threading.Event()
         self._futures: dict[str, Future] = {}
+        self._last_heartbeat = 0.0
+        self._last_recovery = 0.0
         self._last_cleanup = 0.0
 
     def run_forever(self) -> None:
         LOGGER.info("generation worker started: %s", self.worker_id)
         with self.app.app_context():
-            self._recover_stale_items()
+            self._recover_orphaned_items(immediate=True)
+            self._last_recovery = time.monotonic()
         try:
             while not self._stopping.is_set():
                 self._collect_finished()
                 with self.app.app_context():
                     self.channels.reload_if_changed()
+                    self._maintain_claims()
                 self._schedule_available()
                 self._run_periodic_cleanup()
                 self._stopping.wait(self.poll_seconds)
@@ -197,7 +206,7 @@ class GenerationWorker:
                 )
                 .where(GenerationItem.id == item_id)
             )
-            if item is None or item.status not in {"running", "canceling"}:
+            if item is None or not self._owns_claim(item):
                 return
             if item.cancel_requested_at or item.job.cancel_requested_at:
                 self._settle_canceled(item_id, started)
@@ -262,7 +271,7 @@ class GenerationWorker:
     ) -> None:
         db.session.expire_all()
         preview = db.session.get(GenerationItem, item_id, populate_existing=True)
-        if preview is None:
+        if preview is None or not self._owns_claim(preview):
             return
         if preview.cancel_requested_at or preview.status == "canceling":
             self._settle_canceled(item_id, started)
@@ -284,6 +293,11 @@ class GenerationWorker:
                 .execution_options(populate_existing=True)
                 .with_for_update()
             )
+            if item is None or not self._owns_claim(item):
+                db.session.rollback()
+                self.storage.delete(stored.image.relative_path)
+                self.storage.delete(stored.thumbnail_path)
+                return
             job = db.session.scalar(
                 select(GenerationJob)
                 .options(selectinload(GenerationJob.items))
@@ -328,7 +342,7 @@ class GenerationWorker:
     ) -> None:
         db.session.expire_all()
         preview = db.session.get(GenerationItem, item_id, populate_existing=True)
-        if preview is None:
+        if preview is None or not self._owns_claim(preview):
             return
         user = self.billing.lock_user(preview.user_id)
         item = db.session.scalar(
@@ -337,6 +351,9 @@ class GenerationWorker:
             .execution_options(populate_existing=True)
             .with_for_update()
         )
+        if item is None or not self._owns_claim(item):
+            db.session.rollback()
+            return
         job = db.session.scalar(
             select(GenerationJob)
             .options(selectinload(GenerationJob.items))
@@ -361,7 +378,7 @@ class GenerationWorker:
     def _settle_canceled(self, item_id: str, started: float) -> None:
         db.session.expire_all()
         preview = db.session.get(GenerationItem, item_id, populate_existing=True)
-        if preview is None:
+        if preview is None or not self._owns_claim(preview):
             return
         user = self.billing.lock_user(preview.user_id)
         item = db.session.scalar(
@@ -370,6 +387,9 @@ class GenerationWorker:
             .execution_options(populate_existing=True)
             .with_for_update()
         )
+        if item is None or not self._owns_claim(item):
+            db.session.rollback()
+            return
         job = db.session.scalar(
             select(GenerationJob)
             .options(selectinload(GenerationJob.items))
@@ -417,32 +437,114 @@ class GenerationWorker:
         self.generations.refresh_job_status(job)
         db.session.commit()
 
-    def _recover_stale_items(self) -> None:
+    @staticmethod
+    def _active_status(item: GenerationItem) -> bool:
+        return item.status in {"running", "canceling"}
+
+    def _owns_claim(self, item: GenerationItem) -> bool:
+        return self._active_status(item) and item.claimed_by == self.worker_id
+
+    def _maintain_claims(self) -> None:
+        now = time.monotonic()
+        if now - self._last_heartbeat >= self.HEARTBEAT_INTERVAL_SECONDS:
+            self._heartbeat_claims()
+            self._last_heartbeat = now
+        if now - self._last_recovery >= self.RECOVERY_INTERVAL_SECONDS:
+            self._recover_orphaned_items(immediate=False)
+            self._last_recovery = now
+        db.session.remove()
+
+    def _heartbeat_claims(self) -> None:
+        item_ids = tuple(self._futures)
+        if not item_ids:
+            return
+        db.session.execute(
+            update(GenerationItem)
+            .where(
+                GenerationItem.id.in_(item_ids),
+                GenerationItem.claimed_by == self.worker_id,
+                GenerationItem.status.in_(["running", "canceling"]),
+            )
+            .values(heartbeat_at=utcnow())
+        )
+        db.session.commit()
+
+    def _recover_orphaned_items(self, *, immediate: bool) -> None:
         cutoff = utcnow() - timedelta(minutes=self.channels.queue.stale_running_minutes)
-        stale = list(
-            db.session.scalars(
-                select(GenerationItem).where(
-                    GenerationItem.status.in_(["running", "canceling"]),
+        conditions = [
+            GenerationItem.status.in_(["running", "canceling"]),
+        ]
+        if immediate:
+            conditions.append(
+                or_(
+                    GenerationItem.claimed_by.is_(None),
+                    GenerationItem.claimed_by != self.worker_id,
+                )
+            )
+        else:
+            conditions.append(
+                or_(
+                    GenerationItem.heartbeat_at.is_(None),
                     GenerationItem.heartbeat_at < cutoff,
                 )
             )
+        item_ids = list(db.session.scalars(select(GenerationItem.id).where(*conditions)))
+        recovered = 0
+        for item_id in item_ids:
+            if self._recover_orphaned_item(item_id, cutoff=cutoff, immediate=immediate):
+                recovered += 1
+        if recovered:
+            LOGGER.warning("recovered %d orphaned generation items", recovered)
+
+    def _recover_orphaned_item(self, item_id: str, *, cutoff, immediate: bool) -> bool:
+        db.session.expire_all()
+        preview = db.session.get(GenerationItem, item_id, populate_existing=True)
+        if preview is None:
+            return False
+        user = self.billing.lock_user(preview.user_id)
+        item = db.session.scalar(
+            select(GenerationItem)
+            .where(GenerationItem.id == item_id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
         )
-        for item in stale:
-            user = self.billing.lock_user(item.user_id)
-            job = db.session.scalar(
-                select(GenerationJob)
-                .options(selectinload(GenerationJob.items))
-                .where(GenerationJob.id == item.job_id)
-            )
-            item.status = "canceled" if item.cancel_requested_at else "interrupted"
-            item.error_code = "worker_interrupted"
-            item.error_message = "Worker 重启，任务结果未知且未向用户扣费"
-            item.completed_at = utcnow()
-            self.billing.release(user, job, money(job.price_per_image_rmb))
-            self.generations.refresh_job_status(job)
+        recoverable_claim = item is not None and (
+            item.claimed_by != self.worker_id or item_id not in self._futures
+        )
+        stale_claim = True
+        if item is not None and not immediate:
+            comparison_cutoff = cutoff
+            if item.heartbeat_at is not None and item.heartbeat_at.tzinfo is None:
+                comparison_cutoff = cutoff.replace(tzinfo=None)
+            stale_claim = item.heartbeat_at is None or item.heartbeat_at < comparison_cutoff
+        if (
+            item is None
+            or not self._active_status(item)
+            or not recoverable_claim
+            or (not immediate and not stale_claim)
+        ):
+            db.session.rollback()
+            return False
+        job = db.session.scalar(
+            select(GenerationJob)
+            .options(selectinload(GenerationJob.items))
+            .where(GenerationJob.id == item.job_id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        )
+        if job is None:
+            db.session.rollback()
+            return False
+        item.status = (
+            "canceled" if item.cancel_requested_at or job.cancel_requested_at else "interrupted"
+        )
+        item.error_code = "worker_interrupted"
+        item.error_message = "Worker 中断，任务结果未知且未向用户扣费"
+        item.completed_at = utcnow()
+        self.billing.release(user, job, money(job.price_per_image_rmb))
+        self.generations.refresh_job_status(job)
         db.session.commit()
-        if stale:
-            LOGGER.warning("recovered %d stale generation items", len(stale))
+        return True
 
     def _run_periodic_cleanup(self) -> None:
         now = time.monotonic()

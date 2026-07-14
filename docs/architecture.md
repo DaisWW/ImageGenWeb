@@ -41,9 +41,9 @@ integrations -> config value objects
 ## Transaction ownership
 
 - Account, billing, workspace, conversation, and generation services own their database commits.
-- The worker locks the user and generation item before settlement.
+- The worker heartbeats owned claims, recovers orphaned claims, and locks the user, item, and job before settlement.
 - Image files are written before the matching database commit and removed on rollback.
-- Runtime configuration is saved as one versioned document with optimistic revision checks.
+- Runtime configuration is saved as one versioned document using an atomic old-value revision check.
 
 ## Extension guide
 
