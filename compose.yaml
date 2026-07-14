@@ -49,7 +49,7 @@ services:
       sh -c "alembic upgrade head &&
       gunicorn --bind 0.0.0.0:7860 --workers 1 --threads 8 --timeout 700 app:app"
     ports:
-      - "0.0.0.0:${IMAGEGEN_PORT:-18081}:7860"
+      - "${IMAGEGEN_BIND_HOST:-127.0.0.1}:${IMAGEGEN_PORT:-18081}:7860"
     depends_on:
       db:
         condition: service_healthy

@@ -36,7 +36,9 @@ tests/integration/ 业务与 HTTP 合同测试
 .\deploy-docker.cmd
 ```
 
-脚本默认使用宿主机端口 `18081`，自动生成数据库密码、加密密钥和首次管理员密码，构建容器、等待健康检查、放行 Windows 专用网络防火墙，并注册当前用户登录自启。浏览器打开 `http://127.0.0.1:18081`；局域网同事使用脚本输出的 `http://<宿主机IP>:18081` 访问。首次运行会弹出一次 UAC 请求用于配置防火墙。
+脚本默认仅监听宿主机 `127.0.0.1:18081`，自动生成数据库密码、加密密钥和首次管理员密码，构建容器、等待健康检查，并注册当前用户登录自启。浏览器打开 `http://127.0.0.1:18081`。
+
+确需在可信局域网内以明文 HTTP 共享时，显式运行 `./deploy-docker.ps1 -Lan`。该选项会监听所有网卡并配置 Windows 防火墙；密码和会话仍是明文 HTTP 传输，正式共享应在服务前配置 TLS 反向代理并设置 `COOKIE_SECURE=true`。
 
 端口被占用时可从 PowerShell 指定其他端口：
 
@@ -69,7 +71,7 @@ docker compose up -d --build
 py scripts/backup.py
 ```
 
-命令会在 `backups/<时间>/` 生成 `database.dump` 和 `files.tar.gz`。备份目录不要提交到版本库。
+命令会在 `backups/<时间>/` 生成 `database.dump`、`files.tar.gz` 和权限收紧的 `deployment.env`。后者包含恢复数据库中加密 API Key 所必需的 `CONFIG_ENCRYPTION_KEY`/`SECRET_KEY`，必须与数据库备份一起离线加密保管；整个备份目录都不要提交到版本库。
 
 ## 本地运行
 

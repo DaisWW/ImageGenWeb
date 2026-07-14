@@ -6,6 +6,7 @@ param(
     [ValidatePattern("^[A-Za-z0-9_.-]+$")]
     [string]$AdminUsername = "admin",
 
+    [switch]$Lan,
     [switch]$SkipFirewall,
     [switch]$SkipAutostart,
     [switch]$NoBuild,
@@ -97,7 +98,7 @@ function Set-EnvValue {
         $currentValue = $Lines[$index].Substring($prefix.Length)
         $shouldReplace = $ReplaceBlank -and [string]::IsNullOrWhiteSpace($currentValue)
         $shouldReplace = $shouldReplace -or ($ReplacePlaceholder -and $currentValue.StartsWith("CHANGE_ME", [StringComparison]::OrdinalIgnoreCase))
-        if ($shouldReplace -or $Name -eq "IMAGEGEN_PORT") {
+        if ($shouldReplace -or $Name -in @("IMAGEGEN_PORT", "IMAGEGEN_BIND_HOST")) {
             $Lines[$index] = "$Name=$Value"
             return $true
         }
@@ -136,6 +137,8 @@ function Initialize-EnvironmentFile {
     Set-EnvValue $lines "LUCEN_API_BASE_URL" "https://lucen.plus" | Out-Null
     Set-EnvValue $lines "LUCEN_API_KEY" "" | Out-Null
     Set-EnvValue $lines "IMAGEGEN_PORT" ([string]$Port) | Out-Null
+    $bindHost = if ($Lan) { "0.0.0.0" } else { "127.0.0.1" }
+    Set-EnvValue $lines "IMAGEGEN_BIND_HOST" $bindHost | Out-Null
     Set-EnvValue $lines "COOKIE_SECURE" "false" | Out-Null
 
     [IO.File]::WriteAllLines($envPath, $lines, (New-Object Text.UTF8Encoding($false)))
@@ -206,6 +209,9 @@ function Get-LanAddresses {
 
 Push-Location $projectDir
 try {
+    if ($Lan) {
+        Write-Warning "-Lan exposes login and session traffic over plain HTTP. Use only on a trusted network or place TLS in front of the service."
+    }
     if (-not (Get-Command docker.exe -ErrorAction SilentlyContinue)) {
         throw "docker.exe was not found. Install Docker Desktop first."
     }
@@ -252,7 +258,7 @@ try {
         Install-LoginAutostart
     }
 
-    if (-not $SkipFirewall) {
+    if ($Lan -and -not $SkipFirewall) {
         if (Test-IsAdministrator) {
             Install-FirewallRule -ListenPort $Port
         } else {
@@ -261,6 +267,7 @@ try {
                 "-ExecutionPolicy", "Bypass",
                 "-File", "`"$PSCommandPath`"",
                 "-FirewallOnly",
+                "-Lan",
                 "-Port", $Port
             )
             $process = Start-Process `
@@ -278,8 +285,12 @@ try {
     Write-Host ""
     Write-Host "Snow AI Studio is running." -ForegroundColor Green
     Write-Host "Local URL: http://127.0.0.1:$Port"
-    foreach ($address in Get-LanAddresses) {
-        Write-Host "LAN URL: http://${address}:$Port"
+    if ($Lan) {
+        foreach ($address in Get-LanAddresses) {
+            Write-Host "LAN URL (plain HTTP): http://${address}:$Port"
+        }
+    } else {
+        Write-Host "LAN access is disabled. Re-run with -Lan only on a trusted network."
     }
     if ($generatedAdminPassword) {
         Write-Host "Initial administrator: $AdminUsername" -ForegroundColor Yellow
