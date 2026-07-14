@@ -2353,6 +2353,15 @@ img.media-reveal.is-loaded {
   gap: 8px;
 }
 
+.purpose-model-form {
+  display: grid;
+  width: min(100%, 520px);
+  margin: 0 0 16px;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
 .admin-config-section + .admin-config-section {
   margin-top: 28px;
   padding-top: 24px;
@@ -2932,6 +2941,8 @@ tbody tr:hover td {
   .form-grid.three-columns { grid-template-columns: 1fr; }
   .view-toolbar { align-items: flex-start; }
   .config-toolbar-actions { width: 100%; justify-content: flex-end; }
+  .purpose-model-form { grid-template-columns: minmax(0, 1fr); }
+  .purpose-model-form .button { width: fit-content; }
   .config-model-row { grid-template-columns: minmax(0, 1fr) 34px; }
   .config-model-row .field { grid-column: 1 / -1; }
   .config-model-row .check-line { grid-column: 1; }

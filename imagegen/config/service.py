@@ -161,6 +161,7 @@ class RuntimeConfigService:
             raise ServiceError("上下文配置格式无效")
         return {
             "version": 1,
+            "prompt_draft_model_id": str(payload.get("prompt_draft_model_id", "")).strip(),
             "context": {
                 "compact_at_tokens": context.get("compact_at_tokens"),
                 "max_context_tokens": context.get("max_context_tokens"),

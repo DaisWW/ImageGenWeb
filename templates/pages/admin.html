@@ -56,6 +56,10 @@
           <button class="button primary" type="button" id="createChatModelButton"><i data-lucide="plus"></i>新增模型</button>
         </div>
       </div>
+      <form class="purpose-model-form" id="promptDraftModelForm">
+        <label class="field"><span>提示词整理模型</span><select id="promptDraftModelSelect"></select></label>
+        <button class="button secondary" type="submit"><i data-lucide="save"></i>保存</button>
+      </form>
       <div class="inline-alert" id="chatConfigError" hidden></div>
       <div class="table-wrap"><table><thead><tr><th>名称</th><th>状态</th><th>模型</th><th>上下文策略</th><th class="actions-cell">操作</th></tr></thead><tbody id="chatModelTableBody"></tbody></table></div>
     </div>

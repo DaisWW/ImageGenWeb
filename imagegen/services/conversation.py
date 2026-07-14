@@ -198,7 +198,9 @@ class ConversationService:
         translate_to_english: bool,
     ) -> ConversationMessage:
         self._ensure_workspace_unlocked(workspace)
-        model = self._model(model_id)
+        selected_model = self._model(model_id)
+        prompt_draft_model_id = self.chat_models.prompt_draft_model_id
+        model = self._model(prompt_draft_model_id) if prompt_draft_model_id else selected_model
         if not db.session.scalar(
             select(ConversationMessage.id)
             .where(
@@ -248,7 +250,7 @@ class ConversationService:
         db.session.add(message)
         self._remember_preferences(
             workspace,
-            model_id=model.identifier,
+            model_id=selected_model.identifier,
             translate_to_english=translate_to_english,
         )
         workspace.updated_at = utcnow()

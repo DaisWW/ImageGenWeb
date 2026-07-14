@@ -1,5 +1,7 @@
 version: 1
 
+prompt_draft_model_id: prompt-mini
+
 context:
   compact_at_tokens: 24000
   max_context_tokens: 32000
@@ -16,5 +18,16 @@ models:
     model_env: GPT_CHAT_MODEL
     reasoning_effort: max
     reasoning_effort_env: GPT_CHAT_REASONING_EFFORT
+    timeout_seconds: 180
+    max_output_tokens: 2000
+
+  - id: prompt-mini
+    label: GPT 5.4 Mini
+    enabled: true
+    base_url: http://xjbkw.weiw:18080
+    base_url_env: GPT_CHAT_API_BASE_URL
+    api_key_env: GPT_CHAT_API_KEY
+    model: gpt-5.4-mini
+    reasoning_effort: low
     timeout_seconds: 180
     max_output_tokens: 2000

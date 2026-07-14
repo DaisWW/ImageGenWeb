@@ -69,6 +69,8 @@
         chatConfigError: byId("chatConfigError"),
         contextSettingsButton: byId("contextSettingsButton"),
         createChatModelButton: byId("createChatModelButton"),
+        promptDraftModelForm: byId("promptDraftModelForm"),
+        promptDraftModelSelect: byId("promptDraftModelSelect"),
         chatModelDialog: byId("chatModelDialog"),
         chatModelDialogTitle: byId("chatModelDialogTitle"),
         chatModelForm: byId("chatModelForm"),
@@ -101,6 +103,7 @@
       this.el.queueForm.addEventListener("submit", (event) => this.saveQueue(event));
       this.el.contextSettingsButton.addEventListener("click", () => this.openContextDialog());
       this.el.createChatModelButton.addEventListener("click", () => this.openChatModelDialog());
+      this.el.promptDraftModelForm.addEventListener("submit", (event) => this.savePromptDraftModel(event));
       this.el.chatModelTableBody.addEventListener("click", (event) => this.handleChatModelAction(event));
       this.el.chatModelForm.addEventListener("submit", (event) => this.saveChatModel(event));
       this.el.contextForm.addEventListener("submit", (event) => this.saveContext(event));
@@ -576,6 +579,11 @@
       this.el.chatConfigVersion.textContent = `${origin} · 版本 ${config.version} · 最大上下文 ${context.max_context_tokens.toLocaleString()} tokens`;
       this.el.chatConfigError.hidden = !config.last_error;
       this.el.chatConfigError.textContent = config.last_error || "";
+      this.el.promptDraftModelSelect.innerHTML = [
+        '<option value="">跟随用户选择</option>',
+        ...config.models.map((model) => `<option value="${UI.escapeHtml(model.id)}">${UI.escapeHtml(model.label)} · ${UI.escapeHtml(model.model)}</option>`),
+      ].join("");
+      this.el.promptDraftModelSelect.value = config.prompt_draft_model_id || "";
       this.el.chatModelTableBody.innerHTML = config.models.map((model) => `
         <tr>
           <td><strong>${UI.escapeHtml(model.label)}</strong><small class="subline">${UI.escapeHtml(model.id)}</small></td>
@@ -624,6 +632,7 @@
       if (!window.confirm(`删除对话模型“${model.label}”？`)) return;
       const next = copy(this.chatConfig);
       next.models = next.models.filter((item) => item.id !== model.id);
+      if (next.prompt_draft_model_id === model.id) next.prompt_draft_model_id = "";
       try {
         await this.persistChatModels(next, "对话模型已删除");
       } catch (error) {
@@ -688,10 +697,30 @@
       }
     }
 
+    async savePromptDraftModel(event) {
+      event.preventDefault();
+      const submit = this.el.promptDraftModelForm.querySelector('[type="submit"]');
+      submit.disabled = true;
+      try {
+        const next = copy(this.chatConfig);
+        next.prompt_draft_model_id = this.el.promptDraftModelSelect.value;
+        await this.persistChatModels(next, "提示词整理模型已更新");
+      } catch (error) {
+        UI.toast(error.message, "error");
+      } finally {
+        submit.disabled = false;
+      }
+    }
+
     async persistChatModels(config, message) {
       const data = await UI.api("/api/admin/chat-models", {
         method: "PUT",
-        body: { revision: this.chatConfig.revision, context: config.context, models: config.models },
+        body: {
+          revision: this.chatConfig.revision,
+          prompt_draft_model_id: config.prompt_draft_model_id,
+          context: config.context,
+          models: config.models,
+        },
       });
       this.chatConfig = data.config;
       this.renderChatModels();

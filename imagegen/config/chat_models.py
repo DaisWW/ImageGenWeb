@@ -69,6 +69,7 @@ class ChatModelSnapshot:
     version: str
     models: dict[str, ChatModelConfig]
     context: ContextPolicy
+    prompt_draft_model_id: str
 
 
 class ChatModelRegistry(ReloadableConfigRegistry[ChatModelSnapshot]):
@@ -83,6 +84,12 @@ class ChatModelRegistry(ReloadableConfigRegistry[ChatModelSnapshot]):
         self.reload_if_changed()
         with self._lock:
             return self._require_snapshot().context
+
+    @property
+    def prompt_draft_model_id(self) -> str:
+        self.reload_if_changed()
+        with self._lock:
+            return self._require_snapshot().prompt_draft_model_id
 
     def list(self) -> list[ChatModelConfig]:
         self.reload_if_changed()
@@ -109,6 +116,7 @@ class ChatModelRegistry(ReloadableConfigRegistry[ChatModelSnapshot]):
                 "last_error": self._last_error,
                 "models": [model.editable_dict() for model in snapshot.models.values()],
                 "context": snapshot.context.as_dict(),
+                "prompt_draft_model_id": snapshot.prompt_draft_model_id,
             }
 
     def _parse(self, raw: Any, raw_bytes: bytes) -> ChatModelSnapshot:
@@ -134,10 +142,16 @@ class ChatModelRegistry(ReloadableConfigRegistry[ChatModelSnapshot]):
             if model.identifier in models:
                 raise ValueError(f"聊天模型 ID 重复：{model.identifier}")
             models[model.identifier] = model
+        prompt_draft_model_id = str(raw.get("prompt_draft_model_id", "")).strip()
+        if len(prompt_draft_model_id) > 64:
+            raise ValueError("提示词整理模型 ID 不能超过 64 个字符")
+        if prompt_draft_model_id and prompt_draft_model_id not in models:
+            raise ValueError(f"提示词整理模型不存在：{prompt_draft_model_id}")
         return ChatModelSnapshot(
             version=hashlib.sha256(raw_bytes).hexdigest(),
             models=models,
             context=context,
+            prompt_draft_model_id=prompt_draft_model_id,
         )
 
     @staticmethod
