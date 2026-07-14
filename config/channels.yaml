@@ -1,0 +1,65 @@
+version: 1
+
+queue:
+  # Production capacity: Daoge 2 + Lucen 4. Per-user limits still apply.
+  global_concurrency: 6
+  max_queued_per_user: 20
+  max_queued_global: 100
+  history_retention_days: 30
+  stale_running_minutes: 20
+
+channels:
+  - id: current
+    label: 刀哥的
+    enabled: true
+    adapter: openai_images
+    base_url: https://fuck.codexapis.com
+    base_url_env: IMAGE_API_BASE_URL
+    api_key_env: IMAGE_API_KEY
+    models:
+      - id: gpt-image-2
+        label: GPT Image 2
+        enabled: true
+    price_rmb: 0.0600
+    capabilities:
+      modes: [text2img, img2img]
+      max_reference_images: 1
+      max_reference_image_mb: 10
+      max_reference_total_mb: 40
+      reference_field: image
+      sizes: [1024x1024, 1536x1024, 1024x1536]
+      qualities: [auto, low, medium, high]
+      formats: [png, jpeg, webp]
+    limits:
+      # Provisional until the provider balance/rate-limit error is cleared and retested.
+      max_concurrency: 2
+      timeout_seconds: 600
+      estimated_seconds: 180
+
+  - id: lucen
+    label: Lucen
+    enabled: true
+    adapter: openai_images
+    base_url: https://lucen.plus
+    base_url_env: LUCEN_API_BASE_URL
+    api_key_env: LUCEN_API_KEY
+    models:
+      - id: gpt-image-2
+        label: GPT Image 2
+        enabled: true
+    price_rmb: 0.0900
+    capabilities:
+      modes: [text2img, img2img]
+      # Verified with two visually distinct references on 2026-07-14.
+      max_reference_images: 2
+      max_reference_image_mb: 10
+      max_reference_total_mb: 40
+      reference_field: image
+      sizes: [1024x1024, 1536x1024, 1024x1536]
+      qualities: [auto, low, medium, high]
+      formats: [png, jpeg, webp]
+    limits:
+      # 2026-07-14: 8-way/16-image test passed; 4 keeps stable latency headroom.
+      max_concurrency: 4
+      timeout_seconds: 600
+      estimated_seconds: 45

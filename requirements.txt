@@ -1,0 +1,13 @@
+alembic>=1.13,<2.0
+argon2-cffi>=23.1,<26.0
+cryptography>=48.0.1,<49.0
+Flask>=3.0,<4.0
+Flask-Login>=0.6,<1.0
+Flask-SQLAlchemy>=3.1,<4.0
+Flask-WTF>=1.2,<2.0
+gunicorn>=22.0,<24.0
+Pillow>=12.3,<13.0
+psycopg[binary]>=3.2,<4.0
+PyYAML>=6.0,<7.0
+requests>=2.31,<3.0
+waitress>=3.0,<4.0

@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+{% block title %}管理后台 · {{ site_title }}{% endblock %}
+{% block body_class %}app-page admin-page{% endblock %}
+{% block body %}
+{% include "partials/header.html" %}
+<main class="admin-shell" id="adminApp">
+  <header class="admin-heading">
+    <div><span class="eyebrow">Administration</span><h1>管理后台</h1></div>
+    <a class="button secondary" href="{{ url_for('web.studio') }}"><i data-lucide="panel-left"></i>返回工作站</a>
+  </header>
+  <nav class="admin-tabs" aria-label="管理视图">
+    <button class="admin-tab active" type="button" data-tab="users"><i data-lucide="users"></i>用户</button>
+    <button class="admin-tab" type="button" data-tab="generations"><i data-lucide="activity"></i>生成记录</button>
+    <button class="admin-tab" type="button" data-tab="channels"><i data-lucide="route"></i>渠道与模型</button>
+    <button class="admin-tab" type="button" data-tab="settings"><i data-lucide="settings-2"></i>系统设置</button>
+  </nav>
+
+  <section class="admin-view active" data-view="users">
+    <div class="view-toolbar">
+      <div><h2>用户与余额</h2><p>账户由管理员开通</p></div>
+      <button class="button primary" type="button" id="createUserButton"><i data-lucide="user-plus"></i>新建用户</button>
+    </div>
+    <div class="spending-overview" aria-label="全站消费概览">
+      <span><small>今日消费</small><strong id="companyTodaySpending">¥0.00</strong></span>
+      <span><small>累计消费</small><strong id="companyTotalSpending">¥0.00</strong></span>
+    </div>
+    <div class="table-wrap"><table><thead><tr><th>用户</th><th>状态</th><th>余额</th><th>消费</th><th>预占</th><th>并发</th><th>最近登录</th><th class="actions-cell">操作</th></tr></thead><tbody id="userTableBody"></tbody></table></div>
+  </section>
+
+  <section class="admin-view" data-view="generations">
+    <div class="view-toolbar">
+      <div><h2>生成记录</h2><p id="queueOverview">正在读取队列</p></div>
+      <button class="button secondary" type="button" id="refreshJobsButton"><i data-lucide="refresh-cw"></i>刷新</button>
+    </div>
+    <div class="admin-job-list" id="adminJobList"></div>
+  </section>
+
+  <section class="admin-view" data-view="channels">
+    <div class="admin-config-section">
+      <div class="view-toolbar">
+        <div><h2>生图渠道与模型</h2><p id="configVersion">配置版本</p></div>
+        <div class="config-toolbar-actions">
+          <button class="button secondary" type="button" id="queueSettingsButton"><i data-lucide="list-todo"></i>队列设置</button>
+          <button class="button primary" type="button" id="createChannelButton"><i data-lucide="plus"></i>新增渠道</button>
+        </div>
+      </div>
+      <div class="inline-alert" id="configError" hidden></div>
+      <div class="table-wrap"><table><thead><tr><th>渠道</th><th>状态</th><th>单价</th><th>模型</th><th>并发</th><th>能力</th><th class="actions-cell">操作</th></tr></thead><tbody id="channelTableBody"></tbody></table></div>
+    </div>
+    <div class="admin-config-section">
+      <div class="view-toolbar">
+        <div><h2>对话模型</h2><p id="chatConfigVersion">配置版本</p></div>
+        <div class="config-toolbar-actions">
+          <button class="button secondary" type="button" id="contextSettingsButton"><i data-lucide="braces"></i>上下文</button>
+          <button class="button primary" type="button" id="createChatModelButton"><i data-lucide="plus"></i>新增模型</button>
+        </div>
+      </div>
+      <div class="inline-alert" id="chatConfigError" hidden></div>
+      <div class="table-wrap"><table><thead><tr><th>名称</th><th>状态</th><th>模型</th><th>上下文策略</th><th class="actions-cell">操作</th></tr></thead><tbody id="chatModelTableBody"></tbody></table></div>
+    </div>
+  </section>
+
+  <section class="admin-view" data-view="settings">
+    <div class="view-toolbar"><div><h2>系统设置</h2><p>品牌信息即时生效</p></div></div>
+    <form class="settings-form" id="settingsForm">
+      <label class="field"><span>系统 Title</span><input id="siteTitleInput" maxlength="60" required></label>
+      <label class="field"><span>版本</span><input id="versionInput" disabled></label>
+      <button class="button primary" type="submit"><i data-lucide="save"></i>保存 Title</button>
+    </form>
+  </section>
+</main>
+
+<dialog class="modal config-modal" id="channelDialog">
+  <form class="modal-form config-form" id="channelForm">
+    <div class="modal-header"><div><span class="eyebrow">Image Provider</span><h2 id="channelDialogTitle">新增生图渠道</h2></div><button class="icon-button" type="button" data-close-dialog="channelDialog" aria-label="关闭"><i data-lucide="x"></i></button></div>
+    <input type="hidden" name="original_id">
+    <div class="form-grid two-columns">
+      <label class="field"><span>渠道 ID</span><input name="id" maxlength="64" pattern="[A-Za-z0-9_-]+" required></label>
+      <label class="field"><span>显示名称</span><input name="label" maxlength="100" required></label>
+    </div>
+    <label class="check-line"><input type="checkbox" name="enabled" checked><span>启用渠道</span></label>
+    <label class="field"><span>API 地址</span><input type="url" name="base_url" maxlength="500" required></label>
+    <div class="form-grid two-columns">
+      <label class="field"><span>API Key</span><input type="password" name="api_key" autocomplete="new-password"></label>
+      <label class="field"><span>单价（RMB/张）</span><input type="number" name="price_rmb" min="0" step="0.0001" required></label>
+    </div>
+    <label class="check-line" data-clear-key-row hidden><input type="checkbox" name="clear_api_key"><span>清除已保存的 API Key</span></label>
+    <section class="config-fieldset" aria-label="模型">
+      <div class="config-fieldset-heading"><strong>模型</strong><button class="icon-button accent" type="button" id="addChannelModelButton" title="添加模型" aria-label="添加模型"><i data-lucide="plus"></i></button></div>
+      <div class="config-model-list" id="channelModelList"></div>
+    </section>
+    <fieldset class="config-fieldset">
+      <legend>能力</legend>
+      <div class="config-check-grid">
+        <label class="check-line"><input type="checkbox" name="mode_text2img"><span>文生图</span></label>
+        <label class="check-line"><input type="checkbox" name="mode_img2img"><span>垫图生图</span></label>
+        <label class="check-line"><input type="checkbox" name="quality_auto"><span>Auto</span></label>
+        <label class="check-line"><input type="checkbox" name="quality_low"><span>Low</span></label>
+        <label class="check-line"><input type="checkbox" name="quality_medium"><span>Medium</span></label>
+        <label class="check-line"><input type="checkbox" name="quality_high"><span>High</span></label>
+        <label class="check-line"><input type="checkbox" name="format_png"><span>PNG</span></label>
+        <label class="check-line"><input type="checkbox" name="format_jpeg"><span>JPEG</span></label>
+        <label class="check-line"><input type="checkbox" name="format_webp"><span>WebP</span></label>
+      </div>
+      <label class="field"><span>尺寸建议（逗号分隔）</span><input name="sizes" maxlength="300" placeholder="1024x1024, 1536x1024" required></label>
+      <div class="form-grid three-columns">
+        <label class="field"><span>最多垫图</span><input type="number" name="max_reference_images" min="0" max="8" required></label>
+        <label class="field"><span>单张上限 MiB</span><input type="number" name="max_reference_image_mb" min="1" max="50" required></label>
+        <label class="field"><span>合计上限 MiB</span><input type="number" name="max_reference_total_mb" min="1" max="100" required></label>
+      </div>
+      <label class="field"><span>垫图字段</span><select name="reference_field"><option value="image">image</option><option value="image[]">image[]</option></select></label>
+    </fieldset>
+    <fieldset class="config-fieldset">
+      <legend>运行限制</legend>
+      <div class="form-grid three-columns">
+        <label class="field"><span>渠道并发</span><input type="number" name="max_concurrency" min="1" max="64" required></label>
+        <label class="field"><span>超时秒数</span><input type="number" name="timeout_seconds" min="30" max="1800" required></label>
+        <label class="field"><span>预计秒数</span><input type="number" name="estimated_seconds" min="10" max="1800" required></label>
+      </div>
+    </fieldset>
+    <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="channelDialog">取消</button><button class="button primary" type="submit"><i data-lucide="save"></i>保存渠道</button></div>
+  </form>
+</dialog>
+
+<dialog class="modal" id="queueDialog">
+  <form class="modal-form" id="queueForm">
+    <div class="modal-header"><div><span class="eyebrow">Queue</span><h2>队列设置</h2></div><button class="icon-button" type="button" data-close-dialog="queueDialog" aria-label="关闭"><i data-lucide="x"></i></button></div>
+    <div class="form-grid two-columns">
+      <label class="field"><span>全局并发</span><input type="number" name="global_concurrency" min="1" max="64" required></label>
+      <label class="field"><span>单用户排队上限</span><input type="number" name="max_queued_per_user" min="1" max="500" required></label>
+      <label class="field"><span>全局排队上限</span><input type="number" name="max_queued_global" min="1" max="5000" required></label>
+      <label class="field"><span>记录保留天数</span><input type="number" name="history_retention_days" min="1" max="3650" required></label>
+      <label class="field"><span>异常任务分钟数</span><input type="number" name="stale_running_minutes" min="5" max="1440" required></label>
+    </div>
+    <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="queueDialog">取消</button><button class="button primary" type="submit"><i data-lucide="save"></i>保存队列</button></div>
+  </form>
+</dialog>
+
+<dialog class="modal" id="chatModelDialog">
+  <form class="modal-form" id="chatModelForm">
+    <div class="modal-header"><div><span class="eyebrow">Chat Provider</span><h2 id="chatModelDialogTitle">新增对话模型</h2></div><button class="icon-button" type="button" data-close-dialog="chatModelDialog" aria-label="关闭"><i data-lucide="x"></i></button></div>
+    <input type="hidden" name="original_id">
+    <div class="form-grid two-columns">
+      <label class="field"><span>配置 ID</span><input name="id" maxlength="64" pattern="[A-Za-z0-9_-]+" required></label>
+      <label class="field"><span>显示名称</span><input name="label" maxlength="100" required></label>
+    </div>
+    <label class="check-line"><input type="checkbox" name="enabled" checked><span>启用模型</span></label>
+    <label class="field"><span>API 地址</span><input type="url" name="base_url" maxlength="500" required></label>
+    <div class="form-grid two-columns">
+      <label class="field"><span>API Key</span><input type="password" name="api_key" autocomplete="new-password"></label>
+      <label class="field"><span>上游模型</span><input name="model" maxlength="150" required></label>
+    </div>
+    <label class="check-line" data-clear-chat-key-row hidden><input type="checkbox" name="clear_api_key"><span>清除已保存的 API Key</span></label>
+    <div class="form-grid three-columns">
+      <label class="field"><span>推理强度</span><select name="reasoning_effort"><option value="">默认</option><option value="none">None</option><option value="minimal">Minimal</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="max">Max</option></select></label>
+      <label class="field"><span>超时秒数</span><input type="number" name="timeout_seconds" min="10" max="600" required></label>
+      <label class="field"><span>最大输出 Tokens</span><input type="number" name="max_output_tokens" min="128" max="16000" required></label>
+    </div>
+    <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="chatModelDialog">取消</button><button class="button primary" type="submit"><i data-lucide="save"></i>保存模型</button></div>
+  </form>
+</dialog>
+
+<dialog class="modal" id="contextDialog">
+  <form class="modal-form" id="contextForm">
+    <div class="modal-header"><div><span class="eyebrow">Context</span><h2>上下文策略</h2></div><button class="icon-button" type="button" data-close-dialog="contextDialog" aria-label="关闭"><i data-lucide="x"></i></button></div>
+    <div class="form-grid three-columns">
+      <label class="field"><span>开始压缩 Tokens</span><input type="number" name="compact_at_tokens" min="1000" max="500000" required></label>
+      <label class="field"><span>最大上下文 Tokens</span><input type="number" name="max_context_tokens" min="2000" max="1000000" required></label>
+      <label class="field"><span>保留最近消息</span><input type="number" name="keep_recent_messages" min="4" max="100" required></label>
+    </div>
+    <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="contextDialog">取消</button><button class="button primary" type="submit"><i data-lucide="save"></i>保存策略</button></div>
+  </form>
+</dialog>
+
+<dialog class="modal" id="userDialog">
+  <form class="modal-form" id="userForm">
+    <div class="modal-header"><div><span class="eyebrow">Account</span><h2>新建用户</h2></div><button class="icon-button" type="button" data-close-dialog="userDialog" aria-label="关闭"><i data-lucide="x"></i></button></div>
+    <div class="form-grid two-columns">
+      <label class="field"><span>用户名</span><input name="username" minlength="3" maxlength="64" required></label>
+      <label class="field"><span>显示名称</span><input name="display_name" maxlength="100"></label>
+      <label class="field"><span>初始密码</span><input type="password" name="password" required></label>
+      <label class="field"><span>初始余额（RMB）</span><input type="number" name="balance_rmb" min="0" step="0.0001" value="0"></label>
+      <label class="field"><span>用户并发</span><input type="number" name="generation_concurrency" min="1" max="16" value="2"></label>
+    </div>
+    <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="userDialog">取消</button><button class="button primary" type="submit"><i data-lucide="user-plus"></i>创建</button></div>
+  </form>
+</dialog>
+
+<dialog class="modal compact-modal" id="balanceDialog">
+  <form class="modal-form" id="balanceForm">
+    <div class="modal-header"><div><span class="eyebrow">Wallet</span><h2 id="balanceDialogTitle">调整余额</h2></div><button class="icon-button" type="button" data-close-dialog="balanceDialog" aria-label="关闭"><i data-lucide="x"></i></button></div>
+    <input type="hidden" name="user_id">
+    <label class="field"><span>操作</span><select name="operation"><option value="add">充值</option><option value="subtract">扣减</option><option value="set">校正为指定余额</option></select></label>
+    <label class="field"><span>金额（RMB）</span><input type="number" name="amount_rmb" min="0" step="0.0001" required></label>
+    <label class="field"><span>备注（选填）</span><textarea name="note" rows="3" maxlength="500"></textarea></label>
+    <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="balanceDialog">取消</button><button class="button primary" type="submit"><i data-lucide="check"></i>确认</button></div>
+  </form>
+</dialog>
+
+<dialog class="modal compact-modal" id="resetDialog">
+  <form class="modal-form" id="resetForm">
+    <div class="modal-header"><div><span class="eyebrow">Security</span><h2 id="resetDialogTitle">重置密码</h2></div><button class="icon-button" type="button" data-close-dialog="resetDialog" aria-label="关闭"><i data-lucide="x"></i></button></div>
+    <input type="hidden" name="user_id">
+    <label class="field"><span>新密码</span><input type="password" name="password" required></label>
+    <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="resetDialog">取消</button><button class="button primary" type="submit"><i data-lucide="key-round"></i>更新</button></div>
+  </form>
+</dialog>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='js/admin.js') }}" defer></script>{% endblock %}

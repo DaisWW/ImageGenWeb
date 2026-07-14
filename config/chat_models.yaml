@@ -1,0 +1,20 @@
+version: 1
+
+context:
+  compact_at_tokens: 24000
+  max_context_tokens: 32000
+  keep_recent_messages: 12
+
+models:
+  - id: gpt
+    label: GPT 5.6 SOL
+    enabled: true
+    base_url: http://xjbkw.weiw:18080
+    base_url_env: GPT_CHAT_API_BASE_URL
+    api_key_env: GPT_CHAT_API_KEY
+    model: gpt-5.6-sol
+    model_env: GPT_CHAT_MODEL
+    reasoning_effort: max
+    reasoning_effort_env: GPT_CHAT_REASONING_EFFORT
+    timeout_seconds: 180
+    max_output_tokens: 2000

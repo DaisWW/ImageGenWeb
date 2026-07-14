@@ -1,0 +1,72 @@
+name: ${COMPOSE_PROJECT_NAME:-snow-ai-studio}
+
+x-app: &app
+  build:
+    context: .
+    args:
+      PYTHON_IMAGE: ${PYTHON_IMAGE:-docker.m.daocloud.io/library/python:3.12-slim}
+  restart: unless-stopped
+  environment:
+    DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    SECRET_KEY: ${SECRET_KEY}
+    CONFIG_ENCRYPTION_KEY: ${CONFIG_ENCRYPTION_KEY:-}
+    ADMIN_USERNAME: ${ADMIN_USERNAME}
+    ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+    GPT_CHAT_API_BASE_URL: ${GPT_CHAT_API_BASE_URL}
+    GPT_CHAT_API_KEY: ${GPT_CHAT_API_KEY}
+    GPT_CHAT_MODEL: ${GPT_CHAT_MODEL:-gpt-5.6-sol}
+    GPT_CHAT_REASONING_EFFORT: ${GPT_CHAT_REASONING_EFFORT:-max}
+    IMAGE_API_BASE_URL: ${IMAGE_API_BASE_URL}
+    IMAGE_API_KEY: ${IMAGE_API_KEY}
+    LUCEN_API_BASE_URL: ${LUCEN_API_BASE_URL:-https://lucen.plus}
+    LUCEN_API_KEY: ${LUCEN_API_KEY:-}
+    COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    IMAGEGEN_DATA_DIR: /data
+    IMAGE_STORAGE_PATH: /data/files
+    AUTO_CREATE_DB: "false"
+  volumes:
+    - imagegen-data:/data
+
+services:
+  db:
+    image: ${POSTGRES_IMAGE:-docker.m.daocloud.io/library/postgres:17-alpine}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  web:
+    <<: *app
+    command: >-
+      sh -c "alembic upgrade head &&
+      gunicorn --bind 0.0.0.0:7860 --workers 1 --threads 8 --timeout 700 app:app"
+    ports:
+      - "0.0.0.0:${IMAGEGEN_PORT:-18081}:7860"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  worker:
+    <<: *app
+    command: ["python", "run_worker.py"]
+    depends_on:
+      web:
+        condition: service_healthy
+
+volumes:
+  imagegen-data:
+  postgres-data:

@@ -1,0 +1,14 @@
+.env
+.git
+.ui-perf-data
+.ui-test-data
+.pytest_cache
+.ruff_cache
+.venv
+__pycache__
+*.py[cod]
+data
+backups
+output
+outputs
+tests
