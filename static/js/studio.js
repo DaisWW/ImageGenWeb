@@ -15,6 +15,8 @@
   const IMAGE_SIZE_PATTERN = /^([1-9]\d{1,4})x([1-9]\d{1,4})$/;
   const IMAGE_DIMENSION_MIN = 64;
   const IMAGE_DIMENSION_MAX = 8192;
+  const REFERENCE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+  const REFERENCE_IMAGE_EXTENSION = /\.(?:png|jpe?g|webp)$/i;
 
   class StudioApp {
     constructor() {
@@ -36,11 +38,18 @@
       this.pendingUserMessages = new Map();
       this.saveTimer = null;
       this.promptCounterTimer = null;
+      this.workspaceSkeletonTimer = null;
+      this.workspaceLoadSequence = 0;
+      this.workspaceLoading = false;
+      this.workspaceTransition = null;
+      this.composerTransition = null;
+      this.reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
       this.loadingJobWorkspaces = new Set();
       this.loadingMessageWorkspaces = new Set();
       this.dialogMode = "create";
       this.composerMode = "chat";
       this.uploadTarget = "generation";
+      this.referenceUploadPending = false;
       this.chatReferencePickerOpen = false;
       this.detailItemId = null;
       this.channelVersion = "";
@@ -85,7 +94,9 @@
         workspaceForm: byId("workspaceForm"),
         workspaceDialogTitle: byId("workspaceDialogTitle"),
         workspaceNameInput: byId("workspaceNameInput"),
+        conversationView: byId("conversationView"),
         conversationScroll: byId("conversationScroll"),
+        conversationLoading: byId("conversationLoading"),
         conversationEmpty: byId("conversationEmpty"),
         messageList: byId("messageList"),
         chatForm: byId("chatForm"),
@@ -146,6 +157,11 @@
           this.el.chatForm.requestSubmit();
         }
       });
+      this.el.chatInput.addEventListener("paste", (event) => this.handleChatPaste(event));
+      this.el.chatForm.addEventListener("dragenter", (event) => this.handleChatDrag(event));
+      this.el.chatForm.addEventListener("dragover", (event) => this.handleChatDrag(event));
+      this.el.chatForm.addEventListener("dragleave", (event) => this.handleChatDragLeave(event));
+      this.el.chatForm.addEventListener("drop", (event) => this.handleChatDrop(event));
       this.el.chatModelSelect.addEventListener("change", () => this.settingChanged());
       this.el.translatePrompt.addEventListener("change", () => this.settingChanged());
       this.el.draftPromptButton.addEventListener("click", () => this.createPromptDraft());
@@ -186,7 +202,9 @@
         this.settingChanged();
       });
       this.el.referenceAdd.addEventListener("click", () => this.openReferencePicker("generation"));
-      this.el.referenceInput.addEventListener("change", () => this.uploadReferences());
+      this.el.referenceInput.addEventListener("change", () => {
+        this.uploadReferences([...this.el.referenceInput.files], this.uploadTarget);
+      });
       this.el.referenceList.addEventListener("click", (event) => this.handleReferenceClick(event));
       this.el.generationForm.addEventListener("submit", (event) => this.submitGeneration(event));
       this.el.detailReuse.addEventListener("click", () => this.reuseDetailImage());
@@ -196,20 +214,20 @@
       return this.channels.find((channel) => channel.id === this.el.channelSelect.value) || null;
     }
 
-    currentSelection() {
-      if (!this.activeWorkspace) return new Set();
-      if (!this.referenceSelections.has(this.activeWorkspace.id)) {
-        this.referenceSelections.set(this.activeWorkspace.id, new Set());
+    currentSelection(workspaceId = this.activeWorkspace?.id) {
+      if (!workspaceId) return new Set();
+      if (!this.referenceSelections.has(workspaceId)) {
+        this.referenceSelections.set(workspaceId, new Set());
       }
-      return this.referenceSelections.get(this.activeWorkspace.id);
+      return this.referenceSelections.get(workspaceId);
     }
 
-    currentChatSelection() {
-      if (!this.activeWorkspace) return new Set();
-      if (!this.chatReferenceSelections.has(this.activeWorkspace.id)) {
-        this.chatReferenceSelections.set(this.activeWorkspace.id, new Set());
+    currentChatSelection(workspaceId = this.activeWorkspace?.id) {
+      if (!workspaceId) return new Set();
+      if (!this.chatReferenceSelections.has(workspaceId)) {
+        this.chatReferenceSelections.set(workspaceId, new Set());
       }
-      return this.chatReferenceSelections.get(this.activeWorkspace.id);
+      return this.chatReferenceSelections.get(workspaceId);
     }
 
     renderWorkspaceList() {
@@ -242,9 +260,13 @@
     async selectWorkspace(id) {
       const workspace = this.workspaces.find((item) => item.id === id);
       if (!workspace || workspace === this.activeWorkspace) return;
-      window.clearTimeout(this.saveTimer);
+      const selection = ++this.workspaceLoadSequence;
       if (this.activeWorkspace) {
         this.chatDrafts.set(this.activeWorkspace.id, this.el.chatInput.value);
+        await this.flushSettings();
+        if (selection !== this.workspaceLoadSequence) return;
+        await this.animateWorkspaceOut();
+        if (selection !== this.workspaceLoadSequence) return;
       }
       this.activeWorkspace = workspace;
       this.jobs = [];
@@ -252,6 +274,7 @@
       this.conversationContext = null;
       this.composerMode = "chat";
       this.chatReferencePickerOpen = false;
+      this.setWorkspaceLoading(true, selection);
       this.el.chatInput.value = this.chatDrafts.get(workspace.id) || "";
       this.renderWorkspaceList();
       this.el.workspaceTitle.textContent = workspace.name;
@@ -260,14 +283,101 @@
       this.renderChatReferences();
       this.renderJobs();
       this.renderMessages();
-      this.setComposerMode("chat");
+      this.setComposerMode("chat", false);
+      this.animateWorkspaceIn();
       await Promise.all([this.loadJobs(), this.loadMessages()]);
+      if (selection !== this.workspaceLoadSequence) return;
+      this.setWorkspaceLoading(false, selection);
     }
 
-    setComposerMode(mode) {
-      this.composerMode = mode === "generation" ? "generation" : "chat";
-      this.el.chatForm.hidden = this.composerMode !== "chat";
-      this.el.generationForm.hidden = this.composerMode !== "generation";
+    setWorkspaceLoading(loading, selection) {
+      window.clearTimeout(this.workspaceSkeletonTimer);
+      this.workspaceLoading = loading;
+      this.el.conversationLoading.hidden = true;
+      this.el.conversationScroll.toggleAttribute("aria-busy", loading);
+      this.el.messageList.hidden = loading;
+      if (loading) {
+        this.el.conversationEmpty.hidden = true;
+        this.workspaceSkeletonTimer = window.setTimeout(() => {
+          if (this.workspaceLoading && selection === this.workspaceLoadSequence) {
+            this.el.conversationLoading.hidden = false;
+          }
+        }, 120);
+        return;
+      }
+      this.renderMessages();
+      if (!this.reducedMotion.matches) {
+        const content = this.el.messageList.childElementCount
+          ? this.el.messageList
+          : this.el.conversationEmpty;
+        content.animate?.(
+          [
+            { opacity: 0, transform: "translateY(5px)" },
+            { opacity: 1, transform: "translateY(0)" },
+          ],
+          { duration: 180, easing: "cubic-bezier(.22, 1, .36, 1)" },
+        );
+      }
+    }
+
+    async animateWorkspaceOut() {
+      if (this.reducedMotion.matches || typeof this.el.conversationView.animate !== "function") return;
+      this.workspaceTransition?.cancel();
+      const animation = this.el.conversationView.animate(
+        [
+          { opacity: 1, transform: "translateY(0)" },
+          { opacity: 0.28, transform: "translateY(-4px)" },
+        ],
+        { duration: 90, easing: "ease-out", fill: "forwards" },
+      );
+      this.workspaceTransition = animation;
+      await animation.finished.catch(() => {});
+    }
+
+    animateWorkspaceIn() {
+      this.workspaceTransition?.cancel();
+      if (this.reducedMotion.matches || typeof this.el.conversationView.animate !== "function") {
+        this.workspaceTransition = null;
+        return;
+      }
+      const animation = this.el.conversationView.animate(
+        [
+          { opacity: 0.35, transform: "translateY(6px)" },
+          { opacity: 1, transform: "translateY(0)" },
+        ],
+        { duration: 220, easing: "cubic-bezier(.22, 1, .36, 1)" },
+      );
+      this.workspaceTransition = animation;
+      animation.finished.catch(() => {}).finally(() => {
+        if (this.workspaceTransition === animation) this.workspaceTransition = null;
+      });
+    }
+
+    setComposerMode(mode, animate = true) {
+      const nextMode = mode === "generation" ? "generation" : "chat";
+      const incoming = nextMode === "chat" ? this.el.chatForm : this.el.generationForm;
+      const outgoing = nextMode === "chat" ? this.el.generationForm : this.el.chatForm;
+      const changed = this.composerMode !== nextMode || incoming.hidden;
+      this.composerMode = nextMode;
+      this.composerTransition?.cancel();
+      outgoing.hidden = true;
+      incoming.hidden = false;
+      if (changed && animate && !this.reducedMotion.matches && typeof incoming.animate === "function") {
+        const offset = nextMode === "generation" ? 8 : -6;
+        const animation = incoming.animate(
+          [
+            { opacity: 0, transform: `translateY(${offset}px)` },
+            { opacity: 1, transform: "translateY(0)" },
+          ],
+          { duration: 220, easing: "cubic-bezier(.22, 1, .36, 1)" },
+        );
+        this.composerTransition = animation;
+        animation.finished.catch(() => {}).finally(() => {
+          if (this.composerTransition === animation) this.composerTransition = null;
+        });
+      } else {
+        this.composerTransition = null;
+      }
       this.updateInteractionState();
     }
 
@@ -448,7 +558,17 @@
         this.el.saveState.textContent = "正在保存...";
       }
       window.clearTimeout(this.saveTimer);
-      this.saveTimer = window.setTimeout(() => this.saveSettings(), 550);
+      this.saveTimer = window.setTimeout(() => {
+        this.saveTimer = null;
+        this.saveSettings();
+      }, 550);
+    }
+
+    async flushSettings() {
+      if (this.saveTimer === null) return;
+      window.clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+      await this.saveSettings();
     }
 
     async saveSettings() {
@@ -643,10 +763,10 @@
         });
       }
       this.reconcileTimeline(timeline);
-      this.el.conversationEmpty.hidden = timeline.length > 0;
+      this.el.conversationEmpty.hidden = this.workspaceLoading || timeline.length > 0;
       this.renderContextStatus();
       this.updateInteractionState();
-      if (keepAtBottom) this.scrollConversation();
+      if (!this.workspaceLoading && keepAtBottom) this.scrollConversation();
     }
 
     reconcileTimeline(timeline) {
@@ -660,7 +780,12 @@
         const isNew = !existing.has(key);
         let node = existing.get(key);
         if (entry.type === "job") {
-          node = node ? this.updateJobCard(node, entry.value) : this.jobCard(entry.value);
+          const unchangedTerminal = node
+            && node.dataset.jobStatus === entry.value.status
+            && TERMINAL.has(entry.value.status);
+          if (!unchangedTerminal) {
+            node = node ? this.updateJobCard(node, entry.value) : this.jobCard(entry.value);
+          }
         } else if (!node) {
           node = this.messageCard(entry.value);
         }
@@ -736,8 +861,8 @@
       if (message.kind === "pending") {
         const pending = document.createElement("div");
         pending.className = "message-pending";
-        pending.innerHTML = '<i data-lucide="loader-circle"></i><span></span>';
-        pending.querySelector("span").textContent = message.content || "正在等待 AI 回复";
+        pending.innerHTML = '<span class="message-pending-dots" aria-hidden="true"><i></i><i></i><i></i></span><span></span>';
+        pending.lastElementChild.textContent = message.content || "正在等待 AI 回复";
         card.append(pending);
       } else if (message.kind === "prompt_draft") {
         card.append(this.promptDraftContent(message));
@@ -981,7 +1106,7 @@
       this.el.chatSendButton.disabled = locked || !hasModel;
       this.el.chatModelSelect.disabled = locked || !hasModel;
       this.el.translatePrompt.disabled = locked;
-      this.el.chatReferenceButton.disabled = locked;
+      this.el.chatReferenceButton.disabled = locked || this.referenceUploadPending;
       this.el.draftPromptButton.disabled = locked || !hasModel
         || !this.messages.some((message) => message.role === "user");
       this.el.generateButton.disabled = locked || !this.currentChannel();
@@ -1021,6 +1146,52 @@
       this.el.referenceInput.click();
     }
 
+    chatCanAcceptImages() {
+      return Boolean(this.activeWorkspace)
+        && !this.workspaceChatBusy()
+        && !this.workspaceHasActiveJob()
+        && !this.referenceUploadPending;
+    }
+
+    handleChatDrag(event) {
+      if (![...(event.dataTransfer?.types || [])].includes("Files")) return;
+      event.preventDefault();
+      if (!this.chatCanAcceptImages()) {
+        event.dataTransfer.dropEffect = "none";
+        return;
+      }
+      event.dataTransfer.dropEffect = "copy";
+      this.el.chatForm.classList.add("is-image-dragover");
+    }
+
+    handleChatDragLeave(event) {
+      if (this.el.chatForm.contains(event.relatedTarget)) return;
+      this.el.chatForm.classList.remove("is-image-dragover");
+    }
+
+    handleChatDrop(event) {
+      if (![...(event.dataTransfer?.types || [])].includes("Files")) return;
+      event.preventDefault();
+      this.el.chatForm.classList.remove("is-image-dragover");
+      if (!this.chatCanAcceptImages()) return;
+      this.uploadReferences([...event.dataTransfer.files], "chat");
+    }
+
+    handleChatPaste(event) {
+      const items = [...(event.clipboardData?.items || [])];
+      const itemFiles = items
+        .filter((item) => item.kind === "file")
+        .map((item) => item.getAsFile())
+        .filter(Boolean);
+      const files = itemFiles.length
+        ? itemFiles
+        : [...(event.clipboardData?.files || [])];
+      if (!files.length) return;
+      event.preventDefault();
+      if (!this.chatCanAcceptImages()) return;
+      this.uploadReferences(files, "chat");
+    }
+
     renderChatReferences() {
       const assets = this.activeWorkspace?.assets || [];
       const selection = this.currentChatSelection();
@@ -1032,7 +1203,7 @@
       upload.type = "button";
       upload.className = "chat-reference-add";
       upload.dataset.uploadChatReference = "true";
-      upload.disabled = assets.length >= 8;
+      upload.disabled = assets.length >= 8 || this.referenceUploadPending;
       upload.title = assets.length >= 8 ? "工作站最多保留 8 张参考图" : "上传参考图";
       upload.innerHTML = '<i data-lucide="image-plus"></i>';
 
@@ -1065,7 +1236,7 @@
     }
 
     async handleChatReferenceClick(event) {
-      if (this.workspaceChatBusy() || this.workspaceHasActiveJob()) return;
+      if (this.workspaceChatBusy() || this.workspaceHasActiveJob() || this.referenceUploadPending) return;
       const remove = event.target.closest("[data-reference-remove]");
       if (remove) {
         await this.removeReference(remove.dataset.referenceRemove);
@@ -1121,39 +1292,58 @@
       UI.icons(this.el.referenceList);
     }
 
-    async uploadReferences() {
-      const files = [...this.el.referenceInput.files];
+    async uploadReferences(files, target) {
       this.el.referenceInput.value = "";
-      if (!files.length || !this.activeWorkspace) return;
-      const target = this.uploadTarget;
-      if (this.activeWorkspace.assets.length + files.length > 8) {
+      const workspace = this.activeWorkspace;
+      if (!files.length || !workspace || this.referenceUploadPending) return;
+      const images = files.filter((file) => (
+        REFERENCE_IMAGE_TYPES.has(file.type.toLowerCase())
+        || REFERENCE_IMAGE_EXTENSION.test(file.name)
+      ));
+      if (!images.length) {
+        UI.toast("仅支持 PNG、JPEG 和 WebP 图片", "error");
+        return;
+      }
+      if (workspace.assets.length + images.length > 8) {
         UI.toast("每个工作站最多保留 8 张垫图", "error");
         return;
       }
+      const selection = target === "chat"
+        ? this.currentChatSelection(workspace.id)
+        : this.currentSelection(workspace.id);
+      const max = target === "chat"
+        ? 8
+        : (this.currentChannel()?.capabilities.max_reference_images || 0);
       const data = new FormData();
-      files.forEach((file) => data.append("references", file, file.name));
+      images.forEach((file) => data.append("references", file, file.name));
+      this.referenceUploadPending = true;
       this.el.referenceAdd.disabled = true;
       this.el.chatReferenceButton.disabled = true;
       try {
-        const payload = await UI.api(`/api/workspaces/${this.activeWorkspace.id}/assets`, {
+        const payload = await UI.api(`/api/workspaces/${workspace.id}/assets`, {
           method: "POST", body: data,
         });
-        this.activeWorkspace.assets.push(...payload.assets);
-        const selection = target === "chat" ? this.currentChatSelection() : this.currentSelection();
-        const max = target === "chat"
-          ? 8
-          : (this.currentChannel()?.capabilities.max_reference_images || 0);
+        workspace.assets.push(...payload.assets);
         payload.assets.forEach((asset) => {
           if (selection.size < max) selection.add(asset.id);
         });
-        this.renderReferences();
-        this.renderChatReferences();
+        if (workspace === this.activeWorkspace) {
+          this.renderReferences();
+          this.renderChatReferences();
+        }
         this.renderWorkspaceList();
-        UI.toast(`已保存 ${payload.assets.length} 张参考图`, "success");
+        const skipped = files.length - images.length;
+        UI.toast(
+          skipped
+            ? `已保存 ${payload.assets.length} 张参考图，忽略 ${skipped} 个不支持的文件`
+            : `已保存 ${payload.assets.length} 张参考图`,
+          skipped ? "info" : "success",
+        );
       } catch (error) {
         UI.toast(error.message, "error");
       } finally {
-        this.el.referenceAdd.disabled = this.activeWorkspace.assets.length >= 8;
+        this.referenceUploadPending = false;
+        this.el.referenceAdd.disabled = this.activeWorkspace?.assets.length >= 8;
         this.updateInteractionState();
       }
     }
@@ -1217,8 +1407,9 @@
         return;
       }
       if (!this.validateSizeInput(true)) return;
+      const workspace = this.activeWorkspace;
       const settings = this.collectSettings();
-      const referenceIds = [...this.currentSelection()];
+      const referenceIds = [...this.currentSelection(workspace.id)];
       if (!settings.prompt.trim()) {
         UI.toast("请输入提示词", "error");
         this.el.promptInput.focus();
@@ -1235,15 +1426,17 @@
         const data = await UI.api("/api/generations", {
           method: "POST",
           body: {
-            workspace_id: this.activeWorkspace.id,
+            workspace_id: workspace.id,
             ...settings,
             reference_ids: settings.mode === "img2img" ? referenceIds : [],
           },
         });
-        this.activeWorkspace.settings = settings;
-        this.jobs.unshift(data.job);
-        this.renderJobs();
-        this.setComposerMode("chat");
+        workspace.settings = settings;
+        if (this.activeWorkspace?.id === workspace.id) {
+          this.jobs.unshift(data.job);
+          this.renderJobs();
+          this.setComposerMode("chat");
+        }
         await this.refreshBalance();
         UI.toast(`任务已提交，${UI.money(Number(data.job.price_per_image_rmb) * data.job.requested_count)} 已预占`, "success");
       } catch (error) {
@@ -1310,6 +1503,7 @@
       const [statusLabel, statusClass] = STATUS[job.status] || [job.status, ""];
       article.className = `job-card timeline-job ${statusClass}`;
       article.dataset.jobId = job.id;
+      article.dataset.jobStatus = job.status;
       const status = article.querySelector("[data-job-status]");
       status.className = `status-badge ${statusClass}`;
       status.querySelector("[data-job-status-label]").textContent = statusLabel;
@@ -1369,6 +1563,7 @@
 
     updateOutputTile(button, job, item) {
       const imageUrl = item.thumbnail_url || item.image_url || "";
+      const imageArrived = button.isConnected && !button.dataset.imageUrl && Boolean(imageUrl);
       const contentChanged = button.dataset.imageUrl !== imageUrl
         || (!imageUrl && button.dataset.itemStatus !== item.status);
       button.className = `output-tile ${item.status}`;
@@ -1392,6 +1587,10 @@
         placeholder.innerHTML = `<i data-lucide="${icon}"></i><small>${STATUS[item.status]?.[0] || "等待"}</small>`;
         button.replaceChildren(placeholder);
         UI.icons(button);
+      }
+      if (imageArrived) {
+        button.classList.add("result-arrived");
+        button.addEventListener("animationend", () => button.classList.remove("result-arrived"), { once: true });
       }
       return button;
     }
@@ -1446,24 +1645,29 @@
 
     async reuseDetailImage() {
       if (!this.detailItemId || !this.activeWorkspace) return;
+      const workspace = this.activeWorkspace;
+      const itemId = this.detailItemId;
       this.el.detailReuse.disabled = true;
       try {
-        const data = await UI.api(`/api/generation-items/${this.detailItemId}/reference`, {
+        const data = await UI.api(`/api/generation-items/${itemId}/reference`, {
           method: "POST",
         });
-        if (!this.activeWorkspace.assets.some((asset) => asset.id === data.asset.id)) {
-          this.activeWorkspace.assets.push(data.asset);
+        if (!workspace.assets.some((asset) => asset.id === data.asset.id)) {
+          workspace.assets.push(data.asset);
         }
-        this.currentChatSelection().clear();
-        this.currentChatSelection().add(data.asset.id);
-        this.chatReferencePickerOpen = true;
-        this.renderChatReferences();
-        this.renderReferences();
+        const selection = this.currentChatSelection(workspace.id);
+        selection.clear();
+        selection.add(data.asset.id);
         this.renderWorkspaceList();
-        this.setComposerMode("chat");
-        this.el.chatInput.value = "请基于这张图继续调整：";
-        UI.closeDialog(this.el.imageDialog);
-        this.el.chatInput.focus();
+        if (this.activeWorkspace?.id === workspace.id) {
+          this.chatReferencePickerOpen = true;
+          this.renderChatReferences();
+          this.renderReferences();
+          this.setComposerMode("chat");
+          this.el.chatInput.value = "请基于这张图继续调整：";
+          UI.closeDialog(this.el.imageDialog);
+          this.el.chatInput.focus();
+        }
       } catch (error) {
         UI.toast(error.message, "error");
       } finally {

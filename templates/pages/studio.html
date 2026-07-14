@@ -46,6 +46,10 @@
 
       <section class="workspace-view conversation-view active" id="conversationView">
         <div class="conversation-scroll" id="conversationScroll">
+          <div class="conversation-loading" id="conversationLoading" role="status" aria-label="正在加载工作站" hidden>
+            <div class="conversation-skeleton assistant"><span></span><div><i></i><i></i><i></i></div></div>
+            <div class="conversation-skeleton user"><span></span><div><i></i><i></i></div></div>
+          </div>
           <div class="conversation-empty" id="conversationEmpty">
             <span class="empty-mark brand-empty-mark"><img src="{{ url_for('static', filename='assets/brand-mark-v2.png') }}" alt=""></span>
             <strong>开始一段新对话</strong>

@@ -48,7 +48,33 @@
   }
 
   function icons(root = document) {
-    if (window.lucide) window.lucide.createIcons({ root });
+    const lucide = window.lucide;
+    if (!lucide) return;
+    const placeholders = [
+      ...(root.matches?.("[data-lucide]") ? [root] : []),
+      ...root.querySelectorAll("[data-lucide]"),
+    ];
+    placeholders.forEach((placeholder) => {
+      const name = placeholder.dataset.lucide;
+      const key = name?.replace(
+        /(\w)(\w*)(_|-|\s*)/g,
+        (_match, first, rest) => first.toUpperCase() + rest.toLowerCase(),
+      );
+      const icon = lucide.icons[key];
+      if (!icon) return;
+      const svg = lucide.createElement(icon);
+      [...placeholder.attributes].forEach((attribute) => {
+        if (!["class", "data-lucide"].includes(attribute.name)) {
+          svg.setAttribute(attribute.name, attribute.value);
+        }
+      });
+      svg.setAttribute("data-lucide", name);
+      svg.setAttribute(
+        "class",
+        [...new Set(["lucide", `lucide-${name}`, ...placeholder.classList])].join(" "),
+      );
+      placeholder.replaceWith(svg);
+    });
   }
 
   function amount(value) {
@@ -70,7 +96,20 @@
     };
     Object.entries(values).forEach(([selector, value]) => {
       document.querySelectorAll(selector).forEach((node) => {
-        node.textContent = money(value);
+        const nextValue = money(value);
+        if (node.textContent === nextValue) return;
+        node.textContent = nextValue;
+        if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches && typeof node.animate === "function") {
+          const styles = window.getComputedStyle(node);
+          const accent = window.getComputedStyle(document.documentElement).getPropertyValue("--accent-strong").trim();
+          node.animate(
+            [
+              { color: accent, transform: "translateY(-2px)" },
+              { color: styles.color, transform: "translateY(0)" },
+            ],
+            { duration: 320, easing: "cubic-bezier(.22, 1, .36, 1)" },
+          );
+        }
       });
     });
   }
@@ -146,11 +185,6 @@
       button.addEventListener("click", () => closeDialog(button.dataset.closeDialog));
     });
     document.querySelectorAll("dialog").forEach((dialog) => {
-      dialog.addEventListener("click", (event) => {
-        if (event.target === dialog && !dialog.hasAttribute("data-explicit-close")) {
-          closeDialog(dialog);
-        }
-      });
       dialog.addEventListener("cancel", (event) => {
         if (dialog.hasAttribute("data-explicit-close")) event.preventDefault();
       });

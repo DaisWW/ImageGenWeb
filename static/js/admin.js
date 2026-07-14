@@ -21,8 +21,10 @@
       this.jobs = [];
       this.channelConfig = null;
       this.chatConfig = null;
+      this.reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
       this.cacheElements();
       this.bindEvents();
+      window.requestAnimationFrame(() => this.updateTabIndicator(false));
       this.loadUsers();
       this.pollTimer = window.setInterval(() => {
         if (this.activeTab === "generations") this.loadJobs(false);
@@ -33,6 +35,7 @@
       const byId = (id) => document.getElementById(id);
       this.el = {
         tabs: [...document.querySelectorAll(".admin-tab")],
+        tabIndicator: byId("adminTabIndicator"),
         views: [...document.querySelectorAll(".admin-view")],
         userTableBody: byId("userTableBody"),
         companyTodaySpending: byId("companyTodaySpending"),
@@ -102,12 +105,19 @@
       this.el.chatModelForm.addEventListener("submit", (event) => this.saveChatModel(event));
       this.el.contextForm.addEventListener("submit", (event) => this.saveContext(event));
       this.el.settingsForm.addEventListener("submit", (event) => this.saveSettings(event));
+      window.addEventListener("resize", () => this.updateTabIndicator(false));
     }
 
     selectTab(name) {
+      const previousIndex = this.el.tabs.findIndex((tab) => tab.dataset.tab === this.activeTab);
+      const nextIndex = this.el.tabs.findIndex((tab) => tab.dataset.tab === name);
+      if (nextIndex < 0) return;
+      const changed = name !== this.activeTab;
       this.activeTab = name;
       this.el.tabs.forEach((tab) => tab.classList.toggle("active", tab.dataset.tab === name));
       this.el.views.forEach((view) => view.classList.toggle("active", view.dataset.view === name));
+      this.updateTabIndicator();
+      if (changed) this.animateAdminView(name, nextIndex >= previousIndex ? 1 : -1);
       if (name === "users") this.loadUsers();
       if (name === "generations") this.loadJobs();
       if (name === "channels") {
@@ -115,6 +125,31 @@
         this.loadChatModels();
       }
       if (name === "settings") this.loadSettings();
+    }
+
+    updateTabIndicator(animate = true) {
+      const active = this.el.tabs.find((tab) => tab.dataset.tab === this.activeTab);
+      if (!active || !this.el.tabIndicator) return;
+      if (!animate) this.el.tabIndicator.classList.add("instant");
+      this.el.tabIndicator.style.width = `${Math.max(0, active.offsetWidth - 28)}px`;
+      this.el.tabIndicator.style.transform = `translateX(${active.offsetLeft + 14}px)`;
+      if (!animate) {
+        window.requestAnimationFrame(() => this.el.tabIndicator.classList.remove("instant"));
+      }
+    }
+
+    animateAdminView(name, direction) {
+      if (this.reducedMotion.matches) return;
+      const view = this.el.views.find((item) => item.dataset.view === name);
+      if (!view || typeof view.animate !== "function") return;
+      view.getAnimations().forEach((animation) => animation.cancel());
+      view.animate(
+        [
+          { opacity: 0, transform: `translateX(${direction * 8}px)` },
+          { opacity: 1, transform: "translateX(0)" },
+        ],
+        { duration: 220, easing: "cubic-bezier(.22, 1, .36, 1)" },
+      );
     }
 
     async loadUsers() {
@@ -250,31 +285,58 @@
     }
 
     async loadJobs(notify = false) {
+      if (notify) {
+        this.el.refreshJobsButton.disabled = true;
+        this.el.refreshJobsButton.classList.add("is-loading");
+        this.el.refreshJobsButton.setAttribute("aria-busy", "true");
+      }
       try {
+        const previous = new Map(this.jobs.map((job) => [String(job.id), this.jobMotionSignature(job)]));
         const data = await UI.api("/api/admin/generations?limit=100");
         this.jobs = data.jobs;
         this.el.queueOverview.textContent = `生成中 ${data.running_images} 张 · 排队 ${data.queued_images} 张 · 共 ${data.jobs.length} 条记录`;
-        this.renderJobs();
+        this.renderJobs(previous);
         if (notify) UI.toast("记录已刷新", "success");
       } catch (error) {
         UI.toast(error.message, "error");
+      } finally {
+        if (notify) {
+          this.el.refreshJobsButton.disabled = false;
+          this.el.refreshJobsButton.classList.remove("is-loading");
+          this.el.refreshJobsButton.removeAttribute("aria-busy");
+        }
       }
     }
 
-    renderJobs() {
+    jobMotionSignature(job) {
+      return JSON.stringify([
+        job.status,
+        job.succeeded_count,
+        job.charged_rmb,
+        job.queue_position,
+        job.items.map((item) => [item.id, item.status, item.thumbnail_url, item.image_url]),
+      ]);
+    }
+
+    renderJobs(previous = new Map()) {
       if (!this.jobs.length) {
         this.el.adminJobList.innerHTML = '<div class="admin-empty"><i data-lucide="activity"></i><span>暂无生成记录</span></div>';
         UI.icons(this.el.adminJobList);
         return;
       }
       this.el.adminJobList.innerHTML = this.jobs.map((job) => {
+        const identifier = String(job.id);
+        const previousSignature = previous.get(identifier);
+        const motionClass = previous.size && previousSignature == null
+          ? " data-enter"
+          : previousSignature && previousSignature !== this.jobMotionSignature(job) ? " data-updated" : "";
         const outputs = job.items.map((item) => item.thumbnail_url
           ? `<a class="admin-output" href="${item.image_url}" target="_blank" title="查看原图"><img src="${item.thumbnail_url}" alt="生成结果"></a>`
           : `<span class="admin-output empty ${item.status}"><i data-lucide="${item.status === "failed" ? "circle-alert" : "loader-circle"}"></i></span>`).join("");
         const references = job.references.length
           ? `<div class="admin-references"><span>垫图</span>${job.references.map((asset) => `<a href="${asset.url}" target="_blank"><img src="${asset.url}" alt="${UI.escapeHtml(asset.name)}"></a>`).join("")}</div>`
           : "";
-        return `<article class="admin-job-card ${job.status}">
+        return `<article class="admin-job-card ${job.status}${motionClass}" data-job-id="${UI.escapeHtml(identifier)}">
           <div class="admin-job-top">
             <div class="admin-job-owner"><span class="user-avatar small">${UI.escapeHtml((job.user.display_name || job.user.username).slice(0, 1).toUpperCase())}</span><div><strong>${UI.escapeHtml(job.user.display_name || job.user.username)}</strong><small>${UI.dateTime(job.created_at)} · ${UI.escapeHtml(job.channel)} · ${UI.escapeHtml(job.model)}</small></div></div>
             <div class="admin-job-state"><span class="status-badge ${job.status}"><span></span>${STATUS[job.status] || job.status}</span>${job.can_cancel ? `<button class="button danger small" data-admin-cancel="${job.id}"><i data-lucide="square"></i>取消</button>` : ""}</div>
