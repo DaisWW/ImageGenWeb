@@ -1690,6 +1690,10 @@
       const workspaceId = workspace.id;
       const modelId = this.el.chatModelSelect.value;
       const translateToEnglish = this.el.translatePrompt.checked;
+      const generationMode = this.el.modeSwitch.dataset.mode || "text2img";
+      const generationReferences = generationMode === "img2img"
+        ? [...this.currentSelection(workspaceId)]
+        : [];
       this.startLocalChatOperation(
         workspaceId,
         "prompt_draft",
@@ -1704,12 +1708,22 @@
           body: {
             model_id: modelId,
             translate_to_english: translateToEnglish,
+            mode: generationMode,
+            reference_ids: generationReferences,
           },
         });
         if (this.activeWorkspace?.id === workspaceId) {
           this.messages.push(data.message);
           this.conversationContext = data.context;
           if (data.message?.payload?.status === "needs_clarification") {
+            const references = this.currentChatSelection(workspaceId);
+            (data.message.payload.reference_ids || []).forEach((id) => references.add(id));
+            this.trimReferenceSelection(
+              references,
+              this.referenceSelectionLimit("chat", workspace),
+            );
+            this.chatReferencePickerOpen = references.size > 0;
+            this.renderChatReferences();
             UI.toast("还需补充关键信息", "info");
             this.el.chatInput.focus();
           }

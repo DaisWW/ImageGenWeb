@@ -170,11 +170,16 @@ def send_conversation_message(workspace_id: str):
 def create_prompt_draft(workspace_id: str):
     workspace = owned_workspace(workspace_id)
     data = json_body()
+    reference_ids = data.get("reference_ids", [])
+    if not isinstance(reference_ids, list):
+        raise ServiceError("垫图参数无效")
     conversations = services().conversations
     message = conversations.create_prompt_draft(
         workspace,
         model_id=str(data.get("model_id", "")),
         translate_to_english=json_bool(data.get("translate_to_english", False)),
+        mode=str(data.get("mode", "")),
+        reference_ids=tuple(str(item) for item in reference_ids),
     )
     return jsonify(
         message=conversation_message_dict(message),
