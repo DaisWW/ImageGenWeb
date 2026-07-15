@@ -2,6 +2,8 @@
   "use strict";
 
   const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || "";
+  let dateTimeFormatter = null;
+  let timeFormatter = null;
 
   async function api(url, options = {}) {
     const request = { credentials: "same-origin", ...options };
@@ -120,24 +122,28 @@
   function dateTime(value) {
     if (!value) return "--";
     const date = new Date(value);
-    return Number.isNaN(date.getTime())
-      ? "--"
-      : new Intl.DateTimeFormat("zh-CN", {
-          month: "2-digit",
-          day: "2-digit",
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-          hour12: false,
-        }).format(date);
+    if (Number.isNaN(date.getTime())) return "--";
+    dateTimeFormatter ||= new Intl.DateTimeFormat("zh-CN", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+    return dateTimeFormatter.format(date);
   }
 
   function timeOnly(value) {
     if (!value) return "--:--";
     const date = new Date(value);
-    return Number.isNaN(date.getTime())
-      ? "--:--"
-      : new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
+    if (Number.isNaN(date.getTime())) return "--:--";
+    timeFormatter ||= new Intl.DateTimeFormat("zh-CN", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    return timeFormatter.format(date);
   }
 
   function formatBytes(value) {

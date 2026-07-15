@@ -12,6 +12,8 @@
     canceled: ["已取消", "canceled"],
   };
   const TERMINAL = new Set(["succeeded", "partial", "failed", "canceled"]);
+  const ACTIVE_POLL_INTERVAL = 2200;
+  const IDLE_POLL_INTERVAL = 8000;
   const IMAGE_SIZE_PATTERN = /^([1-9]\d{1,4})x([1-9]\d{1,4})$/;
   const IMAGE_DIMENSION_MIN = 64;
   const IMAGE_DIMENSION_MAX = 8192;
@@ -116,6 +118,7 @@
       this.workspaceElementCache = new WeakMap();
       this.jobElementCache = new WeakMap();
       this.polling = false;
+      this.pollTimer = null;
       this.scrollFrame = null;
       this.workspaces.forEach((workspace) => {
         if (workspace.conversation_operation?.busy) {
@@ -133,10 +136,9 @@
       const initialWorkspace = this.workspaces.find((workspace) => workspace.id === lastWorkspaceId)
         || this.workspaces[0];
       this.selectWorkspace(initialWorkspace?.id);
-      this.loadWorkspaceJobs();
+      this.loadWorkspaceJobs().finally(() => this.schedulePoll());
       this.loadChannels(false);
       this.loadChatModels(false);
-      this.pollTimer = window.setInterval(() => this.poll(), 2200);
       this.countdownTimer = window.setInterval(() => {
         if (document.hidden) return;
         this.updateWorkspaceJobDisplays();
@@ -368,7 +370,7 @@
         if (document.hidden) return;
         this.updateWorkspaceJobDisplays();
         this.updateEtaMetric();
-        this.poll();
+        this.schedulePoll(0);
         this.loadChannels(false);
         this.loadChatModels(false);
         this.loadRuntimeSettings(false);
@@ -1554,6 +1556,7 @@
           image.src = asset.url;
           image.alt = asset.name;
           image.loading = "lazy";
+          image.decoding = "async";
           this.prepareImageReveal(image);
           link.append(image);
           attachments.append(link);
@@ -1985,6 +1988,7 @@
         const image = document.createElement("img");
         image.src = asset.url;
         image.alt = asset.name;
+        image.decoding = "async";
         const check = document.createElement("span");
         check.innerHTML = '<i data-lucide="check"></i>';
         toggle.append(image, check);
@@ -2006,6 +2010,7 @@
         const image = document.createElement("img");
         image.src = pending.previewUrl;
         image.alt = pending.file.name || "待上传图片";
+        image.decoding = "async";
         const status = document.createElement("span");
         status.className = "reference-upload-status";
         status.title = pending.state === "canceling" ? "正在取消" : "正在上传";
@@ -2078,6 +2083,7 @@
           const image = document.createElement("img");
           image.src = asset.url;
           image.alt = asset.name;
+          image.decoding = "async";
           const check = document.createElement("span");
           check.innerHTML = '<i data-lucide="check"></i>';
           toggle.append(image, check);
@@ -2099,6 +2105,7 @@
           const image = document.createElement("img");
           image.src = pending.previewUrl;
           image.alt = pending.file.name || "待上传图片";
+          image.decoding = "async";
           const status = document.createElement("span");
           status.className = "reference-upload-status";
           status.title = pending.state === "canceling" ? "正在取消" : "正在上传";
@@ -2403,6 +2410,7 @@
         });
         workspace.settings = settings;
         this.workspaceJobs.set(workspace.id, data.job);
+        this.schedulePoll(ACTIVE_POLL_INTERVAL);
         this.updateWorkspaceJobDisplays();
         if (this.activeWorkspace?.id === workspace.id) {
           this.jobs.unshift(data.job);
@@ -2498,7 +2506,7 @@
             </div>
           </div>
           <div class="animation-result" data-animation-result hidden>
-            <div class="animation-preview"><img data-animation-image alt="动画预览"></div>
+            <div class="animation-preview"><img data-animation-image alt="动画预览" decoding="async"></div>
             <div class="animation-result-bar">
               <span data-animation-meta></span>
               <a class="icon-button" data-animation-download download title="下载动画" aria-label="下载动画"><i data-lucide="download"></i></a>
@@ -2660,6 +2668,7 @@
           ? `动画第 ${item.position + 1} 帧`
           : job.kind === "animation_master" ? "帧动画母图" : `生成结果 ${item.position + 1}`;
         image.loading = "lazy";
+        image.decoding = "async";
         this.prepareImageReveal(image);
         button.replaceChildren(image);
       } else {
@@ -2727,7 +2736,7 @@
         .map(([label, value]) => `<div><dt>${label}</dt><dd>${UI.escapeHtml(value)}</dd></div>`)
         .join("");
       this.el.detailReferences.innerHTML = job.references.length
-        ? `<span>垫图</span><div>${job.references.map((asset) => `<img src="${asset.url}" alt="${UI.escapeHtml(asset.name)}">`).join("")}</div>`
+        ? `<span>垫图</span><div>${job.references.map((asset) => `<img src="${asset.url}" alt="${UI.escapeHtml(asset.name)}" decoding="async">`).join("")}</div>`
         : "";
       this.el.detailReferences.querySelectorAll("img").forEach((image) => this.prepareImageReveal(image));
       this.el.detailReuseLabel.textContent = this.isAnimationWorkspace() ? "设为母图" : "基于此图继续";
@@ -2864,6 +2873,26 @@
       } finally {
         this.polling = false;
       }
+    }
+
+    pollInterval() {
+      if (document.hidden) return IDLE_POLL_INTERVAL;
+      const active = this.workspaceJobs.size > 0
+        || this.chatOperations.size > 0
+        || this.jobs.some((job) => !TERMINAL.has(job.status));
+      return active ? ACTIVE_POLL_INTERVAL : IDLE_POLL_INTERVAL;
+    }
+
+    schedulePoll(delay = this.pollInterval()) {
+      window.clearTimeout(this.pollTimer);
+      this.pollTimer = window.setTimeout(async () => {
+        this.pollTimer = null;
+        try {
+          await this.poll();
+        } finally {
+          this.schedulePoll();
+        }
+      }, delay);
     }
   }
 
