@@ -1,8 +1,8 @@
-"""add transparent background
+"""新增透明背景支持
 
-Revision ID: 8d7f4b2c1a90
-Revises: 5728b5736599
-Create Date: 2026-07-15 00:00:00.000000
+修订 ID：8d7f4b2c1a90
+上一修订：5728b5736599
+创建时间：2026-07-15 00:00:00.000000
 """
 
 from typing import Sequence, Union

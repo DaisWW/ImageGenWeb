@@ -1,8 +1,8 @@
-"""add animation workflows
+"""新增动画工作流
 
-Revision ID: b61c9f0d2e44
-Revises: 8d7f4b2c1a90
-Create Date: 2026-07-15 00:00:00.000000
+修订 ID：b61c9f0d2e44
+上一修订：8d7f4b2c1a90
+创建时间：2026-07-15 00:00:00.000000
 """
 
 from typing import Sequence, Union

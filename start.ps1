@@ -1,4 +1,4 @@
-param(
+﻿param(
     [switch]$Lan,
     [int]$Port = 7860
 )

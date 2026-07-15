@@ -5,7 +5,7 @@ import os
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from imagegen import models  # noqa: F401
+from imagegen import models  # noqa: F401 仅用于注册模型元数据
 from imagegen.extensions import db
 
 config = context.config

@@ -1,8 +1,8 @@
 """${message}
 
-Revision ID: ${up_revision}
-Revises: ${down_revision | comma,n}
-Create Date: ${create_date}
+修订 ID：${up_revision}
+上一修订：${down_revision | comma,n}
+创建时间：${create_date}
 """
 from typing import Sequence, Union
 
