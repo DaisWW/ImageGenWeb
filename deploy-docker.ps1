@@ -6,7 +6,8 @@ param(
     [ValidatePattern("^[A-Za-z0-9_.-]+$")]
     [string]$AdminUsername = "admin",
 
-    [switch]$Lan,
+    [switch]$Lan = $true,
+    [switch]$LocalOnly,
     [switch]$SkipFirewall,
     [switch]$SkipAutostart,
     [switch]$NoBuild,
@@ -15,6 +16,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if ($LocalOnly) {
+    $Lan = $false
+}
 
 $projectDir = $PSScriptRoot
 $envPath = Join-Path $projectDir ".env"
@@ -210,7 +215,7 @@ function Get-LanAddresses {
 Push-Location $projectDir
 try {
     if ($Lan) {
-        Write-Warning "-Lan 会通过明文 HTTP 暴露登录和会话流量。请仅在可信网络使用，或在服务前配置 TLS。"
+        Write-Warning "局域网模式会通过明文 HTTP 暴露登录和会话流量。请仅在可信网络使用，或在服务前配置 TLS。"
     }
     if (-not (Get-Command docker.exe -ErrorAction SilentlyContinue)) {
         throw "找不到 docker.exe，请先安装 Docker Desktop。"
@@ -290,7 +295,7 @@ try {
             Write-Host "局域网地址（明文 HTTP）：http://${address}:$Port"
         }
     } else {
-        Write-Host "局域网访问未启用。仅在可信网络中使用 -Lan 重新运行。"
+        Write-Host "局域网访问未启用。移除 -LocalOnly 后重新运行即可启用。"
     }
     if ($generatedAdminPassword) {
         Write-Host "初始管理员：$AdminUsername" -ForegroundColor Yellow
