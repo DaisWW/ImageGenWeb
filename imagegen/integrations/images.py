@@ -16,6 +16,7 @@ import requests
 from PIL import Image, ImageFilter, UnidentifiedImageError
 
 from ..config.channels import Channel
+from .diagnostics import response_summary
 
 MAX_OUTPUT_BYTES = 50 * 1024 * 1024
 MAX_TRANSPARENCY_PIXELS = 40_000_000
@@ -34,11 +35,13 @@ class ProviderError(RuntimeError):
         code: str = "provider_error",
         status_code: int | None = None,
         request_id: str = "",
+        details: dict[str, Any] | None = None,
     ):
         super().__init__(message)
         self.code = code
         self.status_code = status_code
         self.request_id = request_id
+        self.details = details or {}
 
 
 @dataclass(frozen=True)
@@ -94,7 +97,7 @@ class OpenAIImagesAdapter:
                     "data": {key: str(value) for key, value in payload.items()},
                     "files": [
                         (
-                            channel.capabilities.reference_field,
+                            "image[]",
                             (reference.filename, reference.content, reference.mime_type),
                         )
                         for reference in request.references
@@ -111,10 +114,16 @@ class OpenAIImagesAdapter:
                     **request_data,
                 )
             except requests.Timeout as exc:
-                raise ProviderError("上游生成超时", code="timeout") from exc
+                raise ProviderError(
+                    "上游生成超时",
+                    code="timeout",
+                    details={"exception_type": exc.__class__.__name__},
+                ) from exc
             except requests.RequestException as exc:
                 raise ProviderError(
-                    f"无法连接生图渠道：{exc.__class__.__name__}", code="connection_error"
+                    f"无法连接生图渠道：{exc.__class__.__name__}",
+                    code="connection_error",
+                    details={"exception_type": exc.__class__.__name__},
                 ) from exc
 
             request_id = _request_id(response)
@@ -139,14 +148,24 @@ class OpenAIImagesAdapter:
                     code="upstream_error",
                     status_code=response.status_code,
                     request_id=request_id,
+                    details=response_summary(response),
                 )
             try:
                 response_payload = response.json()
             except ValueError as exc:
                 raise ProviderError(
-                    "上游返回了无效 JSON", code="invalid_response", request_id=request_id
+                    "上游返回了无效 JSON",
+                    code="invalid_response",
+                    status_code=response.status_code,
+                    request_id=request_id,
+                    details=response_summary(response),
                 ) from exc
-            content = self._extract(response_payload, channel, request_id)
+            content = self._extract(
+                response_payload,
+                channel,
+                request_id,
+                response_summary(response, response_payload),
+            )
             break
 
         if len(content) > MAX_OUTPUT_BYTES:
@@ -159,9 +178,20 @@ class OpenAIImagesAdapter:
             )
         return ProviderResult(content=content, request_id=request_id)
 
-    def _extract(self, payload: Any, channel: Channel, request_id: str) -> bytes:
+    def _extract(
+        self,
+        payload: Any,
+        channel: Channel,
+        request_id: str,
+        diagnostics: dict[str, Any],
+    ) -> bytes:
         if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
-            raise ProviderError("上游响应缺少图片数据", code="invalid_response")
+            raise ProviderError(
+                "上游响应缺少图片数据",
+                code="invalid_response",
+                request_id=request_id,
+                details=diagnostics,
+            )
         for item in payload["data"]:
             if not isinstance(item, dict):
                 continue
@@ -170,11 +200,21 @@ class OpenAIImagesAdapter:
                 try:
                     return base64.b64decode(encoded, validate=True)
                 except (binascii.Error, ValueError) as exc:
-                    raise ProviderError("上游返回了无效图片编码", code="invalid_response") from exc
+                    raise ProviderError(
+                        "上游返回了无效图片编码",
+                        code="invalid_response",
+                        request_id=request_id,
+                        details=diagnostics,
+                    ) from exc
             image_url = item.get("url")
             if isinstance(image_url, str) and image_url:
                 return self._download(image_url, channel, request_id)
-        raise ProviderError("上游响应中没有可用图片", code="invalid_response")
+        raise ProviderError(
+            "上游响应中没有可用图片",
+            code="invalid_response",
+            request_id=request_id,
+            details=diagnostics,
+        )
 
     def _download(self, image_url: str, channel: Channel, request_id: str) -> bytes:
         response = None

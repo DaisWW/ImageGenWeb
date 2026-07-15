@@ -7,6 +7,7 @@ from typing import Any
 import requests
 
 from ..config.chat_models import ChatModelConfig
+from .diagnostics import response_summary
 
 
 @dataclass(frozen=True)
@@ -26,15 +27,21 @@ class OpenAIChatError(RuntimeError):
         code: str = "chat_provider_error",
         status_code: int = 502,
         request_id: str = "",
+        upstream_status: int | None = None,
+        elapsed_seconds: float | None = None,
+        details: dict[str, Any] | None = None,
     ):
         super().__init__(message)
         self.code = code
         self.status_code = status_code
         self.request_id = request_id
+        self.upstream_status = upstream_status
+        self.elapsed_seconds = elapsed_seconds
+        self.details = details or {}
 
 
 class OpenAIChatClient:
-    """Minimal client for OpenAI-compatible Chat Completions endpoints."""
+    """面向兼容 OpenAI 的 Chat Completions 接口的轻量客户端。"""
 
     def __init__(self, session: requests.Session | None = None):
         self.session = session or requests.Session()
@@ -68,17 +75,32 @@ class OpenAIChatClient:
                 timeout=model.timeout_seconds,
             )
         except requests.Timeout as exc:
-            raise OpenAIChatError("聊天模型响应超时", code="chat_timeout", status_code=504) from exc
+            raise OpenAIChatError(
+                "聊天模型响应超时",
+                code="chat_timeout",
+                status_code=504,
+                elapsed_seconds=_elapsed(started),
+                details={"exception_type": exc.__class__.__name__},
+            ) from exc
         except requests.RequestException as exc:
-            raise OpenAIChatError("无法连接聊天模型", code="chat_connection_error") from exc
+            raise OpenAIChatError(
+                "无法连接聊天模型",
+                code="chat_connection_error",
+                elapsed_seconds=_elapsed(started),
+                details={"exception_type": exc.__class__.__name__},
+            ) from exc
         if not response.ok:
-            self._raise_upstream(response)
-        payload = self._json(response)
+            self._raise_upstream(response, elapsed_seconds=_elapsed(started))
+        payload = self._json(response, elapsed_seconds=_elapsed(started))
         try:
             content = payload["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
             raise OpenAIChatError(
-                "聊天服务返回了无法识别的响应", request_id=_request_id(response)
+                "聊天服务返回了无法识别的响应",
+                request_id=_request_id(response, payload),
+                upstream_status=response.status_code,
+                elapsed_seconds=_elapsed(started),
+                details=response_summary(response, payload),
             ) from exc
         if isinstance(content, list):
             content = "".join(
@@ -86,18 +108,24 @@ class OpenAIChatClient:
             )
         content = str(content or "").strip()
         if not content:
-            raise OpenAIChatError("聊天服务返回了空内容", request_id=_request_id(response))
+            raise OpenAIChatError(
+                "聊天服务返回了空内容",
+                request_id=_request_id(response, payload),
+                upstream_status=response.status_code,
+                elapsed_seconds=_elapsed(started),
+                details=response_summary(response, payload),
+            )
         usage = payload.get("usage") or {}
         return ChatCompletion(
             content=content,
             request_id=_request_id(response, payload),
             input_tokens=_optional_int(usage.get("prompt_tokens")),
             output_tokens=_optional_int(usage.get("completion_tokens")),
-            elapsed_seconds=round(time.monotonic() - started, 3),
+            elapsed_seconds=_elapsed(started),
         )
 
     @staticmethod
-    def _raise_upstream(response: requests.Response) -> None:
+    def _raise_upstream(response: requests.Response, *, elapsed_seconds: float) -> None:
         try:
             payload = response.json()
         except ValueError:
@@ -116,18 +144,31 @@ class OpenAIChatClient:
             code=code,
             status_code=response.status_code,
             request_id=_request_id(response, payload),
+            upstream_status=response.status_code,
+            elapsed_seconds=elapsed_seconds,
+            details=response_summary(response, payload),
         )
 
     @staticmethod
-    def _json(response: requests.Response) -> dict[str, Any]:
+    def _json(response: requests.Response, *, elapsed_seconds: float) -> dict[str, Any]:
         try:
             payload = response.json()
         except ValueError as exc:
             raise OpenAIChatError(
-                "聊天服务返回了无效 JSON", request_id=_request_id(response)
+                "聊天服务返回了无效 JSON",
+                request_id=_request_id(response),
+                upstream_status=response.status_code,
+                elapsed_seconds=elapsed_seconds,
+                details=response_summary(response),
             ) from exc
         if not isinstance(payload, dict):
-            raise OpenAIChatError("聊天服务响应格式无效", request_id=_request_id(response))
+            raise OpenAIChatError(
+                "聊天服务响应格式无效",
+                request_id=_request_id(response),
+                upstream_status=response.status_code,
+                elapsed_seconds=elapsed_seconds,
+                details=response_summary(response, payload),
+            )
         return payload
 
 
@@ -147,3 +188,7 @@ def _optional_int(value: Any) -> int | None:
         return int(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _elapsed(started: float) -> float:
+    return round(time.monotonic() - started, 3)
