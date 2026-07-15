@@ -8,7 +8,6 @@ from .common import normalize_image_size
 from .settings import RuntimeSettings
 
 ALLOWED_WORKSPACE_SETTING_KEYS = {
-    "auto_title",
     "chat_model_id",
     "translate_prompt",
     "mode",
@@ -30,7 +29,6 @@ ALLOWED_WORKSPACE_SETTING_KEYS = {
 
 def default_workspace_settings(workspace_kind: str = "image") -> dict[str, Any]:
     return {
-        "auto_title": True,
         "chat_model_id": "",
         "translate_prompt": False,
         "mode": "text2img",
@@ -59,7 +57,6 @@ def sanitize_workspace_settings(raw: Any, runtime: RuntimeSettings | None = None
         if key in raw:
             settings[key] = raw[key]
     settings["prompt"] = str(settings["prompt"])[: runtime.max_prompt_characters]
-    settings["auto_title"] = as_bool(settings["auto_title"])
     settings["chat_model_id"] = str(settings["chat_model_id"])[:64]
     settings["translate_prompt"] = as_bool(settings["translate_prompt"])
     settings["mode"] = str(settings["mode"])

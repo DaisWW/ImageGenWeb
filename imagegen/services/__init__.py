@@ -1,6 +1,5 @@
 from ..errors import ServiceError
 from .auth import AuthService
-from .automatic_titles import AutomaticTitleService
 from .billing import BillingService, SpendingSummary
 from .common import money
 from .conversation import ConversationService
@@ -16,7 +15,6 @@ from .workspace_settings import (
 from .workspaces import WorkspaceService
 
 __all__ = [
-    "AutomaticTitleService",
     "AuthService",
     "BillingService",
     "ConversationService",

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterable
@@ -40,6 +40,8 @@ from .workspace_settings import (
     default_workspace_settings,
     sanitize_workspace_settings,
 )
+
+WORKSPACE_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
 
 
 class WorkspaceService:
@@ -177,9 +179,6 @@ class WorkspaceService:
             name = self._validate_name(str(payload["name"]))
             self._ensure_name_available(workspace.user_id, name, exclude_id=workspace.id)
             workspace.name = name
-            settings = dict(workspace.settings or {})
-            settings["auto_title"] = False
-            workspace.settings = settings
         if "settings" in payload:
             if not isinstance(payload["settings"], dict):
                 raise ServiceError("工作站参数格式无效")
@@ -481,9 +480,10 @@ class WorkspaceService:
     @staticmethod
     def _next_workspace_name(user_id: int) -> str:
         names = set(db.session.scalars(select(Workspace.name).where(Workspace.user_id == user_id)))
-        if "新会话" not in names:
-            return "新会话"
+        base = f"工作站-{utcnow().astimezone(WORKSPACE_TIMEZONE):%Y-%m-%d}"
+        if base not in names:
+            return base
         index = 2
-        while f"新会话 {index}" in names:
+        while f"{base} {index}" in names:
             index += 1
-        return f"新会话 {index}"
+        return f"{base} {index}"

@@ -333,29 +333,6 @@ class HoldingExecutor:
         return Future()
 
 
-class ManualExecutor:
-    def __init__(self):
-        self.tasks = []
-        self.shutdown_calls = []
-
-    def submit(self, function, *args, **kwargs):
-        future = Future()
-        self.tasks.append((future, function, args, kwargs))
-        return future
-
-    def run_next(self):
-        future, function, args, kwargs = self.tasks.pop(0)
-        future.set_result(function(*args, **kwargs))
-        return future
-
-    def shutdown(self, wait=True, *, cancel_futures=False):
-        self.shutdown_calls.append((wait, cancel_futures))
-        if cancel_futures:
-            for future, _function, _args, _kwargs in self.tasks:
-                future.cancel()
-            self.tasks.clear()
-
-
 class ImageGenPlatformTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -396,13 +373,8 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.chat_client = FakeChatClient()
         conversations = self.services.conversations
         conversations.client = self.chat_client
-        automatic_titles = self.services.automatic_titles
-        automatic_titles.client = self.chat_client
-        self.title_executor = ManualExecutor()
-        automatic_titles._executor = self.title_executor
 
     def tearDown(self):
-        self.services.close()
         db.session.remove()
         db.drop_all()
         db.engine.dispose()
@@ -419,12 +391,6 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertEqual(display_amount("1.2500"), "1.25")
         self.assertEqual(display_amount("1.2340"), "1.234")
         self.assertEqual(display_amount("1.2345"), "1.2345")
-
-    def test_application_services_close_shuts_down_automatic_title_executor(self):
-        self.services.close()
-        self.services.close()
-
-        self.assertEqual(self.title_executor.shutdown_calls, [(True, True)])
 
     def submit(self, workspace, **overrides):
         values = {
@@ -747,6 +713,14 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertEqual(response.json["code"], "workspace_name_exists")
         db.session.refresh(second)
         self.assertEqual(second.name, "待重命名工作站")
+
+    def test_blank_workspace_names_use_dated_defaults(self):
+        first = self.create_workspace("")
+        second = self.create_workspace("")
+
+        self.assertRegex(first.name, r"^工作站-\d{4}-\d{2}-\d{2}$")
+        self.assertEqual(second.name, f"{first.name} 2")
+        self.assertNotIn("auto_title", first.settings)
 
     def test_first_studio_visit_creates_two_ready_to_use_starter_workspaces(self):
         client = self.user_client()
@@ -1386,7 +1360,7 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertIn("帧数：8 帧", self.chat_client.calls[-1]["system"])
         self.assertIn("帧率：8 FPS", self.chat_client.calls[-1]["system"])
 
-    def test_prompt_draft_and_automatic_title_use_selected_chat_model(self):
+    def test_conversation_and_prompt_draft_use_selected_chat_model(self):
         config = self.admin_client().get("/api/admin/chat-models").json["config"]
         config["models"].append(
             {
@@ -1415,7 +1389,6 @@ class ImageGenPlatformTests(unittest.TestCase):
             model_id="creative-chat",
             content="电影感人物肖像",
         )
-        self.title_executor.run_next()
         self.assertEqual(self.chat_client.calls[-1]["model_id"], "creative-chat")
         draft = self.services.conversations.create_prompt_draft(
             workspace,
@@ -1437,21 +1410,18 @@ class ImageGenPlatformTests(unittest.TestCase):
                 content="继续调整画面",
             )
 
-    def test_first_chat_message_auto_titles_workspace_and_clear_removes_transcript(
+    def test_first_chat_message_keeps_workspace_name_and_clear_removes_transcript(
         self,
     ):
-        workspace = self.create_workspace("新会话")
+        workspace = self.create_workspace("角色设定")
         self.services.conversations.send(
             workspace,
             model_id="test-chat",
             content="红发蓝眼的中年男性角色设定",
         )
-        self.assertEqual(workspace.name, "新会话")
-        self.assertEqual(len(self.title_executor.tasks), 1)
-        self.title_executor.run_next()
-        self.assertEqual(self.chat_client.calls[-1]["model_id"], "test-chat")
         db.session.refresh(workspace)
-        self.assertEqual(workspace.name, "红发蓝眼中年男性角色")
+        self.assertEqual(workspace.name, "角色设定")
+        self.assertEqual(len(self.chat_client.calls), 1)
         self.services.workspaces.clear(workspace)
         count = db.session.scalar(
             select(func.count(ConversationMessage.id)).where(
@@ -1459,21 +1429,6 @@ class ImageGenPlatformTests(unittest.TestCase):
             )
         )
         self.assertEqual(count, 0)
-
-    def test_manual_workspace_title_wins_over_pending_automatic_title(self):
-        workspace = self.create_workspace("新会话")
-        self.services.conversations.send(
-            workspace,
-            model_id="test-chat",
-            content="制作一个卡通角色侧面奔跑的循环帧动画",
-        )
-
-        self.services.workspaces.update(workspace, {"name": "侧面奔跑循环动画"})
-        self.title_executor.run_next()
-
-        db.session.refresh(workspace)
-        self.assertEqual(workspace.name, "侧面奔跑循环动画")
-        self.assertFalse(workspace.settings["auto_title"])
 
     def test_channel_exposes_configured_models_and_price_without_key(self):
         channel = self.app.extensions["channel_registry"].get("test")

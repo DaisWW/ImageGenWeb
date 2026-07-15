@@ -1142,11 +1142,25 @@
     showWorkspaceDialog(mode) {
       this.dialogMode = mode;
       this.el.workspaceDialogTitle.textContent = mode === "create" ? "新建工作站" : "重命名工作站";
-      this.el.workspaceNameInput.value = mode === "rename" ? this.activeWorkspace?.name || "" : "";
+      this.el.workspaceNameInput.value = mode === "rename"
+        ? this.activeWorkspace?.name || ""
+        : this.nextWorkspaceName();
       this.el.workspaceKindControl.hidden = mode !== "create";
       if (mode === "create") this.setDialogWorkspaceKind("image");
       UI.openDialog(this.el.workspaceDialog);
       this.el.workspaceNameInput.focus();
+      if (mode === "create") this.el.workspaceNameInput.select();
+    }
+
+    nextWorkspaceName() {
+      const now = new Date();
+      const pad = (value) => String(value).padStart(2, "0");
+      const base = `工作站-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+      const names = new Set(this.workspaces.map((workspace) => workspace.name));
+      if (!names.has(base)) return base;
+      let index = 2;
+      while (names.has(`${base} ${index}`)) index += 1;
+      return `${base} ${index}`;
     }
 
     setDialogWorkspaceKind(kind) {
@@ -2454,31 +2468,6 @@
       }
     }
 
-    async loadWorkspaceTitles() {
-      try {
-        const data = await UI.api("/api/workspaces");
-        const remoteById = new Map(data.workspaces.map((workspace) => [workspace.id, workspace]));
-        let changed = false;
-        this.workspaces.forEach((workspace) => {
-          const remote = remoteById.get(workspace.id);
-          if (!remote || remote.name === workspace.name) return;
-          const localUpdatedAt = Date.parse(workspace.updated_at) || 0;
-          const remoteUpdatedAt = Date.parse(remote.updated_at) || 0;
-          if (remoteUpdatedAt < localUpdatedAt) return;
-          workspace.name = remote.name;
-          workspace.updated_at = remote.updated_at;
-          changed = true;
-        });
-        if (!changed) return;
-        if (this.activeWorkspace) {
-          this.el.workspaceTitle.textContent = this.activeWorkspace.name;
-        }
-        this.renderWorkspaceList();
-      } catch {
-        // 其他工作站请求会显示持续性的 API 错误。
-      }
-    }
-
     renderJobs() {
       this.renderMessages();
       this.updateMetrics();
@@ -2864,10 +2853,9 @@
         const hadActiveWorkspace = this.workspaceJobs.size > 0;
         await this.loadWorkspaceJobs();
         const selectedIsActive = this.workspaceJobs.has(this.activeWorkspace?.id);
-        const requests = [this.loadWorkspaceTitles()];
-        requests.push(...[...this.chatOperations]
+        const requests = [...this.chatOperations]
           .filter(([, operation]) => !operation.local)
-          .map(([workspaceId]) => this.loadMessages(workspaceId)));
+          .map(([workspaceId]) => this.loadMessages(workspaceId));
         if (selectedWasActive || selectedIsActive) requests.push(this.loadJobs());
         if (hadActiveWorkspace || this.workspaceJobs.size > 0 || selectedWasActive) {
           requests.push(this.refreshBalance());

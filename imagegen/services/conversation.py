@@ -25,7 +25,6 @@ from ..models import (
     utcnow,
 )
 from ..storage import ImageStorage
-from .automatic_titles import AutomaticTitleService
 from .conversation_context import ConversationContextManager
 from .conversation_prompts import (
     animation_runtime_prompt,
@@ -67,14 +66,12 @@ class ConversationService:
         storage: ImageStorage,
         settings: SystemSettingsService,
         runtime_logs: RuntimeLogService,
-        automatic_titles: AutomaticTitleService,
         client: OpenAIChatClient | None = None,
     ):
         self.chat_models = chat_models
         self.storage = storage
         self.settings = settings
         self.runtime_logs = runtime_logs
-        self.automatic_titles = automatic_titles
         self.client = client or OpenAIChatClient()
         self.context = ConversationContextManager(chat_models)
         self._operation_lock = Lock()
@@ -136,14 +133,6 @@ class ConversationService:
         model = self._model(model_id)
         attachments = self._load_assets(workspace, attachment_ids)
         content = self._validate_message(content, has_attachments=bool(attachments))
-        first_user_message = not db.session.scalar(
-            select(ConversationMessage.id)
-            .where(
-                ConversationMessage.workspace_id == workspace.id,
-                ConversationMessage.role == "user",
-            )
-            .limit(1)
-        )
         pending = self._user_model_message(content, attachments)
         try:
             context = self.context.build(
@@ -196,20 +185,8 @@ class ConversationService:
             details={"attachment_count": len(attachments)},
         )
         self._remember_preferences(workspace, model_id=model.identifier)
-        should_auto_title = first_user_message and bool(
-            (workspace.settings or {}).get("auto_title", True)
-        )
-        expected_title = workspace.name
         workspace.updated_at = utcnow()
         db.session.commit()
-        if should_auto_title:
-            self.automatic_titles.schedule(
-                workspace_id=workspace.id,
-                message_id=user_message.id,
-                expected_title=expected_title,
-                content=content,
-                model_id=model.identifier,
-            )
         return user_message, assistant_message
 
     def create_prompt_draft(

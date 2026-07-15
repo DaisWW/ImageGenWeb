@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import atexit
 import os
 import secrets
 from pathlib import Path
@@ -24,7 +23,6 @@ from .models import User
 from .serializers import display_amount
 from .services import (
     AuthService,
-    AutomaticTitleService,
     BillingService,
     ConversationService,
     GenerationService,
@@ -109,9 +107,7 @@ def create_app(config: dict | None = None) -> Flask:
         )
 
     configuration = RuntimeConfigService(repository, channels, chat_models)
-    automatic_titles = AutomaticTitleService(chat_models, app=app)
     services = ApplicationServices(
-        automatic_titles=automatic_titles,
         auth=auth,
         billing=billing,
         users=users,
@@ -127,7 +123,6 @@ def create_app(config: dict | None = None) -> Flask:
             storage,
             settings,
             runtime_logs,
-            automatic_titles,
         ),
         runtime_logs=runtime_logs,
         settings=settings,
@@ -137,8 +132,6 @@ def create_app(config: dict | None = None) -> Flask:
     app.extensions["chat_model_registry"] = chat_models
     app.extensions["image_storage"] = storage
     app.extensions["imagegen_services"] = services
-    if not app.testing:
-        atexit.register(services.close)
     app.register_blueprint(web)
     _register_handlers(app)
 
