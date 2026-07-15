@@ -2010,6 +2010,80 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertEqual(user.balance_rmb, Decimal("20.0000"))
         self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
 
+    def test_animation_retry_keeps_completed_frames_and_finishes_remaining_frames(self):
+        workspace = self.create_workspace("可恢复动画", kind="animation")
+        master = self.services.workspaces.add_assets(
+            workspace,
+            [("master.png", png_bytes())],
+        )[0]
+        job = self.submit(
+            workspace,
+            mode="img2img",
+            reference_ids=(master.id,),
+            frame_count=3,
+        )
+        worker = GenerationWorker(
+            self.app,
+            self.app.extensions["channel_registry"],
+            self.app.extensions["image_storage"],
+        )
+        worker.providers = FakeProviderFactory(vary=True)
+        channel = self.app.extensions["channel_registry"].get("test")
+
+        self.assertTrue(worker._claim(job.items[0].id, channel))
+        worker._process_item(job.items[0].id)
+        self.assertTrue(worker._claim(job.items[1].id, channel))
+        replacement = GenerationWorker(
+            self.app,
+            self.app.extensions["channel_registry"],
+            self.app.extensions["image_storage"],
+        )
+        replacement._recover_orphaned_items(immediate=True)
+
+        db.session.expire_all()
+        failed_job = db.session.get(GenerationJob, job.id)
+        first_output_path = failed_job.items[0].output_path
+        self.assertEqual(
+            [item.status for item in failed_job.items],
+            ["succeeded", "interrupted", "canceled"],
+        )
+        self.assertEqual(failed_job.status, "partial")
+        client = self.user_client()
+        self.assertTrue(client.get(f"/api/generations/{job.id}").json["job"]["can_retry"])
+
+        response = client.post(f"/api/generations/{job.id}/retry")
+
+        self.assertEqual(response.status_code, 202, response.get_data(as_text=True))
+        retried = response.json["job"]
+        self.assertEqual(retried["status"], "running")
+        self.assertFalse(retried["can_retry"])
+        self.assertEqual(
+            [item["status"] for item in retried["items"]],
+            ["succeeded", "queued", "queued"],
+        )
+        self.assertEqual(retried["reserved_rmb"], "2.5000")
+        self.assertEqual(retried["charged_rmb"], "1.2500")
+        duplicate = client.post(f"/api/generations/{job.id}/retry")
+        self.assertEqual(duplicate.status_code, 409)
+        self.assertEqual(duplicate.json["code"], "generation_not_retryable")
+        db.session.expire_all()
+        saved_job = db.session.get(GenerationJob, job.id)
+        self.assertEqual(saved_job.items[0].output_path, first_output_path)
+        self.assertEqual(db.session.get(User, self.user.id).reserved_rmb, Decimal("2.5000"))
+
+        for item in saved_job.items[1:]:
+            self.assertTrue(worker._claim(item.id, channel))
+            worker._process_item(item.id)
+
+        db.session.expire_all()
+        completed = db.session.get(GenerationJob, job.id)
+        self.assertEqual(completed.status, "succeeded")
+        self.assertEqual(completed.items[0].output_path, first_output_path)
+        self.assertEqual(db.session.get(User, self.user.id).reserved_rmb, Decimal("0.0000"))
+        animation = client.get(f"/media/animations/{job.id}")
+        self.assertEqual(animation.status_code, 200)
+        animation.close()
+
     def test_custom_size_is_accepted_and_normalized(self):
         workspace = self.create_workspace()
 

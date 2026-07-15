@@ -237,6 +237,15 @@ class GenerationJob(TimestampMixin, db.Model):
         back_populates="job", cascade="all, delete-orphan", order_by="GenerationItem.position"
     )
 
+    @property
+    def is_animation_retryable(self) -> bool:
+        return (
+            self.kind == "animation"
+            and self.status in {"failed", "partial"}
+            and self.cancel_requested_at is None
+            and any(item.status in {"failed", "interrupted"} for item in self.items)
+        )
+
 
 class GenerationReference(db.Model):
     __tablename__ = "generation_references"

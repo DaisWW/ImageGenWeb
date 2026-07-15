@@ -197,6 +197,7 @@ def job_dict(
         "failed_count": failed,
         "canceled_count": canceled,
         "can_cancel": job.status in {"queued", "running", "canceling"},
+        "can_retry": job.is_animation_retryable,
         "references": [asset_dict(reference.asset) for reference in job.references],
         "items": item_results,
         "animation_url": url_for("web.animation_file", job_id=job.id)

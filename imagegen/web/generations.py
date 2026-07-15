@@ -30,6 +30,17 @@ def _queue_positions_for(generation_service, jobs) -> dict[str, int]:
     )
 
 
+def _job_payload(generation_service, job):
+    positions = _queue_positions_for(generation_service, (job,))
+    return job_dict(
+        job,
+        channels(),
+        queue_position=positions.get(job.id),
+        queue_total=len(positions),
+        generation_concurrency=current_user.generation_concurrency,
+    )
+
+
 @web.post("/api/generations")
 @login_required
 def submit_generation():
@@ -69,16 +80,7 @@ def submit_generation():
             master_only=json_bool(data.get("master_only", False)),
         ),
     )
-    positions = generation_service.queue_positions()
-    return jsonify(
-        job=job_dict(
-            job,
-            channels(),
-            queue_position=positions.get(job.id),
-            queue_total=len(positions),
-            generation_concurrency=current_user.generation_concurrency,
-        )
-    ), 202
+    return jsonify(job=_job_payload(generation_service, job)), 202
 
 
 @web.get("/api/generations")
@@ -134,16 +136,7 @@ def list_active_generations():
 def get_generation(job_id: str):
     generation_service = services().generations
     job = generation_service.get_job(job_id, user_id=current_user.id)
-    positions = _queue_positions_for(generation_service, (job,))
-    return jsonify(
-        job=job_dict(
-            job,
-            channels(),
-            queue_position=positions.get(job.id),
-            queue_total=len(positions),
-            generation_concurrency=current_user.generation_concurrency,
-        )
-    )
+    return jsonify(job=_job_payload(generation_service, job))
 
 
 @web.post("/api/generations/<job_id>/cancel")
@@ -151,16 +144,19 @@ def get_generation(job_id: str):
 def cancel_generation(job_id: str):
     generation_service = services().generations
     job = generation_service.cancel(job_id, user_id=current_user.id)
-    positions = _queue_positions_for(generation_service, (job,))
-    return jsonify(
-        job=job_dict(
-            job,
-            channels(),
-            queue_position=positions.get(job.id),
-            queue_total=len(positions),
-            generation_concurrency=current_user.generation_concurrency,
-        )
-    )
+    return jsonify(job=_job_payload(generation_service, job))
+
+
+@web.post("/api/generations/<job_id>/retry")
+@login_required
+def retry_animation_generation(job_id: str):
+    application_services = services()
+    generation_service = application_services.generations
+    existing = generation_service.get_job(job_id, user_id=current_user.id)
+    workspace = owned_workspace(existing.workspace_id)
+    application_services.conversations.ensure_idle(workspace.id)
+    job = generation_service.retry_animation(job_id, user_id=current_user.id)
+    return jsonify(job=_job_payload(generation_service, job)), 202
 
 
 @web.get("/media/assets/<asset_id>")
