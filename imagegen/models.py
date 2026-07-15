@@ -79,6 +79,7 @@ class Workspace(TimestampMixin, db.Model):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(db.String(80))
     kind: Mapped[str] = mapped_column(db.String(20), default="image")
+    position: Mapped[int] = mapped_column(default=0)
     settings: Mapped[dict] = mapped_column(MutableDict.as_mutable(JSON_TYPE), default=dict)
 
     user: Mapped[User] = relationship(back_populates="workspaces")
@@ -215,7 +216,7 @@ class GenerationJob(TimestampMixin, db.Model):
     output_format: Mapped[str] = mapped_column(db.String(20))
     compression: Mapped[int]
     transparent_background: Mapped[bool] = mapped_column(default=False)
-    animation_fps: Mapped[int] = mapped_column(default=6)
+    animation_fps: Mapped[int] = mapped_column(default=8)
     animation_loop: Mapped[bool] = mapped_column(default=True)
     animation_format: Mapped[str] = mapped_column(db.String(20), default="webp")
     requested_count: Mapped[int]
@@ -328,6 +329,41 @@ class AuditLog(db.Model):
     action: Mapped[str] = mapped_column(db.String(80), index=True)
     target_type: Mapped[str] = mapped_column(db.String(50))
     target_id: Mapped[str] = mapped_column(db.String(100))
+    details: Mapped[dict] = mapped_column(MutableDict.as_mutable(JSON_TYPE), default=dict)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow, nullable=False)
+
+
+class RuntimeLog(db.Model):
+    """结构化运行事件，与管理员操作审计分开保存。"""
+
+    __tablename__ = "runtime_logs"
+    __table_args__ = (
+        Index("ix_runtime_logs_created", "created_at"),
+        Index("ix_runtime_logs_category_status_created", "category", "status", "created_at"),
+        Index("ix_runtime_logs_user_created", "user_id", "created_at"),
+        Index("ix_runtime_logs_error_code", "error_code"),
+    )
+
+    id: Mapped[str] = mapped_column(db.String(32), primary_key=True, default=new_public_id)
+    level: Mapped[str] = mapped_column(db.String(12), default="info", index=True)
+    category: Mapped[str] = mapped_column(db.String(30), index=True)
+    event: Mapped[str] = mapped_column(db.String(80), index=True)
+    status: Mapped[str] = mapped_column(db.String(20), index=True)
+    source: Mapped[str] = mapped_column(db.String(30), default="web")
+    message: Mapped[str] = mapped_column(db.String(1000), default="")
+    user_id: Mapped[int | None] = mapped_column(index=True)
+    user_label: Mapped[str] = mapped_column(db.String(120), default="")
+    workspace_id: Mapped[str] = mapped_column(db.String(32), default="")
+    workspace_label: Mapped[str] = mapped_column(db.String(100), default="")
+    job_id: Mapped[str] = mapped_column(db.String(32), default="")
+    item_id: Mapped[str] = mapped_column(db.String(32), default="")
+    provider_id: Mapped[str] = mapped_column(db.String(64), default="")
+    provider_label: Mapped[str] = mapped_column(db.String(100), default="")
+    model: Mapped[str] = mapped_column(db.String(150), default="")
+    error_code: Mapped[str] = mapped_column(db.String(80), default="")
+    http_status: Mapped[int | None]
+    upstream_request_id: Mapped[str] = mapped_column(db.String(255), default="")
+    elapsed_seconds: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
     details: Mapped[dict] = mapped_column(MutableDict.as_mutable(JSON_TYPE), default=dict)
     created_at: Mapped[datetime] = mapped_column(default=utcnow, nullable=False)
 
