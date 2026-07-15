@@ -92,6 +92,59 @@ def conversation_message_dict(message: ConversationMessage) -> dict[str, Any]:
     }
 
 
+def job_status_dict(
+    job: GenerationJob,
+    channels: ChannelRegistry,
+    *,
+    queue_position: int | None = None,
+    queue_total: int = 0,
+    generation_concurrency: int | None = None,
+) -> dict[str, Any]:
+    return _job_status_dict(
+        job,
+        channels,
+        now=utcnow(),
+        queue_position=queue_position,
+        queue_total=queue_total,
+        generation_concurrency=generation_concurrency,
+    )
+
+
+def _job_status_dict(
+    job: GenerationJob,
+    channels: ChannelRegistry,
+    *,
+    now: datetime,
+    queue_position: int | None = None,
+    queue_total: int = 0,
+    generation_concurrency: int | None = None,
+) -> dict[str, Any]:
+    item_progress = [_item_progress(item, now) for item in job.items]
+    progress = round(sum(item_progress) / len(item_progress)) if item_progress else 0
+    if job.status == "queued":
+        progress = 0
+    elif job.status in {"succeeded", "failed", "partial", "canceled"}:
+        progress = 100
+    estimated_end = _job_estimated_end(
+        job,
+        channels,
+        now,
+        generation_concurrency=generation_concurrency,
+    )
+    return {
+        "id": job.id,
+        "workspace_id": job.workspace_id,
+        "status": job.status,
+        "progress_percent": progress,
+        "queue_position": queue_position if job.status == "queued" else None,
+        "queue_total": queue_total if job.status == "queued" else 0,
+        "estimated_end_at": _iso(estimated_end),
+        "is_over_estimate": bool(
+            estimated_end and now > estimated_end and job.status in {"running", "canceling"}
+        ),
+    }
+
+
 def job_dict(
     job: GenerationJob,
     channels: ChannelRegistry,
@@ -99,22 +152,23 @@ def job_dict(
     queue_position: int | None = None,
     queue_total: int = 0,
     admin: bool = False,
+    generation_concurrency: int | None = None,
 ) -> dict[str, Any]:
     now = utcnow()
     item_results = [item_dict(item, now=now, admin=admin) for item in job.items]
-    item_progress = [item["progress_percent"] for item in item_results]
-    progress = round(sum(item_progress) / len(item_progress)) if item_progress else 0
-    if job.status == "queued":
-        progress = 0
-    elif job.status in {"succeeded", "failed", "partial", "canceled"}:
-        progress = 100
-    estimated_end = _job_estimated_end(job, channels, now)
+    status = _job_status_dict(
+        job,
+        channels,
+        now=now,
+        queue_position=queue_position,
+        queue_total=queue_total,
+        generation_concurrency=generation_concurrency,
+    )
     succeeded = sum(item.status == "succeeded" for item in job.items)
     failed = sum(item.status in {"failed", "interrupted"} for item in job.items)
     canceled = sum(item.status == "canceled" for item in job.items)
     result = {
-        "id": job.id,
-        "workspace_id": job.workspace_id,
+        **status,
         "kind": job.kind,
         "channel_id": job.channel_id,
         "channel": job.channel_label,
@@ -136,14 +190,6 @@ def job_dict(
         "price_per_image_rmb": _amount(job.price_per_image_rmb),
         "charged_rmb": _amount(job.charged_rmb),
         "reserved_rmb": _amount(job.reserved_rmb),
-        "status": job.status,
-        "progress_percent": progress,
-        "queue_position": queue_position if job.status == "queued" else None,
-        "queue_total": queue_total if job.status == "queued" else 0,
-        "estimated_end_at": _iso(estimated_end),
-        "is_over_estimate": bool(
-            estimated_end and now > estimated_end and job.status in {"running", "canceling"}
-        ),
         "created_at": _iso(job.created_at),
         "started_at": _iso(job.started_at),
         "completed_at": _iso(job.completed_at),
@@ -229,7 +275,11 @@ def _item_progress(item: GenerationItem, now: datetime) -> int:
 
 
 def _job_estimated_end(
-    job: GenerationJob, channels: ChannelRegistry, now: datetime
+    job: GenerationJob,
+    channels: ChannelRegistry,
+    now: datetime,
+    *,
+    generation_concurrency: int | None = None,
 ) -> datetime | None:
     if job.status not in {"running", "canceling"} or not job.started_at:
         return None
@@ -244,10 +294,15 @@ def _job_estimated_end(
     queued = sum(item.status == "queued" for item in job.items)
     try:
         channel = channels.get(job.channel_id, require_available=False)
+        concurrency = (
+            generation_concurrency
+            if generation_concurrency is not None
+            else job.user.generation_concurrency
+        )
         slots = (
             1
             if job.kind == "animation"
-            else max(1, min(channel.limits.max_concurrency, job.user.generation_concurrency))
+            else max(1, min(channel.limits.max_concurrency, concurrency))
         )
     except ValueError:
         slots = 1

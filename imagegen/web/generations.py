@@ -7,7 +7,7 @@ from sqlalchemy import select
 from ..errors import ServiceError
 from ..extensions import db
 from ..models import Asset, Workspace
-from ..serializers import job_dict, workspace_dict
+from ..serializers import job_dict, job_status_dict, workspace_dict
 from ..services import SubmitGeneration
 from ..storage import StorageError
 from . import web
@@ -36,8 +36,8 @@ def submit_generation():
     try:
         compression = int(data.get("compression", 90))
         batch_count = int(data.get("batch_count", 1))
-        frame_count = int(data.get("animation_frame_count", data.get("frame_count", 6)))
-        animation_fps = int(data.get("animation_fps", 6))
+        frame_count = int(data.get("animation_frame_count", data.get("frame_count", 8)))
+        animation_fps = int(data.get("animation_fps", 8))
     except (TypeError, ValueError) as exc:
         raise ServiceError("生成数量、帧率或压缩质量无效") from exc
     generation_service = services().generations
@@ -50,7 +50,7 @@ def submit_generation():
             mode=str(data.get("mode", "text2img")),
             prompt=str(data.get("prompt", "")),
             size=str(data.get("size", "1024x1024")),
-            quality=str(data.get("quality", "medium")),
+            quality=str(data.get("quality", "auto")),
             output_format=str(data.get("output_format", "png")),
             compression=compression,
             batch_count=batch_count,
@@ -60,6 +60,7 @@ def submit_generation():
             animation_fps=animation_fps,
             animation_loop=json_bool(data.get("animation_loop", True)),
             animation_format=str(data.get("animation_format", "webp")).lower(),
+            master_only=json_bool(data.get("master_only", False)),
         ),
     )
     positions = generation_service.queue_positions()
@@ -69,6 +70,7 @@ def submit_generation():
             channels(),
             queue_position=positions.get(job.id),
             queue_total=len(positions),
+            generation_concurrency=current_user.generation_concurrency,
         )
     ), 202
 
@@ -93,10 +95,31 @@ def list_generations():
                 channels(),
                 queue_position=positions.get(job.id),
                 queue_total=len(positions),
+                generation_concurrency=current_user.generation_concurrency,
             )
             for job in jobs
         ],
         queue_total=len(positions),
+    )
+
+
+@web.get("/api/generations/active")
+@login_required
+def list_active_generations():
+    generation_service = services().generations
+    jobs = generation_service.list_active_jobs(current_user.id)
+    positions = generation_service.queue_positions()
+    return jsonify(
+        jobs=[
+            job_status_dict(
+                job,
+                channels(),
+                queue_position=positions.get(job.id),
+                queue_total=len(positions),
+                generation_concurrency=current_user.generation_concurrency,
+            )
+            for job in jobs
+        ]
     )
 
 
@@ -112,6 +135,7 @@ def get_generation(job_id: str):
             channels(),
             queue_position=positions.get(job.id),
             queue_total=len(positions),
+            generation_concurrency=current_user.generation_concurrency,
         )
     )
 
@@ -128,6 +152,7 @@ def cancel_generation(job_id: str):
             channels(),
             queue_position=positions.get(job.id),
             queue_total=len(positions),
+            generation_concurrency=current_user.generation_concurrency,
         )
     )
 
@@ -218,11 +243,24 @@ def reuse_generation_item(item_id: str):
         raise ServiceError("生成结果不存在", status_code=404)
     workspace = owned_workspace(item.job.workspace_id)
     extension = image_extension(item.output_mime_type)
+    asset_name = f"result_{item.id}.{extension}"
+    existing = db.session.scalar(
+        select(Asset)
+        .where(
+            Asset.workspace_id == workspace.id,
+            Asset.original_name == asset_name,
+            Asset.deleted_at.is_(None),
+        )
+        .order_by(Asset.created_at)
+        .limit(1)
+    )
+    if existing is not None:
+        return jsonify(asset=workspace_dict(workspace, [existing])["assets"][0])
     assets = services().workspaces.add_assets(
         workspace,
         [
             (
-                f"result_{item.id}.{extension}",
+                asset_name,
                 storage().read_bytes(item.output_path),
             )
         ],

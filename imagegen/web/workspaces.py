@@ -23,7 +23,7 @@ def list_workspaces():
     workspaces = workspace_service.list(current_user.id)
     return jsonify(
         workspaces=[workspace_payload(workspace) for workspace in workspaces],
-        max_count=workspace_service.MAX_WORKSPACES,
+        max_count=workspace_service.max_workspaces,
     )
 
 
@@ -37,6 +37,19 @@ def create_workspace():
         str(data.get("kind", "image")),
     )
     return jsonify(workspace=workspace_dict(workspace)), 201
+
+
+@web.put("/api/workspaces/order")
+@login_required
+def reorder_workspaces():
+    workspace_ids = json_body().get("workspace_ids", [])
+    if not isinstance(workspace_ids, list):
+        raise ServiceError("工作站排序数据无效")
+    services().workspaces.reorder(
+        current_user.id,
+        [str(workspace_id) for workspace_id in workspace_ids],
+    )
+    return jsonify(ok=True)
 
 
 @web.post("/api/workspaces/<workspace_id>/clear")
@@ -68,16 +81,24 @@ def delete_workspace(workspace_id: str):
 @login_required
 def upload_assets(workspace_id: str):
     workspace = owned_workspace(workspace_id)
+    runtime = services().settings.runtime()
     uploads: list[tuple[str, bytes]] = []
     total = 0
-    for uploaded in request.files.getlist("references"):
-        content = uploaded.read(10 * 1024 * 1024 + 1)
-        if len(content) > 10 * 1024 * 1024:
-            raise ServiceError("单张垫图不能超过 10 MiB", status_code=413)
+    files = request.files.getlist("references")
+    if len(files) > runtime.max_assets_per_workspace:
+        raise ServiceError(
+            f"单次最多上传 {runtime.max_assets_per_workspace} 张参考图", status_code=413
+        )
+    for uploaded in files:
+        content = uploaded.read(runtime.max_attachment_bytes + 1)
+        if len(content) > runtime.max_attachment_bytes:
+            raise ServiceError(f"单张垫图不能超过 {runtime.max_attachment_mb} MiB", status_code=413)
         total += len(content)
         uploads.append((uploaded.filename or "reference", content))
-    if total > 40 * 1024 * 1024:
-        raise ServiceError("垫图合计不能超过 40 MiB", status_code=413)
+    if total > runtime.max_attachment_total_bytes:
+        raise ServiceError(
+            f"垫图合计不能超过 {runtime.max_attachment_total_mb} MiB", status_code=413
+        )
     assets = services().workspaces.add_assets(workspace, uploads)
     return jsonify(
         assets=[workspace_dict(workspace, [asset])["assets"][0] for asset in assets]

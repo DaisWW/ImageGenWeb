@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from flask import jsonify
+from flask import jsonify, request
 from flask_login import current_user
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from ..errors import ServiceError
 from ..extensions import db
-from ..models import GenerationItem, User
+from ..models import User, Workspace
 from ..serializers import job_dict, user_dict
 from ..services import SpendingSummary
+from ..services.runtime_logs import audit_log_dict, runtime_log_dict
 from ..version import __version__
 from . import web
 from .shared import admin_required, channels, json_body, query_limit, services
@@ -35,7 +36,12 @@ def admin_users():
 def admin_create_user():
     data = json_body()
     try:
-        concurrency = int(data.get("generation_concurrency", 2))
+        concurrency = int(
+            data.get(
+                "generation_concurrency",
+                services().settings.runtime().default_user_concurrency,
+            )
+        )
     except (TypeError, ValueError) as exc:
         raise ServiceError("用户并发必须是整数") from exc
     user = services().users.create(
@@ -47,6 +53,23 @@ def admin_create_user():
         actor_user_id=current_user.id,
     )
     return jsonify(user=user_dict(user)), 201
+
+
+@web.put("/api/admin/users/<int:user_id>")
+@admin_required
+def admin_update_user(user_id: int):
+    data = json_body()
+    try:
+        concurrency = int(data.get("generation_concurrency", 0))
+    except (TypeError, ValueError) as exc:
+        raise ServiceError("用户并发必须是整数") from exc
+    user = services().users.update_profile(
+        user_id,
+        display_name=str(data.get("display_name", "")),
+        generation_concurrency=concurrency,
+        actor_user_id=current_user.id,
+    )
+    return jsonify(user=user_dict(user))
 
 
 @web.post("/api/admin/users/<int:user_id>/balance")
@@ -87,8 +110,19 @@ def admin_reset_password(user_id: int):
 @admin_required
 def admin_generations():
     generation_service = services().generations
-    jobs = generation_service.list_jobs(admin=True, limit=query_limit())
+    user_id = _positive_query_int("user_id", "用户筛选无效")
+    workspace_id = request.args.get("workspace_id", "").strip() or None
+    jobs = generation_service.list_jobs(
+        admin=True,
+        user_id=user_id,
+        workspace_id=workspace_id,
+        limit=query_limit(),
+    )
     positions = generation_service.queue_positions()
+    running_images, queued_images = generation_service.queue_item_counts(
+        user_id=user_id,
+        workspace_id=workspace_id,
+    )
     return jsonify(
         jobs=[
             job_dict(
@@ -101,16 +135,26 @@ def admin_generations():
             for job in jobs
         ],
         queue_total=len(positions),
-        running_images=db.session.scalar(
-            select(func.count(GenerationItem.id)).where(
-                GenerationItem.status.in_(["running", "canceling"])
-            )
-        )
-        or 0,
-        queued_images=db.session.scalar(
-            select(func.count(GenerationItem.id)).where(GenerationItem.status == "queued")
-        )
-        or 0,
+        running_images=running_images,
+        queued_images=queued_images,
+    )
+
+
+@web.get("/api/admin/generation-filters")
+@admin_required
+def admin_generation_filters():
+    users = list(db.session.scalars(select(User).order_by(User.created_at.desc())))
+    workspaces = list(db.session.scalars(select(Workspace).order_by(Workspace.updated_at.desc())))
+    return jsonify(
+        users=[user_dict(user, include_private=False) for user in users],
+        workspaces=[
+            {
+                "id": workspace.id,
+                "name": workspace.name,
+                "user_id": workspace.user_id,
+            }
+            for workspace in workspaces
+        ],
     )
 
 
@@ -119,6 +163,96 @@ def admin_generations():
 def admin_cancel_generation(job_id: str):
     job = services().generations.cancel(job_id, admin=True)
     return jsonify(job=job_dict(job, channels(), admin=True))
+
+
+@web.get("/api/admin/runtime-logs")
+@admin_required
+def admin_runtime_logs():
+    offset = _log_offset()
+    entries, total = services().runtime_logs.list_runtime(
+        limit=query_limit(),
+        offset=offset,
+        category=request.args.get("category", "").strip(),
+        status=request.args.get("status", "").strip(),
+        user_id=_positive_query_int("user_id", "日志用户筛选无效"),
+        model=request.args.get("model", "").strip(),
+        error_code=request.args.get("error_code", "").strip(),
+        search=request.args.get("search", "").strip(),
+        since_hours=_log_since_hours(168),
+    )
+    return jsonify(
+        logs=[runtime_log_dict(entry) for entry in entries],
+        total=total,
+        offset=offset,
+    )
+
+
+@web.get("/api/admin/runtime-logs/<log_id>")
+@admin_required
+def admin_runtime_log(log_id: str):
+    entry = services().runtime_logs.get_runtime(log_id)
+    if entry is None:
+        raise ServiceError("运行日志不存在", status_code=404)
+    return jsonify(log=runtime_log_dict(entry, include_details=True))
+
+
+@web.get("/api/admin/audit-logs")
+@admin_required
+def admin_audit_logs():
+    offset = _log_offset()
+    rows, total = services().runtime_logs.list_audit(
+        limit=query_limit(),
+        offset=offset,
+        actor_user_id=_positive_query_int("actor_user_id", "日志用户筛选无效"),
+        action=request.args.get("action", "").strip(),
+        search=request.args.get("search", "").strip(),
+        since_hours=_log_since_hours(720),
+    )
+    return jsonify(
+        logs=[audit_log_dict(entry, actor) for entry, actor in rows],
+        total=total,
+        offset=offset,
+    )
+
+
+@web.get("/api/admin/audit-logs/<int:log_id>")
+@admin_required
+def admin_audit_log(log_id: int):
+    row = services().runtime_logs.get_audit(log_id)
+    if row is None:
+        raise ServiceError("审计日志不存在", status_code=404)
+    entry, actor = row
+    return jsonify(log=audit_log_dict(entry, actor, include_details=True))
+
+
+def _positive_query_int(name: str, error_message: str) -> int | None:
+    raw = request.args.get(name, "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ServiceError(error_message) from exc
+    if value < 1:
+        raise ServiceError(error_message)
+    return value
+
+
+def _log_offset() -> int:
+    try:
+        return min(100000, max(0, int(request.args.get("offset", "0"))))
+    except ValueError:
+        return 0
+
+
+def _log_since_hours(default: int) -> int | None:
+    raw = request.args.get("since_hours", str(default)).strip().lower()
+    if raw in {"", "all"}:
+        return None
+    try:
+        return min(8760, max(1, int(raw)))
+    except ValueError as exc:
+        raise ServiceError("日志时间范围无效") from exc
 
 
 @web.get("/api/admin/channels")
@@ -150,16 +284,11 @@ def admin_update_chat_models():
 @web.get("/api/admin/settings")
 @admin_required
 def admin_settings():
-    return jsonify(
-        site_title=services().settings.site_title(),
-        version=__version__,
-    )
+    return jsonify(**services().settings.editable_config(), version=__version__)
 
 
 @web.put("/api/admin/settings")
 @admin_required
 def admin_update_settings():
-    title = services().settings.set_site_title(
-        str(json_body().get("site_title", "")), current_user.id
-    )
-    return jsonify(site_title=title, version=__version__)
+    config = services().settings.save(json_body(), current_user.id)
+    return jsonify(**config, version=__version__)

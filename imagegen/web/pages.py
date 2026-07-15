@@ -25,6 +25,11 @@ from .shared import (
 )
 
 
+def _public_chat_models() -> list[dict]:
+    registry = chat_model_registry()
+    return [model.public_dict() for model in registry.list()]
+
+
 @web.get("/health")
 def health():
     try:
@@ -85,6 +90,7 @@ def change_password():
 @login_required
 def studio():
     workspace_service = services().workspaces
+    runtime = services().settings.runtime()
     workspaces = workspace_service.list(current_user.id)
     if not workspaces:
         workspaces = workspace_service.ensure_starter_workspaces(current_user.id)
@@ -92,11 +98,24 @@ def studio():
         "pages/studio.html",
         user=user_dict(current_user),
         workspaces=[workspace_payload(workspace) for workspace in workspaces],
-        max_workspaces=workspace_service.MAX_WORKSPACES,
+        max_workspaces=runtime.max_workspaces_per_user,
+        runtime_settings=runtime.client_dict(),
+        history_retention_days=channel_registry().queue.history_retention_days,
         channels=[
             channel.public_dict() for channel in channel_registry().list(include_disabled=False)
         ],
-        chat_models=[model.public_dict() for model in chat_model_registry().list()],
+        chat_models=_public_chat_models(),
+    )
+
+
+@web.get("/api/runtime-settings")
+@login_required
+def runtime_settings():
+    config = services().settings.editable_config()
+    return jsonify(
+        revision=config["revision"],
+        settings=services().settings.runtime().client_dict(),
+        history_retention_days=channel_registry().queue.history_retention_days,
     )
 
 
@@ -109,19 +128,21 @@ def admin_page():
 @web.get("/api/me")
 @login_required
 def me():
-    entries = list(
-        db.session.scalars(
-            select(WalletLedger)
-            .where(WalletLedger.user_id == current_user.id)
-            .order_by(WalletLedger.created_at.desc())
-            .limit(50)
+    payload = {
+        "user": user_dict(current_user),
+        "spending": services().billing.spending_summary(current_user.id).public_dict(),
+    }
+    if request.args.get("ledger") != "0":
+        entries = list(
+            db.session.scalars(
+                select(WalletLedger)
+                .where(WalletLedger.user_id == current_user.id)
+                .order_by(WalletLedger.created_at.desc())
+                .limit(50)
+            )
         )
-    )
-    return jsonify(
-        user=user_dict(current_user),
-        spending=services().billing.spending_summary(current_user.id).public_dict(),
-        ledger=[ledger_dict(entry) for entry in entries],
-    )
+        payload["ledger"] = [ledger_dict(entry) for entry in entries]
+    return jsonify(payload)
 
 
 @web.get("/api/channels")
@@ -140,5 +161,5 @@ def chat_models():
     registry = chat_model_registry()
     return jsonify(
         version=registry.version[:12],
-        models=[model.public_dict() for model in registry.list()],
+        models=_public_chat_models(),
     )
