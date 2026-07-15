@@ -191,6 +191,8 @@
         translatePrompt: byId("translatePrompt"),
         contextStatus: byId("contextStatus"),
         draftPromptButton: byId("draftPromptButton"),
+        directGenerationButton: byId("directGenerationButton"),
+        directGenerationButtonLabel: byId("directGenerationButtonLabel"),
         chatReferenceStrip: byId("chatReferenceStrip"),
         chatReferenceList: byId("chatReferenceList"),
         chatReferenceButton: byId("chatReferenceButton"),
@@ -312,6 +314,7 @@
       this.el.chatModelSelect.addEventListener("change", () => this.settingChanged());
       this.el.translatePrompt.addEventListener("change", () => this.settingChanged());
       this.el.draftPromptButton.addEventListener("click", () => this.createPromptDraft());
+      this.el.directGenerationButton.addEventListener("click", () => this.openGenerationComposer());
       this.el.chatReferenceButton.addEventListener("click", () => this.toggleChatReferences());
       this.el.chatReferenceList.addEventListener("click", (event) => this.handleChatReferenceClick(event));
       this.el.messageList.addEventListener("click", (event) => {
@@ -363,7 +366,7 @@
       this.el.promptInput.addEventListener("input", () => {
         window.clearTimeout(this.promptCounterTimer);
         this.promptCounterTimer = window.setTimeout(() => {
-          this.el.promptCounter.textContent = `${this.el.promptInput.value.length} / ${this.limits.max_prompt_characters}`;
+          this.updatePromptCounter();
         }, 120);
         this.settingChanged();
       });
@@ -396,7 +399,8 @@
         : workspace?.settings?.channel_id;
       const channel = this.channels.find((item) => item.id === channelId);
       const limit = channel?.capabilities.max_reference_images || 0;
-      return workspace?.kind === "animation" ? Math.min(1, limit) : limit;
+      if (workspace?.kind === "animation") return channel ? Math.min(1, limit) : 1;
+      return limit;
     }
 
     trimReferenceSelection(selection, limit) {
@@ -858,6 +862,10 @@
       this.updateInteractionState();
     }
 
+    updatePromptCounter() {
+      this.el.promptCounter.textContent = `${this.el.promptInput.value.length} / ${this.limits.max_prompt_characters}`;
+    }
+
     applyWorkspaceSettings() {
       const settings = this.activeWorkspace?.settings || {};
       this.updateWorkspaceKindUI();
@@ -865,7 +873,7 @@
       this.el.translatePrompt.checked = settings.translate_prompt === true;
       this.el.transparentBackground.checked = settings.transparent_background === true;
       this.el.promptInput.value = settings.prompt || "";
-      this.el.promptCounter.textContent = `${this.el.promptInput.value.length} / ${this.limits.max_prompt_characters}`;
+      this.updatePromptCounter();
       this.el.batchCount.value = Math.min(
         this.limits.max_batch_images, Math.max(1, Number(settings.batch_count || 1)),
       );
@@ -884,9 +892,7 @@
         || this.channels[0];
       this.renderChannelOptions(preferred?.id);
       this.applyChannel(settings, false);
-      const mode = this.isAnimationWorkspace()
-        ? (this.currentSelection().size ? "img2img" : "text2img")
-        : (settings.mode || "text2img");
+      const mode = this.isAnimationWorkspace() ? "img2img" : (settings.mode || "text2img");
       this.setMode(mode, false);
       this.el.saveState.textContent = "参数已保存";
     }
@@ -895,35 +901,22 @@
       return this.activeWorkspace?.kind === "animation";
     }
 
-    animationNeedsMaster() {
-      return this.isAnimationWorkspace() && this.currentSelection().size === 0;
-    }
-
     updateWorkspaceKindUI() {
       const animation = this.isAnimationWorkspace();
-      const needsMaster = this.animationNeedsMaster();
       this.el.modeSwitch.hidden = animation;
       this.el.imageCountControl.hidden = animation;
       this.el.animationControls.forEach((control) => {
-        control.hidden = !animation || needsMaster;
+        control.hidden = !animation;
       });
       this.el.generationForm.classList.toggle("animation-workflow", animation);
-      this.el.generationHeadingTitle.textContent = needsMaster
-        ? "生成并确认母图"
-        : animation ? "确认帧动画参数" : "确认生图参数";
-      this.el.generationHeadingSubtitle.textContent = needsMaster
-        ? "先生成 1 张母图，确认后再制作帧动画"
-        : animation ? "帧序列将按顺序生成并合成为动画"
+      this.el.generationHeadingTitle.textContent = animation ? "确认帧动画参数" : "确认生图参数";
+      this.el.generationHeadingSubtitle.textContent = animation
+        ? "必须先添加并选择 1 张母图；帧序列将按顺序生成并合成为动画"
         : "提示词和参数会保存在当前工作站";
-      this.el.frameFormatLabel.textContent = needsMaster
-        ? "母图格式"
-        : animation ? "帧格式" : "格式";
-      this.el.generateButtonLabel.textContent = needsMaster
-        ? "生成母图"
-        : animation ? "开始生成帧" : "开始生成";
-      this.el.promptInput.placeholder = needsMaster
-        ? "输入角色造型、画面与动作基准描述..."
-        : animation ? "输入画面与完整动作描述..." : "输入画面描述...";
+      this.el.frameFormatLabel.textContent = animation ? "帧格式" : "格式";
+      this.el.generateButtonLabel.textContent = animation ? "开始生成帧" : "开始生成";
+      this.el.promptInput.placeholder = animation ? "输入画面与完整动作描述..." : "输入画面描述...";
+      this.el.directGenerationButtonLabel.textContent = animation ? "直接制作帧动画" : "直接生图";
       this.el.referenceAddLabel.textContent = animation ? "添加母图" : "添加垫图";
       this.el.referenceStrip.hidden = !animation && this.el.modeSwitch.dataset.mode !== "img2img";
     }
@@ -1334,14 +1327,31 @@
           if (operationChanged) this.renderWorkspaceList();
           if (this.activeWorkspace?.id === workspaceId) {
             const nextMessages = data.messages || [];
+            const pendingUserMessage = this.pendingUserMessages.get(workspaceId);
+            const pendingAttachmentIds = (pendingUserMessage?.attachments || [])
+              .map((attachment) => attachment.id)
+              .sort()
+              .join(",");
+            const pendingResolved = Boolean(pendingUserMessage && nextMessages.some((message) => (
+              message.role === "user"
+              && !pendingUserMessage.knownMessageIds.has(message.id)
+              && message.content === pendingUserMessage.content
+              && (message.attachments || [])
+                .map((attachment) => attachment.id)
+                .sort()
+                .join(",") === pendingAttachmentIds
+            )));
             const messagesChanged = this.messages.length !== nextMessages.length
               || this.messages[0]?.id !== nextMessages[0]?.id
               || this.messages.at(-1)?.id !== nextMessages.at(-1)?.id;
             const contextChanged = JSON.stringify(this.conversationContext)
               !== JSON.stringify(data.context);
+            if (pendingResolved) this.pendingUserMessages.delete(workspaceId);
             if (messagesChanged) this.messages = nextMessages;
             if (contextChanged) this.conversationContext = data.context;
-            if (messagesChanged || contextChanged || operationChanged) this.renderMessages();
+            if (messagesChanged || contextChanged || operationChanged || pendingResolved) {
+              this.renderMessages();
+            }
           }
         } catch (error) {
           UI.toast(error.message, "error");
@@ -1400,6 +1410,7 @@
             kind: "pending",
             content: operation.label,
             created_at: operation.started_at || null,
+            provider_label: this.el.chatModelSelect.selectedOptions[0]?.textContent || "",
           },
         });
       }
@@ -1605,7 +1616,9 @@
       action.type = "button";
       action.className = "button primary small";
       action.dataset.usePromptDraft = message.id;
-      action.innerHTML = '<i data-lucide="image-plus"></i>使用此提示词生图';
+      action.innerHTML = this.isAnimationWorkspace()
+        ? '<i data-lucide="film"></i>使用此提示词制作帧动画'
+        : '<i data-lucide="image-plus"></i>使用此提示词生图';
       wrap.append(summaryLabel, summary, promptLabel, prompt, action);
       return wrap;
     }
@@ -1631,19 +1644,8 @@
       const modelId = this.el.chatModelSelect.value;
       const draft = this.el.chatInput.value;
       const content = draft.trim();
-      await this.loadRuntimeSettings(false);
-      if (this.activeWorkspace?.id !== workspaceId) return;
       const selection = this.currentChatSelection();
-      const omitted = this.trimReferenceSelection(
-        selection,
-        this.referenceSelectionLimit("chat", workspace),
-      );
-      if (omitted) {
-        this.renderChatReferences();
-        UI.toast(`附件上限已更新，已取消 ${omitted} 张超限图片`, "info");
-      }
-      const attachmentIds = [...selection];
-      if (!content && !attachmentIds.length) {
+      if (!content && !selection.size) {
         UI.toast("请输入消息或添加参考图", "error");
         this.el.chatInput.focus();
         return;
@@ -1652,9 +1654,26 @@
         UI.toast("管理员尚未配置可用的对话模型", "error");
         return;
       }
-      this.startLocalChatOperation(workspaceId, "reply", "正在等待 AI 回复");
+      this.startLocalChatOperation(workspaceId, "reply", "正在等待 AI 回复", modelId);
       let failure = null;
+      let attachmentIds = [];
       try {
+        await this.loadRuntimeSettings(false);
+        if (this.activeWorkspace?.id !== workspaceId) return;
+        const omitted = this.trimReferenceSelection(
+          selection,
+          this.referenceSelectionLimit("chat", workspace),
+        );
+        if (omitted) {
+          this.renderChatReferences();
+          UI.toast(`附件上限已更新，已取消 ${omitted} 张超限图片`, "info");
+        }
+        attachmentIds = [...selection];
+        if (!content && !attachmentIds.length) {
+          UI.toast("请输入消息或添加参考图", "error");
+          this.el.chatInput.focus();
+          return;
+        }
         await this.flushSettings();
         if (this.activeWorkspace?.id !== workspaceId) return;
         const selectedIds = new Set(attachmentIds);
@@ -1664,6 +1683,7 @@
           content,
           attachments: workspace.assets.filter((asset) => selectedIds.has(asset.id)),
           created_at: new Date().toISOString(),
+          knownMessageIds: new Set(this.messages.map((message) => message.id)),
         });
         this.el.chatInput.value = "";
         this.chatDrafts.set(workspaceId, "");
@@ -1681,7 +1701,9 @@
         });
         this.pendingUserMessages.delete(workspaceId);
         if (this.activeWorkspace?.id === workspaceId) {
-          this.messages.push(...data.messages);
+          this.messages = [...new Map(
+            [...this.messages, ...data.messages].map((message) => [message.id, message]),
+          ).values()];
           this.conversationContext = data.context;
         }
         if (data.workspace) {
@@ -1751,7 +1773,9 @@
       const workspaceId = workspace.id;
       const modelId = this.el.chatModelSelect.value;
       const translateToEnglish = this.el.translatePrompt.checked;
-      const generationMode = this.el.modeSwitch.dataset.mode || "text2img";
+      const generationMode = this.isAnimationWorkspace()
+        ? "img2img"
+        : (this.el.modeSwitch.dataset.mode || "text2img");
       const generationReferences = generationMode === "img2img"
         ? [...this.currentSelection(workspaceId)]
         : [];
@@ -1797,27 +1821,51 @@
       }
     }
 
+    openGenerationComposer() {
+      if (this.workspaceLoading || !this.activeWorkspace
+        || this.workspaceChatBusy() || this.workspaceHasActiveJob()
+        || this.referenceUploadPending) return;
+      const draft = this.el.chatInput.value.trim();
+      const prompt = draft.slice(0, this.limits.max_prompt_characters);
+      const requested = [...this.currentChatSelection()];
+      if (prompt.length < draft.length) UI.toast("描述过长，已按提示词长度上限截取", "info");
+      this.showGenerationComposer(prompt, requested.length ? requested : null);
+    }
+
+    showGenerationComposer(prompt, referenceIds = null) {
+      if (prompt) {
+        this.el.promptInput.value = prompt;
+        this.updatePromptCounter();
+      }
+      let omitted = 0;
+      if (referenceIds !== null) {
+        const requested = [...new Set(referenceIds)];
+        const activeIds = new Set(this.activeWorkspace.assets.map((asset) => asset.id));
+        const references = this.currentSelection();
+        references.clear();
+        requested.filter((id) => activeIds.has(id)).forEach((id) => references.add(id));
+        this.trimReferenceSelection(references, this.generationReferenceLimit());
+        this.setMode(this.isAnimationWorkspace() || references.size ? "img2img" : "text2img", false);
+        this.renderReferences();
+        omitted = requested.length - references.size;
+      } else if (this.isAnimationWorkspace()) {
+        this.setMode("img2img", false);
+      }
+      this.setComposerMode("generation");
+      if (prompt || referenceIds !== null) this.settingChanged();
+      this.el.promptInput.focus();
+      return omitted;
+    }
+
     applyPromptDraft(messageId) {
       const message = this.messages.find((item) => item.id === messageId);
       const prompt = message?.payload?.prompt;
       if (!prompt) return;
-      this.el.promptInput.value = prompt;
-      this.el.promptCounter.textContent = `${prompt.length} / ${this.limits.max_prompt_characters}`;
-      const activeIds = new Set((this.activeWorkspace?.assets || []).map((asset) => asset.id));
-      const requested = [...new Set(message.payload.reference_ids || [])];
-      const available = requested.filter((id) => activeIds.has(id));
-      const max = this.generationReferenceLimit();
-      const references = new Set(available.slice(0, max));
-      this.referenceSelections.set(this.activeWorkspace.id, references);
-      this.setMode(references.size ? "img2img" : "text2img", false);
-      this.renderReferences();
-      this.setComposerMode("generation");
-      this.settingChanged();
-      const omitted = requested.length - references.size;
+      const omitted = this.showGenerationComposer(prompt, message.payload.reference_ids || []);
       if (omitted > 0) {
+        const max = this.generationReferenceLimit();
         UI.toast(`当前渠道最多使用 ${max} 张垫图，已忽略 ${omitted} 张超限或已删除的参考图`);
       }
-      this.el.promptInput.focus();
     }
 
     workspaceChatBusy(workspaceId = this.activeWorkspace?.id) {
@@ -1890,8 +1938,15 @@
         locked || referenceUploading || !hasModel
           || !this.messages.some((message) => message.role === "user"),
       );
-      setDisabled(this.el.generateButton, locked || referenceUploading || !this.currentChannel());
-      setDisabled(this.el.generationBackButton, this.workspaceLoading || generationBusy);
+      setDisabled(this.el.directGenerationButton, locked || referenceUploading || !this.activeWorkspace);
+      const missingAnimationMaster = this.isAnimationWorkspace() && this.currentSelection().size !== 1;
+      setDisabled(
+        this.el.generateButton,
+        locked || referenceUploading || !this.currentChannel() || missingAnimationMaster,
+      );
+      const generateTitle = missingAnimationMaster ? "请先添加并选择一张母图" : "";
+      setAttribute(this.el.generateButton, "title", generateTitle);
+      setDisabled(this.el.generationBackButton, this.workspaceLoading);
       setDisabled(
         this.el.referenceAdd,
         this.workspaceLoading || referenceUploading
@@ -1906,6 +1961,9 @@
       });
       this.el.messageList.querySelectorAll("[data-retry-message]").forEach((button) => {
         setDisabled(button, locked || !hasModel);
+      });
+      this.el.messageList.querySelectorAll("[data-use-prompt-draft]").forEach((button) => {
+        setDisabled(button, locked);
       });
       this.el.messageList.querySelectorAll("[data-retry-job]").forEach((button) => {
         setDisabled(button, locked);
@@ -2130,7 +2188,9 @@
           toggle.type = "button";
           toggle.className = "reference-toggle";
           toggle.dataset.referenceToggle = asset.id;
-          toggle.title = selected.has(asset.id) ? "取消选择" : "选择为垫图";
+          toggle.title = this.isAnimationWorkspace()
+            ? (selected.has(asset.id) ? "取消母图" : "选择为母图")
+            : (selected.has(asset.id) ? "取消选择" : "选择为垫图");
           const image = document.createElement("img");
           image.src = asset.url;
           image.alt = asset.name;
@@ -2142,8 +2202,8 @@
           remove.type = "button";
           remove.className = "reference-remove";
           remove.dataset.referenceRemove = asset.id;
-          remove.title = "删除垫图";
-          remove.setAttribute("aria-label", "删除垫图");
+          remove.title = this.isAnimationWorkspace() ? "删除母图" : "删除垫图";
+          remove.setAttribute("aria-label", remove.title);
           remove.innerHTML = '<i data-lucide="x"></i>';
           card.append(toggle, remove);
           return card;
@@ -2175,12 +2235,12 @@
         }),
       );
       UI.icons(this.el.referenceList);
-      if (this.isAnimationWorkspace()) {
-        const mode = selected.size ? "img2img" : "text2img";
-        if (this.el.modeSwitch.dataset.mode !== mode) this.setMode(mode, false);
+      if (this.isAnimationWorkspace() && this.el.modeSwitch.dataset.mode !== "img2img") {
+        this.setMode("img2img", false);
       }
       this.updateWorkspaceKindUI();
       this.updatePrice();
+      this.updateInteractionState();
     }
 
     uploadReferences(files, target) {
@@ -2343,21 +2403,25 @@
       else {
         const max = this.generationReferenceLimit();
         if (selection.size >= max) {
-          UI.toast(`当前渠道最多选择 ${max} 张垫图`, "error");
+          UI.toast(
+            this.isAnimationWorkspace()
+              ? "帧动画任务必须且只能选择一张母图"
+              : `当前渠道最多选择 ${max} 张垫图`,
+            "error",
+          );
           return;
         }
         selection.add(id);
       }
-      if (this.isAnimationWorkspace()) {
-        this.setMode(selection.size ? "img2img" : "text2img", true);
-      }
+      if (this.isAnimationWorkspace()) this.setMode("img2img", true);
       this.renderReferences();
     }
 
     async removeReference(id) {
       if (this.workspaceLoading || !this.activeWorkspace
         || this.workspaceChatBusy() || this.workspaceHasActiveJob()) return;
-      if (!window.confirm("从工作站删除这张垫图？历史消息和任务中的引用仍会保留。")) return;
+      const referenceName = this.isAnimationWorkspace() ? "母图" : "垫图";
+      if (!window.confirm(`从工作站删除这张${referenceName}？历史消息和任务中的引用仍会保留。`)) return;
       const workspace = this.activeWorkspace;
       try {
         await UI.api(`/api/workspaces/${workspace.id}/assets/${id}`, { method: "DELETE" });
@@ -2365,9 +2429,7 @@
         this.referenceSelections.get(workspace.id)?.delete(id);
         this.chatReferenceSelections.get(workspace.id)?.delete(id);
         if (this.activeWorkspace?.id === workspace.id) {
-          if (workspace.kind === "animation") {
-            this.setMode(this.currentSelection(workspace.id).size ? "img2img" : "text2img", true);
-          }
+          if (workspace.kind === "animation") this.setMode("img2img", true);
           this.renderReferences();
           this.renderChatReferences();
         }
@@ -2379,9 +2441,7 @@
     }
 
     updatePrice() {
-      const count = this.animationNeedsMaster()
-        ? 1
-        : this.isAnimationWorkspace()
+      const count = this.isAnimationWorkspace()
         ? Math.min(
           this.limits.max_animation_frames,
           Math.max(2, Number(this.el.animationFrameCount.value || 8)),
@@ -2389,10 +2449,9 @@
         : Math.min(
           this.limits.max_batch_images, Math.max(1, Number(this.el.batchCount.value || 1)),
         );
-      const needsMaster = this.animationNeedsMaster();
-      const unit = !needsMaster && this.isAnimationWorkspace() ? "帧" : "张";
+      const unit = this.isAnimationWorkspace() ? "帧" : "张";
       const price = Number(this.currentChannel()?.price_rmb || 0);
-      this.el.priceEstimateLabel.textContent = needsMaster ? "母图预计总价" : `${count} ${unit}预计总价`;
+      this.el.priceEstimateLabel.textContent = `${count} ${unit}预计总价`;
       this.el.priceEstimate.textContent = UI.money(price * count);
       this.channels.forEach((channel, index) => {
         const option = this.el.channelSelect.options[index];
@@ -2439,9 +2498,10 @@
           UI.toast(`渠道垫图上限已更新，已取消 ${omitted} 张超限图片`, "info");
         }
         const referenceIds = [...selection];
-        const masterOnly = this.animationNeedsMaster();
-        if (this.isAnimationWorkspace()) {
-          settings.mode = masterOnly ? "text2img" : "img2img";
+        if (this.isAnimationWorkspace()) settings.mode = "img2img";
+        if (this.isAnimationWorkspace() && referenceIds.length !== 1) {
+          UI.toast("请先添加并选择一张母图", "error");
+          return;
         }
         if (!settings.prompt.trim()) {
           UI.toast("请输入提示词", "error");
@@ -2457,8 +2517,7 @@
           body: {
             workspace_id: workspace.id,
             ...settings,
-            reference_ids: masterOnly ? [] : settings.mode === "img2img" ? referenceIds : [],
-            master_only: masterOnly,
+            reference_ids: settings.mode === "img2img" ? referenceIds : [],
           },
         });
         workspace.settings = settings;
@@ -2471,8 +2530,7 @@
           this.setComposerMode("chat");
         }
         await this.refreshBalance();
-        const taskLabel = data.job.kind === "animation_master" ? "母图任务" : "任务";
-        UI.toast(`${taskLabel}已提交，${UI.money(Number(data.job.price_per_image_rmb) * data.job.requested_count)} 已预占`, "success");
+        UI.toast(`任务已提交，${UI.money(Number(data.job.price_per_image_rmb) * data.job.requested_count)} 已预占`, "success");
       } catch (error) {
         UI.toast(error.message, "error");
       } finally {

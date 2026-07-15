@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import timedelta, timezone
 from decimal import Decimal
+from statistics import fmean
 
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -18,6 +20,7 @@ from ..models import (
     GenerationJob,
     GenerationQueueState,
     GenerationReference,
+    RuntimeLog,
     User,
     Workspace,
     utcnow,
@@ -26,6 +29,36 @@ from .billing import BillingService
 from .common import money, normalize_image_size
 from .settings import SystemSettingsService
 from .workspace_settings import sanitize_workspace_settings
+
+_DURATION_SAMPLE_LIMIT = 50
+_DURATION_SAMPLE_TARGET = 8
+_DURATION_TRIM_RATIO = 0.1
+
+
+def _duration_values(values: Iterable[Decimal | float | int | None]) -> list[float]:
+    durations = []
+    for value in values:
+        if value is None:
+            continue
+        duration = float(value)
+        if math.isfinite(duration) and duration > 0:
+            durations.append(duration)
+    return durations
+
+
+def _robust_duration_estimate(
+    samples: Iterable[Decimal | float | int | None], baseline: float
+) -> float:
+    ordered = sorted(_duration_values(samples))
+    if not ordered:
+        return baseline
+
+    sample_count = len(ordered)
+    trim_count = int(sample_count * _DURATION_TRIM_RATIO)
+    trimmed = ordered[trim_count:-trim_count] if trim_count else ordered
+    observed = fmean(trimmed)
+    confidence = min(1.0, sample_count / _DURATION_SAMPLE_TARGET)
+    return baseline + (observed - baseline) * confidence
 
 
 @dataclass(frozen=True)
@@ -45,7 +78,6 @@ class SubmitGeneration:
     animation_fps: int = 8
     animation_loop: bool = True
     animation_format: str = "webp"
-    master_only: bool = False
 
 
 class GenerationService:
@@ -72,16 +104,11 @@ class GenerationService:
             raise ServiceError(str(exc)) from exc
         normalized_size = self._validate_request(channel, request, workspace.kind)
         references = self._load_references(workspace, request.reference_ids)
-        if request.master_only:
-            if workspace.kind != "animation":
-                raise ServiceError("母图任务仅适用于帧动画工作站")
-            if request.mode != "text2img" or references:
-                raise ServiceError("母图任务必须使用文生图且不能携带垫图")
-            job_kind = "animation_master"
-            requested_count = 1
-        elif workspace.kind == "animation":
-            if request.mode != "img2img" or not references:
-                raise ServiceError("请先生成、上传或选择母图")
+        if workspace.kind == "animation":
+            if not references:
+                raise ServiceError("请先上传或选择一张母图")
+            if request.mode != "img2img":
+                raise ServiceError("帧动画工作站只能使用指定母图生成帧动画")
             if len(references) != 1:
                 raise ServiceError("帧动画任务必须且只能选择一张母图")
             job_kind = "animation"
@@ -351,13 +378,21 @@ class GenerationService:
         return {job_id: index + 1 for index, job_id in enumerate(queued_ids)}
 
     def estimate_seconds(self, job: GenerationJob, channel: Channel) -> Decimal:
-        exact = self._duration_samples(job, exact=True)
-        samples = exact if len(exact) >= 3 else self._duration_samples(job, exact=False)
-        if not samples:
-            return Decimal(channel.limits.estimated_seconds)
-        samples.sort()
-        index = max(0, math.ceil(len(samples) * 0.75) - 1)
-        return Decimal(str(round(samples[index], 3)))
+        samples = self._duration_samples(job, exact=True)
+        if len(samples) < _DURATION_SAMPLE_TARGET:
+            related = self._duration_samples(job, exact=False)
+            samples = (
+                related
+                if len(related) >= _DURATION_SAMPLE_TARGET
+                else max(related, self._runtime_duration_samples(job), key=len)
+            )
+
+        estimate = _robust_duration_estimate(
+            samples,
+            baseline=float(channel.limits.estimated_seconds),
+        )
+        estimate = min(max(estimate, 10.0), float(channel.limits.timeout_seconds))
+        return Decimal(str(round(estimate, 3)))
 
     def _ensure_workspace_generation_idle(self, workspace_id: str, workspace_kind: str) -> None:
         active_job = db.session.scalar(
@@ -437,6 +472,11 @@ class GenerationService:
         )
 
     def _duration_samples(self, job: GenerationJob, *, exact: bool) -> list[float]:
+        kinds = (
+            ("image", "animation_master")
+            if job.kind in {"image", "animation_master"}
+            else (job.kind,)
+        )
         query = (
             select(GenerationItem.elapsed_seconds)
             .join(GenerationJob)
@@ -444,18 +484,36 @@ class GenerationService:
                 GenerationItem.status == "succeeded",
                 GenerationItem.elapsed_seconds.is_not(None),
                 GenerationJob.channel_id == job.channel_id,
-                GenerationJob.kind == job.kind,
+                GenerationJob.model == job.model,
+                GenerationJob.kind.in_(kinds),
                 GenerationJob.mode == job.mode,
             )
             .order_by(GenerationItem.completed_at.desc())
-            .limit(50)
+            .limit(_DURATION_SAMPLE_LIMIT)
         )
         if exact:
             query = query.where(
                 GenerationJob.size == job.size,
                 GenerationJob.quality == job.quality,
             )
-        return [float(value) for value in db.session.scalars(query) if value and value > 0]
+        return _duration_values(db.session.scalars(query))
+
+    @staticmethod
+    def _runtime_duration_samples(job: GenerationJob) -> list[float]:
+        query = (
+            select(RuntimeLog.elapsed_seconds)
+            .where(
+                RuntimeLog.category == "generation",
+                RuntimeLog.event == "generation.provider",
+                RuntimeLog.status == "success",
+                RuntimeLog.elapsed_seconds.is_not(None),
+                RuntimeLog.provider_id == job.channel_id,
+                RuntimeLog.model == job.model,
+            )
+            .order_by(RuntimeLog.created_at.desc())
+            .limit(_DURATION_SAMPLE_LIMIT)
+        )
+        return _duration_values(db.session.scalars(query))
 
     @staticmethod
     def refresh_job_status(job: GenerationJob) -> None:

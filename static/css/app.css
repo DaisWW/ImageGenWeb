@@ -1311,6 +1311,11 @@ select option {
   margin-left: auto;
 }
 
+.chat-toolbar-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .context-meter svg {
   width: 14px;
   height: 14px;
@@ -3604,7 +3609,7 @@ tbody tr:hover td {
   .chat-toolbar { align-items: center; }
   .chat-model-field { width: min(230px, 56vw); }
   .context-meter { order: 4; margin-left: 0; }
-  .chat-toolbar .button { margin-left: auto; }
+  .chat-toolbar-actions { margin-left: auto; }
   .job-header { align-items: flex-start; }
   .job-actions > span { display: none; }
   .job-body { gap: 12px; }
@@ -3677,7 +3682,7 @@ tbody tr:hover td {
   .chat-toolbar { display: grid; grid-template-columns: 1fr auto; }
   .chat-toolbar .chat-model-field { grid-column: 1 / -1; }
   .context-meter { display: none; }
-  .chat-toolbar .button { margin-left: 0; }
+  .chat-toolbar-actions { margin-left: 0; }
   .composer-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .compact-field select { padding-inline: 7px; }
   .modal-actions .button { flex: 1; }

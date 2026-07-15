@@ -61,4 +61,5 @@ channels:
       # 2026-07-14：8 路/16 张图片测试通过；4 路可保留稳定延迟余量。
       max_concurrency: 4
       timeout_seconds: 600
-      estimated_seconds: 45
+      # 2026-07-15：13 次成功调用的双侧 10% 截尾均值为 144.5 秒。
+      estimated_seconds: 145

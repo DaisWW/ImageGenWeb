@@ -72,7 +72,6 @@ def submit_generation():
         animation_fps=animation_fps,
         animation_loop=json_bool(data.get("animation_loop", True)),
         animation_format=str(data.get("animation_format", "webp")).lower(),
-        master_only=json_bool(data.get("master_only", False)),
     )
     application_services = services()
     generation_service = application_services.generations

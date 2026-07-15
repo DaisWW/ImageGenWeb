@@ -220,7 +220,9 @@ class ConversationService:
                     animation_runtime_prompt(workspace.kind, workspace.settings),
                     generation_prompt=generation_mode_prompt(
                         workspace.kind,
-                        str((workspace.settings or {}).get("mode", "text2img")),
+                        "img2img"
+                        if workspace.kind == "animation"
+                        else str((workspace.settings or {}).get("mode", "text2img")),
                         len(attachments),
                     ),
                 ),
@@ -291,7 +293,13 @@ class ConversationService:
             raise ServiceError(f"请先通过对话描述需要生成的{subject}")
         if mode and mode not in {"text2img", "img2img"}:
             raise ServiceError("生成模式无效")
-        requested_mode = mode or str((workspace.settings or {}).get("mode", "text2img"))
+        if workspace.kind == "animation" and mode and mode != "img2img":
+            raise ServiceError("帧动画工作站固定使用一张用户指定的母图")
+        requested_mode = (
+            "img2img"
+            if workspace.kind == "animation"
+            else mode or str((workspace.settings or {}).get("mode", "text2img"))
+        )
         requested_mode = "img2img" if requested_mode == "img2img" else "text2img"
         if mode:
             attachments = self._load_assets(workspace, reference_ids) if reference_ids else []
@@ -301,6 +309,33 @@ class ConversationService:
         else:
             attachments = self._latest_user_attachments(workspace)
             effective_mode = "img2img" if attachments else requested_mode
+        if workspace.kind == "animation" and len(attachments) > 1:
+            raise ServiceError("帧动画提示词草稿必须且只能选择一张母图")
+        if workspace.kind == "animation" and not attachments:
+            question = "帧动画必须使用用户指定的母图，请先上传或选择一张母图。"
+            draft = {
+                "status": "needs_clarification",
+                "questions": [question],
+                "language": "en" if translate_to_english else "zh",
+                "generation_mode": effective_mode,
+                "reference_ids": [],
+            }
+            message = ConversationMessage(
+                workspace_id=workspace.id,
+                role="assistant",
+                kind="message",
+                content=f"为了让生成结果更符合预期，还需要确认：\n1. {question}",
+                payload=draft,
+            )
+            db.session.add(message)
+            self._remember_preferences(
+                workspace,
+                model_id=model.identifier,
+                translate_to_english=translate_to_english,
+            )
+            workspace.updated_at = utcnow()
+            db.session.commit()
+            return message
         request_text = (
             "请基于以上会话整理当前已确认的最终帧动画需求。"
             if workspace.kind == "animation"

@@ -30,8 +30,24 @@ def generation_mode_prompt(
     reference_count: int,
 ) -> str:
     """给对话和总结模型同一份生成模式/参考图契约。"""
-    normalized_mode = "img2img" if mode == "img2img" else "text2img"
     count = max(0, int(reference_count))
+    if workspace_kind == "animation":
+        if count == 0:
+            reference_status = (
+                "本次调用未附带新的母图输入；若会话上下文中尚无用户明确指定的母图，"
+                "必须要求用户上传或选择一张，不能自行生成。"
+            )
+        elif count == 1:
+            reference_status = "当前实际收到 1 张用户指定的母图，必须称为“参考图 1（母图）”。"
+        else:
+            reference_status = (
+                f"当前实际收到 {count} 张图片，必须要求用户只保留其中一张作为母图。"
+            )
+        return f"""当前任务固定为 img2img（使用用户指定母图制作帧动画）。{reference_status}
+母图只能由用户上传或从已有图片中明确选择；禁止生成母图、设计静态母图方案或切换为 text2img。所有沟通、澄清、总结和最终提示词都必须针对帧动画的跨帧不变量、动作阶段、时间连续性与逐帧结果。
+参考图 1（母图）决定主体身份、造型、精确配色、图案、比例、构图和镜头基准。最终提示词必须先写母图中需要严格保持的内容，再写各帧允许发生的姿势、位置、朝向、形变和次级运动；不得要求改造母图本身。"""
+
+    normalized_mode = "img2img" if mode == "img2img" else "text2img"
     if normalized_mode == "img2img" or count:
         missing = (
             "当前尚未收到任何参考图，必须先要求用户上传或选择至少一张参考图，不能返回 ready。"

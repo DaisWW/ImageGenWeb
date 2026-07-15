@@ -31,7 +31,7 @@ def default_workspace_settings(workspace_kind: str = "image") -> dict[str, Any]:
     return {
         "chat_model_id": "",
         "translate_prompt": False,
-        "mode": "text2img",
+        "mode": "img2img" if workspace_kind == "animation" else "text2img",
         "prompt": "",
         "channel_id": "",
         "model": "",

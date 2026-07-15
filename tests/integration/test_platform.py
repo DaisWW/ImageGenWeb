@@ -447,6 +447,20 @@ class ImageGenPlatformTests(unittest.TestCase):
             self.app.extensions["image_storage"],
         )
 
+    def record_generation_durations(self, samples, *, model="model-b"):
+        db.session.add_all(
+            RuntimeLog(
+                category="generation",
+                event="generation.provider",
+                status="success",
+                provider_id="test",
+                model=model,
+                elapsed_seconds=Decimal(value),
+            )
+            for value in samples
+        )
+        db.session.commit()
+
     def test_display_amount_trims_only_redundant_fraction_zeros(self):
         self.assertEqual(display_amount("100.0000"), "100.00")
         self.assertEqual(display_amount("1.2500"), "1.25")
@@ -944,6 +958,10 @@ class ImageGenPlatformTests(unittest.TestCase):
 
         system = self.chat_client.calls[-1]["system"]
         self.assertIn("当前工作站用于制作帧动画", system)
+        self.assertIn("并且只能制作帧动画", system)
+        self.assertIn("禁止提出、整理或执行生成母图", system)
+        self.assertIn("当前任务固定为 img2img", system)
+        self.assertNotIn("当前尚未进入带参考图的帧生成阶段", system)
         self.assertIn("动作起点", system)
         self.assertIn("主动作只有“动起来”等抽象描述", system)
         self.assertIn("运行时参数不需要用户在对话中重复说明", system)
@@ -1579,10 +1597,15 @@ class ImageGenPlatformTests(unittest.TestCase):
 
     def test_animation_prompt_draft_gate_checks_motion_plan_with_runtime_parameters(self):
         workspace = self.create_workspace("模糊动作", kind="animation")
+        master = self.services.workspaces.add_assets(
+            workspace,
+            [("master.png", png_bytes())],
+        )[0]
         self.services.conversations.send(
             workspace,
             model_id="test-chat",
             content="让这个角色动起来",
+            attachment_ids=(master.id,),
         )
         self.chat_client.prompt_draft_content = json.dumps(
             {
@@ -1596,6 +1619,8 @@ class ImageGenPlatformTests(unittest.TestCase):
             workspace,
             model_id="test-chat",
             translate_to_english=False,
+            mode="img2img",
+            reference_ids=(master.id,),
         )
 
         self.assertEqual(clarification.kind, "message")
@@ -1604,7 +1629,53 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertIn("主动作只有“动起来”等抽象描述", system)
         self.assertIn("帧数：8 帧", system)
         self.assertIn("帧率：8 FPS", system)
+        self.assertIn("当前任务固定为 img2img", system)
+        self.assertIn("禁止生成母图", system)
         self.assertIn('"status":"needs_clarification"', system)
+
+    def test_animation_prompt_draft_requires_exactly_one_user_selected_master(self):
+        workspace = self.create_workspace("母图约束", kind="animation")
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="角色原地挥手并循环。",
+        )
+
+        with self.assertRaisesRegex(ServiceError, "固定使用一张用户指定的母图"):
+            self.services.conversations.create_prompt_draft(
+                workspace,
+                model_id="test-chat",
+                translate_to_english=False,
+                mode="text2img",
+            )
+
+        calls_before_missing_master = len(self.chat_client.calls)
+        missing = self.services.conversations.create_prompt_draft(
+            workspace,
+            model_id="test-chat",
+            translate_to_english=False,
+            mode="img2img",
+        )
+        self.assertEqual(missing.kind, "message")
+        self.assertEqual(missing.payload["status"], "needs_clarification")
+        self.assertIn("用户指定的母图", missing.content)
+        self.assertEqual(len(self.chat_client.calls), calls_before_missing_master)
+
+        masters = self.services.workspaces.add_assets(
+            workspace,
+            [
+                ("master-a.png", png_bytes()),
+                ("master-b.png", png_bytes((40, 90, 180))),
+            ],
+        )
+        with self.assertRaisesRegex(ServiceError, "必须且只能选择一张母图"):
+            self.services.conversations.create_prompt_draft(
+                workspace,
+                model_id="test-chat",
+                translate_to_english=False,
+                mode="img2img",
+                reference_ids=tuple(asset.id for asset in masters),
+            )
 
     def test_img2img_prompt_draft_uses_selected_generation_references(self):
         workspace = self.create_workspace("产品换场景")
@@ -2253,6 +2324,7 @@ class ImageGenPlatformTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json["workspace"]["kind"], "animation")
+        self.assertEqual(response.json["workspace"]["settings"]["mode"], "img2img")
         self.assertTrue(response.json["workspace"]["settings"]["transparent_background"])
         self.assertEqual(response.json["workspace"]["settings"]["quality"], "auto")
         self.assertEqual(response.json["workspace"]["settings"]["animation_frame_count"], 8)
@@ -2314,7 +2386,7 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertEqual(workspace.settings["animation_frame_count"], 8)
         self.assertEqual(workspace.settings["animation_fps"], 8)
 
-    def test_animation_requires_and_can_reuse_a_single_generated_master(self):
+    def test_animation_requires_a_user_selected_master_and_rejects_master_generation(self):
         workspace = self.create_workspace("奔跑角色", kind="animation")
         client = self.user_client()
         payload = {
@@ -2339,34 +2411,29 @@ class ImageGenPlatformTests(unittest.TestCase):
 
         rejected = client.post("/api/generations", json=payload)
         self.assertEqual(rejected.status_code, 400)
-        self.assertEqual(rejected.json["error"], "请先生成、上传或选择母图")
+        self.assertEqual(rejected.json["error"], "请先上传或选择一张母图")
 
         payload["master_only"] = True
         master_response = client.post("/api/generations", json=payload)
-        self.assertEqual(master_response.status_code, 202)
-        master_payload = master_response.json["job"]
-        self.assertEqual(master_payload["kind"], "animation_master")
-        self.assertEqual(master_payload["requested_count"], 1)
-        self.assertEqual(master_payload["reserved_rmb"], "1.2500")
+        self.assertEqual(master_response.status_code, 400)
+        self.assertEqual(master_response.json["error"], "请先上传或选择一张母图")
+        self.assertEqual(
+            db.session.scalar(
+                select(func.count(GenerationJob.id)).where(
+                    GenerationJob.workspace_id == workspace.id
+                )
+            ),
+            0,
+        )
 
-        master_job = db.session.get(GenerationJob, master_payload["id"])
-        worker = self.create_worker()
-        worker.providers = FakeProviderFactory()
-        channel = self.app.extensions["channel_registry"].get("test")
-        self.assertTrue(worker._claim(master_job.items[0].id, channel))
-        worker._process_item(master_job.items[0].id)
-
-        db.session.expire_all()
-        saved_master = db.session.get(GenerationJob, master_job.id)
-        self.assertEqual(saved_master.status, "succeeded")
-        self.assertTrue(saved_master.items[0].output_path)
-        reused = client.post(f"/api/generation-items/{saved_master.items[0].id}/reference")
-        self.assertEqual(reused.status_code, 201)
-        master_asset = reused.json["asset"]
+        master_asset = self.services.workspaces.add_assets(
+            workspace,
+            [("master.png", png_bytes())],
+        )[0]
 
         payload.update(
             mode="img2img",
-            reference_ids=[master_asset["id"]],
+            reference_ids=[master_asset.id],
             animation_frame_count=3,
             master_only=False,
         )
@@ -2377,7 +2444,7 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertEqual(animation_payload["requested_count"], 3)
         self.assertEqual(
             [reference["id"] for reference in animation_payload["references"]],
-            [master_asset["id"]],
+            [master_asset.id],
         )
 
     def test_animation_rejects_multiple_master_references(self):
@@ -2959,6 +3026,24 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertEqual(active_running["status"], "running")
         self.assertGreaterEqual(active_running["progress_percent"], 1)
         self.assertIsNotNone(active_running["estimated_end_at"])
+
+    def test_generation_estimate_blends_sparse_history_with_channel_baseline(self):
+        workspace = self.create_workspace()
+        job = self.submit(workspace)
+        channel = self.app.extensions["channel_registry"].get("test")
+        self.record_generation_durations([360])
+
+        self.assertEqual(self.services.generations.estimate_seconds(job, channel), Decimal("150"))
+
+    def test_generation_estimate_trims_extreme_runtime_samples(self):
+        workspace = self.create_workspace()
+        job = self.submit(workspace)
+        channel = self.app.extensions["channel_registry"].get("test")
+        samples = [1, *([100] * 8), 1000]
+        self.record_generation_durations(samples)
+        self.record_generation_durations([600], model="other-model")
+
+        self.assertEqual(self.services.generations.estimate_seconds(job, channel), Decimal("100"))
 
     def test_chat_attachment_media_is_visible_only_to_its_owner(self):
         workspace = self.create_workspace()
