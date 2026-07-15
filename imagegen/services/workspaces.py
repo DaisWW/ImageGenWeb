@@ -187,8 +187,6 @@ class WorkspaceService:
                 {**(workspace.settings or {}), **payload["settings"]},
                 self.settings.runtime(),
             )
-            if workspace.kind == "animation":
-                workspace.settings["mode"] = "img2img"
         if "name" in payload:
             self._commit_name_change()
         else:

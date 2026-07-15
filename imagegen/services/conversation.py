@@ -309,33 +309,8 @@ class ConversationService:
         else:
             attachments = self._latest_user_attachments(workspace)
             effective_mode = "img2img" if attachments else requested_mode
-        if workspace.kind == "animation" and len(attachments) > 1:
+        if workspace.kind == "animation" and len(attachments) != 1:
             raise ServiceError("帧动画提示词草稿必须且只能选择一张母图")
-        if workspace.kind == "animation" and not attachments:
-            question = "帧动画必须使用用户指定的母图，请先上传或选择一张母图。"
-            draft = {
-                "status": "needs_clarification",
-                "questions": [question],
-                "language": "en" if translate_to_english else "zh",
-                "generation_mode": effective_mode,
-                "reference_ids": [],
-            }
-            message = ConversationMessage(
-                workspace_id=workspace.id,
-                role="assistant",
-                kind="message",
-                content=f"为了让生成结果更符合预期，还需要确认：\n1. {question}",
-                payload=draft,
-            )
-            db.session.add(message)
-            self._remember_preferences(
-                workspace,
-                model_id=model.identifier,
-                translate_to_english=translate_to_english,
-            )
-            workspace.updated_at = utcnow()
-            db.session.commit()
-            return message
         request_text = (
             "请基于以上会话整理当前已确认的最终帧动画需求。"
             if workspace.kind == "animation"

@@ -945,7 +945,7 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertIn("当前是静态图片工作站", system)
         self.assertIn("以下情况必须先澄清", system)
         self.assertIn("一张完整画面", system)
-        self.assertNotIn("当前工作站用于制作帧动画", system)
+        self.assertNotIn("帧动画工作站只能生成帧动画", system)
 
     def test_animation_workspace_chat_uses_motion_specific_guidance(self):
         workspace = self.create_workspace("动作讨论", kind="animation")
@@ -957,9 +957,8 @@ class ImageGenPlatformTests(unittest.TestCase):
         )
 
         system = self.chat_client.calls[-1]["system"]
-        self.assertIn("当前工作站用于制作帧动画", system)
-        self.assertIn("并且只能制作帧动画", system)
-        self.assertIn("禁止提出、整理或执行生成母图", system)
+        self.assertIn("帧动画工作站只能生成帧动画", system)
+        self.assertIn("禁止生成母图", system)
         self.assertIn("当前任务固定为 img2img", system)
         self.assertNotIn("当前尚未进入带参考图的帧生成阶段", system)
         self.assertIn("动作起点", system)
@@ -1650,15 +1649,13 @@ class ImageGenPlatformTests(unittest.TestCase):
             )
 
         calls_before_missing_master = len(self.chat_client.calls)
-        missing = self.services.conversations.create_prompt_draft(
-            workspace,
-            model_id="test-chat",
-            translate_to_english=False,
-            mode="img2img",
-        )
-        self.assertEqual(missing.kind, "message")
-        self.assertEqual(missing.payload["status"], "needs_clarification")
-        self.assertIn("用户指定的母图", missing.content)
+        with self.assertRaisesRegex(ServiceError, "必须且只能选择一张母图"):
+            self.services.conversations.create_prompt_draft(
+                workspace,
+                model_id="test-chat",
+                translate_to_english=False,
+                mode="img2img",
+            )
         self.assertEqual(len(self.chat_client.calls), calls_before_missing_master)
 
         masters = self.services.workspaces.add_assets(
@@ -1828,7 +1825,7 @@ class ImageGenPlatformTests(unittest.TestCase):
         }
         self.assertIn("当前是静态图片工作站", config["workspace_prompts"]["image"])
         self.assertIn(
-            "当前工作站用于制作帧动画",
+            "帧动画工作站只能生成帧动画",
             config["workspace_prompts"]["animation"],
         )
         self.assertIn("严禁用换颜色", config["workspace_prompts"]["animation"])
@@ -1874,10 +1871,16 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertIn("帧率：8 FPS", self.chat_client.calls[-1]["system"])
         self.assertIn("总时长：1.000 秒", self.chat_client.calls[-1]["system"])
         self.assertIn("循环：末帧应自然衔接回第 1 帧", self.chat_client.calls[-1]["system"])
+        master = self.services.workspaces.add_assets(
+            animation_workspace,
+            [("master.png", png_bytes())],
+        )[0]
         self.services.conversations.create_prompt_draft(
             animation_workspace,
             model_id="test-chat",
             translate_to_english=False,
+            mode="img2img",
+            reference_ids=(master.id,),
         )
         self.assertIn("自定义动画规则", self.chat_client.calls[-1]["system"])
         self.assertIn("帧数：8 帧", self.chat_client.calls[-1]["system"])
@@ -2395,28 +2398,13 @@ class ImageGenPlatformTests(unittest.TestCase):
             "model": "model-b",
             "mode": "text2img",
             "prompt": "卡通角色侧面奔跑，透明背景",
-            "size": "1024x1024",
-            "quality": "medium",
-            "output_format": "png",
-            "compression": 90,
-            "batch_count": 1,
-            "animation_frame_count": 8,
-            "animation_fps": 12,
-            "animation_loop": True,
-            "animation_format": "webp",
             "reference_ids": [],
-            "transparent_background": True,
-            "master_only": False,
+            "master_only": True,
         }
 
         rejected = client.post("/api/generations", json=payload)
         self.assertEqual(rejected.status_code, 400)
         self.assertEqual(rejected.json["error"], "请先上传或选择一张母图")
-
-        payload["master_only"] = True
-        master_response = client.post("/api/generations", json=payload)
-        self.assertEqual(master_response.status_code, 400)
-        self.assertEqual(master_response.json["error"], "请先上传或选择一张母图")
         self.assertEqual(
             db.session.scalar(
                 select(func.count(GenerationJob.id)).where(
@@ -2431,11 +2419,11 @@ class ImageGenPlatformTests(unittest.TestCase):
             [("master.png", png_bytes())],
         )[0]
 
+        payload.pop("master_only")
         payload.update(
             mode="img2img",
             reference_ids=[master_asset.id],
             animation_frame_count=3,
-            master_only=False,
         )
         animation_response = client.post("/api/generations", json=payload)
         self.assertEqual(animation_response.status_code, 202)
