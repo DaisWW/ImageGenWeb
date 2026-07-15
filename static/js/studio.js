@@ -1877,7 +1877,7 @@
       const locked = this.workspaceLoading || generationBusy || chatBusy;
       const referenceUploading = this.referenceUploadPending;
       const hasModel = Boolean(this.el.chatModelSelect.value);
-      setDisabled(this.el.chatInput, locked || !hasModel);
+      setDisabled(this.el.chatInput, locked);
       setDisabled(this.el.chatSendButton, locked || referenceUploading || !hasModel);
       const sendTitle = referenceUploading ? "等待图片上传完成" : "发送消息";
       setAttribute(this.el.chatSendButton, "title", sendTitle);

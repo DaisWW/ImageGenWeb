@@ -18,6 +18,12 @@ test("workspace lifecycle remains usable", async ({ page }, testInfo) => {
   await page.locator('#workspaceForm button[type="submit"]').click();
   await expect(page.locator("#workspaceTitle")).toHaveText(createdName);
 
+  const chatInput = page.locator("#chatInput");
+  await expect(chatInput).toBeEditable();
+  await chatInput.fill("新工作站无需刷新即可输入");
+  await expect(chatInput).toHaveValue("新工作站无需刷新即可输入");
+
+  await chatInput.blur();
   await page.keyboard.press("F2");
   await page.locator("#workspaceNameInput").fill(renamedName);
   await page.locator('#workspaceForm button[type="submit"]').click();
