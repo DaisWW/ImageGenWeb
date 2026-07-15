@@ -16,7 +16,7 @@
     <nav class="workspace-list" id="workspaceList" aria-label="工作站列表"></nav>
     <div class="sidebar-footer">
       <span id="workspaceCount">0 / {{ max_workspaces }}</span>
-      <small>生成记录保留 30 天</small>
+      <small id="retentionSummary">生成记录保留 {{ history_retention_days }} 天</small>
     </div>
   </aside>
 
@@ -32,12 +32,10 @@
       <div class="stage-metrics" aria-live="polite">
         <div class="metric"><span>生成中</span><strong id="runningMetric">0</strong></div>
         <div class="metric"><span>排队</span><strong id="queueMetric">0</strong></div>
-        <div class="metric wide"><span>预计结束</span><strong id="etaMetric">--:--</strong></div>
+        <div class="metric wide eta-metric"><span>预计结束</span><strong id="etaMetric">--:--</strong><small id="etaRemainingMetric">--</small></div>
       </div>
       <div class="stage-tools">
-        <button class="icon-button" type="button" id="clearWorkspaceButton" title="清空当前会话" aria-label="清空当前会话"><i data-lucide="eraser"></i></button>
-        <button class="icon-button" type="button" id="renameWorkspaceButton" title="重命名工作站" aria-label="重命名工作站"><i data-lucide="pencil"></i></button>
-        <button class="icon-button danger" type="button" id="deleteWorkspaceButton" title="删除工作站" aria-label="删除工作站"><i data-lucide="trash-2"></i></button>
+        <button class="icon-button danger clear-workspace-button" type="button" id="clearWorkspaceButton" title="清空当前工作站" aria-label="清空当前工作站"><i data-lucide="eraser"></i></button>
       </div>
     </header>
 
@@ -60,13 +58,13 @@
         <form class="chat-composer" id="chatForm">
           <div class="chat-toolbar">
             <label class="compact-field chat-model-field"><span>对话模型</span><select id="chatModelSelect" required></select></label>
-            <label class="toggle-line" title="整理提示词时输出英文">
+            <label class="toggle-line" title="总结需求时输出英文提示词">
               <input type="checkbox" id="translatePrompt">
               <span class="toggle-track"><span></span></span>
               <span>英文提示词</span>
             </label>
             <span class="context-meter" id="contextStatus" title="当前会话上下文"><i data-lucide="braces"></i><span>上下文 0%</span></span>
-            <button class="button secondary small" type="button" id="draftPromptButton"><i data-lucide="wand-sparkles"></i>整理提示词</button>
+            <button class="button secondary small" type="button" id="draftPromptButton"><i data-lucide="wand-sparkles"></i>总结需求</button>
           </div>
           <div class="chat-reference-strip" id="chatReferenceStrip" hidden>
             <span>随消息发送</span>
@@ -76,7 +74,7 @@
             <button class="icon-button chat-attach-button" type="button" id="chatReferenceButton" title="选择或上传参考图" aria-label="选择或上传参考图"><i data-lucide="paperclip"></i><span id="chatReferenceCount" hidden>0</span></button>
             <label class="chat-input-field">
               <span class="sr-only">消息</span>
-              <textarea id="chatInput" maxlength="12000" rows="2" placeholder="描述你想生成的画面..."></textarea>
+              <textarea id="chatInput" maxlength="{{ runtime_settings.max_message_characters }}" rows="2" placeholder="描述你想生成的画面..."></textarea>
             </label>
             <button class="icon-button chat-send-button" type="submit" id="chatSendButton" title="发送消息" aria-label="发送消息"><i data-lucide="arrow-up"></i></button>
           </div>
@@ -92,19 +90,20 @@
               <button type="button" class="mode-button active" data-mode="text2img" aria-pressed="true"><i data-lucide="type"></i>文生图</button>
               <button type="button" class="mode-button" data-mode="img2img" aria-pressed="false"><i data-lucide="images"></i>垫图生图</button>
             </div>
+            <label class="toggle-line generation-toggle transparent-background-control" id="transparentBackgroundControl" title="生成包含 Alpha 通道的透明背景图片">
+              <span class="transparent-background-swatch" aria-hidden="true"></span>
+              <span class="transparent-background-copy"><strong>透明背景</strong><small>PNG / WebP</small></span>
+              <input type="checkbox" id="transparentBackground">
+              <span class="toggle-track"><span></span></span>
+            </label>
             <label class="compact-field channel-field"><span>渠道</span><select id="channelSelect" required></select></label>
             <label class="compact-field model-field"><span>模型</span><select id="modelSelect" required></select></label>
             <label class="compact-field"><span>尺寸</span><input id="sizeInput" list="sizeOptions" maxlength="20" placeholder="1024x1024" autocomplete="off" required><datalist id="sizeOptions"></datalist></label>
             <label class="compact-field"><span>质量</span><select id="qualitySelect"></select></label>
             <label class="compact-field"><span id="frameFormatLabel">格式</span><select id="formatSelect"></select></label>
-            <label class="toggle-line generation-toggle" id="transparentBackgroundControl" title="生成包含 Alpha 通道的透明背景图片">
-              <input type="checkbox" id="transparentBackground">
-              <span class="toggle-track"><span></span></span>
-              <span>透明背景</span>
-            </label>
-            <label class="compact-field number-field" id="imageCountControl"><span>张数</span><input id="batchCount" type="number" min="1" max="20" value="1"></label>
-            <label class="compact-field number-field animation-control" hidden><span>帧数</span><input id="animationFrameCount" type="number" min="2" max="20" value="6"></label>
-            <label class="compact-field number-field animation-control" hidden><span>FPS</span><input id="animationFps" type="number" min="1" max="24" value="6"></label>
+            <label class="compact-field number-field" id="imageCountControl"><span>张数</span><input id="batchCount" type="number" min="1" max="{{ runtime_settings.max_batch_images }}" value="1"></label>
+            <label class="compact-field number-field animation-control" hidden><span>帧数</span><input id="animationFrameCount" type="number" min="2" max="{{ runtime_settings.max_animation_frames }}" value="8"></label>
+            <label class="compact-field number-field animation-control" hidden><span>FPS</span><input id="animationFps" type="number" min="1" max="{{ runtime_settings.max_animation_fps }}" value="8"></label>
             <label class="compact-field animation-control" hidden><span>导出</span><select id="animationFormat"><option value="webp">动态 WebP</option><option value="gif">GIF</option></select></label>
             <label class="toggle-line generation-toggle animation-control" hidden>
               <input type="checkbox" id="animationLoop" checked>
@@ -114,19 +113,19 @@
           </div>
 
           <div class="reference-strip" id="referenceStrip" hidden>
-            <button class="reference-add" type="button" id="referenceAdd"><i data-lucide="image-plus"></i><span>添加垫图</span><small id="referenceLimit">0 / 8</small></button>
+            <button class="reference-add" type="button" id="referenceAdd"><i data-lucide="image-plus"></i><span id="referenceAddLabel">添加垫图</span><small id="referenceLimit">0 / {{ runtime_settings.max_assets_per_workspace }}</small></button>
             <div class="reference-list" id="referenceList"></div>
           </div>
 
           <div class="prompt-row">
             <label class="prompt-field">
               <span class="sr-only">提示词</span>
-              <textarea id="promptInput" maxlength="8000" rows="3" placeholder="输入画面描述..." required></textarea>
-              <span class="prompt-counter" id="promptCounter">0 / 8000</span>
+              <textarea id="promptInput" maxlength="{{ runtime_settings.max_prompt_characters }}" rows="3" placeholder="输入画面描述..." required></textarea>
+              <span class="prompt-counter" id="promptCounter">0 / {{ runtime_settings.max_prompt_characters }}</span>
             </label>
             <div class="submit-block">
               <div class="price-summary">
-                <span>预计扣费</span>
+                <span>预计总价</span>
                 <strong id="priceEstimate">¥0.00</strong>
                 <small id="saveState">参数已保存</small>
               </div>
@@ -162,6 +161,34 @@
   </form>
 </dialog>
 
+<dialog class="modal compact-modal" id="workspaceClearDialog">
+  <form class="modal-form" id="workspaceClearForm">
+    <div class="modal-header">
+      <div><span class="eyebrow">Clear Workspace</span><h2>清空工作站</h2></div>
+      <button class="icon-button" type="button" data-close-dialog="workspaceClearDialog" aria-label="关闭"><i data-lucide="x"></i></button>
+    </div>
+    <p class="workspace-danger-copy">确定清空“<strong id="workspaceClearName"></strong>”？<small>对话、垫图和生成记录将永久删除，工作站名称与参数会保留。</small></p>
+    <div class="modal-actions">
+      <button class="button secondary" type="button" data-close-dialog="workspaceClearDialog">取消</button>
+      <button class="button danger" type="submit"><i data-lucide="eraser"></i>确认清空</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog class="modal compact-modal" id="workspaceDeleteDialog">
+  <form class="modal-form" id="workspaceDeleteForm">
+    <div class="modal-header">
+      <div><span class="eyebrow">Delete Workspace</span><h2>删除工作站</h2></div>
+      <button class="icon-button" type="button" data-close-dialog="workspaceDeleteDialog" aria-label="关闭"><i data-lucide="x"></i></button>
+    </div>
+    <p class="workspace-danger-copy">确定删除“<strong id="workspaceDeleteName"></strong>”？<small>对话、垫图、生成记录和图片都将永久删除，此操作不可恢复。</small></p>
+    <div class="modal-actions">
+      <button class="button secondary" type="button" data-close-dialog="workspaceDeleteDialog">取消</button>
+      <button class="button danger" type="submit"><i data-lucide="trash-2"></i>确认删除</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog class="modal image-modal" id="imageDialog">
   <div class="image-dialog-layout">
     <div class="image-dialog-preview"><img id="detailImage" alt="生成结果"></div>
@@ -174,13 +201,13 @@
       <div class="detail-prompt"><span>提示词</span><p id="detailPrompt"></p></div>
       <div class="detail-references" id="detailReferences"></div>
       <div class="detail-actions">
-        <button class="button secondary" type="button" id="detailReuse"><i data-lucide="image-plus"></i>基于此图继续</button>
+        <button class="button secondary" type="button" id="detailReuse"><i data-lucide="image-plus"></i><span id="detailReuseLabel">基于此图继续</span></button>
         <a class="button primary" id="detailDownload" download><i data-lucide="download"></i>下载原图</a>
       </div>
     </div>
   </div>
 </dialog>
 
-<script id="bootstrapData" type="application/json">{{ {"user": user, "workspaces": workspaces, "max_workspaces": max_workspaces, "channels": channels, "chat_models": chat_models}|tojson }}</script>
+<script id="bootstrapData" type="application/json">{{ {"user": user, "workspaces": workspaces, "max_workspaces": max_workspaces, "runtime_settings": runtime_settings, "history_retention_days": history_retention_days, "channels": channels, "chat_models": chat_models}|tojson }}</script>
 {% endblock %}
 {% block scripts %}<script src="{{ url_for('static', filename='js/studio.js') }}" defer></script>{% endblock %}
