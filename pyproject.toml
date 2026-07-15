@@ -17,3 +17,11 @@ extend-exclude = [
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.coverage.run]
+branch = true
+source = ["imagegen", "scripts"]
+
+[tool.coverage.report]
+fail_under = 75
+show_missing = true
