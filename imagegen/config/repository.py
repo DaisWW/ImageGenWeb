@@ -26,7 +26,7 @@ class ConfigOverride:
 
 
 class SecretCipher:
-    """Encrypts provider credentials with a stable deployment secret."""
+    """使用稳定的部署密钥加密上游凭据。"""
 
     def __init__(self, secret: str):
         if not secret:
@@ -51,7 +51,7 @@ class SecretCipher:
 
 
 class RuntimeConfigRepository:
-    """Stores validated runtime configuration as atomic versioned documents."""
+    """以带版本的原子文档保存已校验的运行配置。"""
 
     def __init__(self, cipher: SecretCipher):
         self._cipher = cipher

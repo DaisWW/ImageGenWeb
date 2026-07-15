@@ -1,7 +1,7 @@
 version: 1
 
 queue:
-  # Production capacity: Daoge 2 + Lucen 4. Per-user limits still apply.
+  # 生产并发：刀哥的 2 + Lucen 4；仍受单用户并发限制。
   global_concurrency: 6
   max_queued_per_user: 20
   max_queued_global: 100
@@ -23,15 +23,15 @@ channels:
     price_rmb: 0.0600
     capabilities:
       modes: [text2img, img2img]
-      max_reference_images: 1
+      # 已支持两张参考图；帧动画会同时传入母图和上一帧。
+      max_reference_images: 2
       max_reference_image_mb: 10
       max_reference_total_mb: 40
-      reference_field: image
       sizes: [1024x1024, 1536x1024, 1024x1536]
       qualities: [auto, low, medium, high]
       formats: [png, jpeg, webp]
     limits:
-      # Provisional until the provider balance/rate-limit error is cleared and retested.
+      # 上游余额或频控问题解决并复测前，暂采用此值。
       max_concurrency: 2
       timeout_seconds: 600
       estimated_seconds: 180
@@ -50,16 +50,15 @@ channels:
     price_rmb: 0.0900
     capabilities:
       modes: [text2img, img2img]
-      # Verified with two visually distinct references on 2026-07-14.
+      # 2026-07-14 已用两张视觉差异明显的参考图验证。
       max_reference_images: 2
       max_reference_image_mb: 10
       max_reference_total_mb: 40
-      reference_field: image
       sizes: [1024x1024, 1536x1024, 1024x1536]
       qualities: [auto, low, medium, high]
       formats: [png, jpeg, webp]
     limits:
-      # 2026-07-14: 8-way/16-image test passed; 4 keeps stable latency headroom.
+      # 2026-07-14：8 路/16 张图片测试通过；4 路可保留稳定延迟余量。
       max_concurrency: 4
       timeout_seconds: 600
       estimated_seconds: 45

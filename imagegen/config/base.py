@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable, Generic, Protocol, TypeVar
 
@@ -17,7 +18,7 @@ SnapshotT = TypeVar("SnapshotT", bound=VersionedSnapshot)
 
 
 class ReloadableConfigRegistry(Generic[SnapshotT]):
-    """Maintains an atomically replaceable YAML or database-backed snapshot."""
+    """维护可原子替换的 YAML 或数据库配置快照。"""
 
     READ_ERROR_PREFIX = "无法读取配置"
     LOAD_ERROR_PREFIX = "配置加载失败"
@@ -27,14 +28,17 @@ class ReloadableConfigRegistry(Generic[SnapshotT]):
         self,
         config_path: str | Path,
         override_loader: Callable[[], ConfigOverride | None] | None = None,
+        override_revision_loader: Callable[[], str] | None = None,
     ):
         self._path = Path(config_path).resolve()
         self._override_loader = override_loader
+        self._override_revision_loader = override_revision_loader
         self._lock = threading.RLock()
         self._snapshot: SnapshotT | None = None
         self._signature_value: tuple | None = None
         self._last_error = ""
         self._source = "file"
+        self._next_change_check = 0.0
         self.reload(force=True)
 
     @property
@@ -48,6 +52,11 @@ class ReloadableConfigRegistry(Generic[SnapshotT]):
             return self._last_error
 
     def reload_if_changed(self) -> bool:
+        now = time.monotonic()
+        with self._lock:
+            if now < self._next_change_check:
+                return False
+            self._next_change_check = now + 1.0
         try:
             signature = self._current_signature()
         except (OSError, ValueError) as exc:
@@ -86,6 +95,7 @@ class ReloadableConfigRegistry(Generic[SnapshotT]):
             self._signature_value = signature
             self._last_error = ""
             self._source = source
+            self._next_change_check = time.monotonic() + 1.0
         return True
 
     def validate(self, document: dict[str, Any]) -> SnapshotT:
@@ -99,9 +109,14 @@ class ReloadableConfigRegistry(Generic[SnapshotT]):
         return stat.st_mtime_ns, stat.st_size
 
     def _current_signature(self) -> tuple:
-        override = self._override_loader() if self._override_loader else None
-        if override:
-            return "database", override.revision
+        if self._override_revision_loader:
+            revision = self._override_revision_loader()
+            if revision:
+                return "database", revision
+        elif self._override_loader:
+            override = self._override_loader()
+            if override:
+                return "database", override.revision
         return "file", *self._file_signature()
 
     def _require_snapshot(self) -> SnapshotT:

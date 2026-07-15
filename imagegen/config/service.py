@@ -16,7 +16,7 @@ ACTIVE_GENERATION_STATUSES = {"queued", "running", "canceling"}
 
 
 class RuntimeConfigService:
-    """Validates and publishes administrator-managed runtime configuration."""
+    """校验并发布管理员维护的运行配置。"""
 
     def __init__(
         self,
@@ -44,7 +44,10 @@ class RuntimeConfigService:
         if not isinstance(payload, dict):
             raise ServiceError("渠道配置必须是对象")
         document = self._channel_document(payload)
-        snapshot = self.channels.validate(document)
+        try:
+            snapshot = self.channels.validate(document)
+        except ValueError as exc:
+            raise ServiceError(str(exc)) from exc
         self._guard_active_channels(snapshot)
         self.repository.save_channels(
             document,
@@ -59,7 +62,10 @@ class RuntimeConfigService:
         if not isinstance(payload, dict):
             raise ServiceError("对话模型配置必须是对象")
         document = self._chat_document(payload)
-        self.chat_models.validate(document)
+        try:
+            self.chat_models.validate(document)
+        except ValueError as exc:
+            raise ServiceError(str(exc)) from exc
         self.repository.save_chat_models(
             document,
             expected_revision=str(payload.get("revision", "")),
@@ -103,9 +109,6 @@ class RuntimeConfigService:
                         "max_reference_total_mb": _nested(
                             raw, "capabilities", "max_reference_total_mb"
                         ),
-                        "reference_field": str(
-                            _nested(raw, "capabilities", "reference_field") or "image"
-                        ).strip(),
                         "sizes": _strings(raw.get("capabilities"), "sizes"),
                         "qualities": _strings(raw.get("capabilities"), "qualities"),
                         "formats": _strings(raw.get("capabilities"), "formats"),
@@ -166,9 +169,19 @@ class RuntimeConfigService:
             }
         if not isinstance(workspace_prompts, dict):
             raise ServiceError("工作站提示词格式无效")
+        system_prompts = payload.get("system_prompts")
+        if system_prompts is None:
+            system_prompts = {
+                kind: self.chat_models.system_prompt(kind) for kind in ("chat", "summary")
+            }
+        if not isinstance(system_prompts, dict):
+            raise ServiceError("系统提示词格式无效")
         return {
             "version": 1,
-            "prompt_draft_model_id": str(payload.get("prompt_draft_model_id", "")).strip(),
+            "system_prompts": {
+                "chat": system_prompts.get("chat"),
+                "summary": system_prompts.get("summary"),
+            },
             "workspace_prompts": {
                 "image": workspace_prompts.get("image"),
                 "animation": workspace_prompts.get("animation"),

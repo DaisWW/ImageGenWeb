@@ -27,7 +27,6 @@ class ChannelCapabilities:
     sizes: tuple[str, ...]
     qualities: tuple[str, ...]
     formats: tuple[str, ...]
-    reference_field: str = "image"
 
 
 @dataclass(frozen=True)
@@ -119,7 +118,6 @@ class Channel:
                 "max_reference_images": self.capabilities.max_reference_images,
                 "max_reference_image_mb": self.capabilities.max_reference_image_mb,
                 "max_reference_total_mb": self.capabilities.max_reference_total_mb,
-                "reference_field": self.capabilities.reference_field,
                 "sizes": list(self.capabilities.sizes),
                 "qualities": list(self.capabilities.qualities),
                 "formats": list(self.capabilities.formats),
@@ -158,7 +156,7 @@ class ChannelSnapshot:
 
 
 class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
-    """Atomically reloads validated channel configuration without exposing secrets."""
+    """原子刷新已校验的渠道配置，并避免暴露密钥。"""
 
     READ_ERROR_PREFIX = "无法读取渠道配置"
     LOAD_ERROR_PREFIX = "渠道配置加载失败"
@@ -266,9 +264,7 @@ class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
         if not modes or not set(modes) <= SUPPORTED_MODES:
             raise ValueError(f"{label} 的 modes 仅支持 text2img/img2img")
         formats = _string_tuple(capabilities_raw.get("formats", ["png"]), f"{label}.formats")
-        qualities = _string_tuple(
-            capabilities_raw.get("qualities", ["medium"]), f"{label}.qualities"
-        )
+        qualities = _string_tuple(capabilities_raw.get("qualities", ["auto"]), f"{label}.qualities")
         sizes = _string_tuple(capabilities_raw.get("sizes", ["1024x1024"]), f"{label}.sizes")
         if not set(formats) <= SUPPORTED_FORMATS:
             raise ValueError(f"{label} 包含不支持的输出格式")
@@ -287,12 +283,9 @@ class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
             sizes=sizes,
             qualities=qualities,
             formats=formats,
-            reference_field=str(capabilities_raw.get("reference_field", "image")).strip(),
         )
         if "img2img" in modes and capabilities.max_reference_images < 1:
             raise ValueError(f"{label} 支持 img2img 时必须允许至少一张垫图")
-        if capabilities.reference_field not in {"image", "image[]"}:
-            raise ValueError(f"{label} 的 reference_field 仅支持 image/image[]")
 
         limits_raw = raw.get("limits", {})
         if not isinstance(limits_raw, dict):
