@@ -27,7 +27,11 @@ from ..models import (
 from ..storage import ImageStorage
 from .automatic_titles import AutomaticTitleService
 from .conversation_context import ConversationContextManager
-from .conversation_prompts import animation_runtime_prompt, chat_system_prompt
+from .conversation_prompts import (
+    animation_runtime_prompt,
+    chat_system_prompt,
+    generation_mode_prompt,
+)
 from .prompt_drafts import PromptDraftParser
 from .runtime_logs import RuntimeLogService
 from .settings import SystemSettingsService
@@ -157,6 +161,11 @@ class ConversationService:
                     self.chat_models.system_prompt("chat"),
                     self.chat_models.workspace_prompt(workspace.kind),
                     animation_runtime_prompt(workspace.kind, workspace.settings),
+                    generation_prompt=generation_mode_prompt(
+                        workspace.kind,
+                        str((workspace.settings or {}).get("mode", "text2img")),
+                        len(attachments),
+                    ),
                 ),
                 messages=context,
             )
@@ -209,6 +218,8 @@ class ConversationService:
         *,
         model_id: str,
         translate_to_english: bool,
+        mode: str = "",
+        reference_ids: tuple[str, ...] = (),
     ) -> ConversationMessage:
         label = (
             "正在检查并总结帧动画需求"
@@ -220,6 +231,8 @@ class ConversationService:
                 workspace,
                 model_id=model_id,
                 translate_to_english=translate_to_english,
+                mode=mode,
+                reference_ids=reference_ids,
             )
 
     def _create_prompt_draft(
@@ -228,6 +241,8 @@ class ConversationService:
         *,
         model_id: str,
         translate_to_english: bool,
+        mode: str,
+        reference_ids: tuple[str, ...],
     ) -> ConversationMessage:
         self._ensure_workspace_unlocked(workspace)
         model = self._model(model_id)
@@ -241,7 +256,18 @@ class ConversationService:
         ):
             subject = "帧动画" if workspace.kind == "animation" else "图片"
             raise ServiceError(f"请先通过对话描述需要生成的{subject}")
-        attachments = self._latest_user_attachments(workspace)
+        if mode and mode not in {"text2img", "img2img"}:
+            raise ServiceError("生成模式无效")
+        requested_mode = mode or str((workspace.settings or {}).get("mode", "text2img"))
+        requested_mode = "img2img" if requested_mode == "img2img" else "text2img"
+        if mode:
+            attachments = self._load_assets(workspace, reference_ids) if reference_ids else []
+            if requested_mode == "text2img" and attachments:
+                raise ServiceError("文生图提示词草稿不能携带参考图")
+            effective_mode = requested_mode
+        else:
+            attachments = self._latest_user_attachments(workspace)
+            effective_mode = "img2img" if attachments else requested_mode
         request_text = (
             "请基于以上会话整理当前已确认的最终帧动画需求。"
             if workspace.kind == "animation"
@@ -265,6 +291,11 @@ class ConversationService:
                     workspace_kind=workspace.kind,
                     workspace_prompt=self.chat_models.workspace_prompt(workspace.kind),
                     runtime_prompt=animation_runtime_prompt(workspace.kind, workspace.settings),
+                    generation_prompt=generation_mode_prompt(
+                        workspace.kind,
+                        effective_mode,
+                        len(attachments),
+                    ),
                 ),
                 messages=context,
                 max_output_tokens=min(model.max_output_tokens, 2400),
@@ -276,6 +307,14 @@ class ConversationService:
             translate_to_english=translate_to_english,
             max_prompt_characters=self.settings.runtime().max_prompt_characters,
         )
+        if effective_mode == "img2img" and not attachments:
+            draft = {
+                "status": "needs_clarification",
+                "questions": ["当前目标是参考图生图，请先上传或选择至少一张参考图。"],
+                "language": "en" if translate_to_english else "zh",
+            }
+        draft["generation_mode"] = effective_mode
+        draft["reference_ids"] = [asset.id for asset in attachments]
         if draft["status"] == "needs_clarification":
             questions = "\n".join(
                 f"{index}. {question}" for index, question in enumerate(draft["questions"], 1)
@@ -283,7 +322,6 @@ class ConversationService:
             content = f"为了让生成结果更符合预期，还需要确认：\n{questions}"
             message_kind = "message"
         else:
-            draft["reference_ids"] = [asset.id for asset in attachments]
             label = (
                 "English prompt"
                 if translate_to_english
@@ -315,6 +353,8 @@ class ConversationService:
                 "attachment_count": len(attachments),
                 "translate_to_english": translate_to_english,
                 "outcome": draft["status"],
+                "generation_mode": effective_mode,
+                "reference_count": len(attachments),
             },
         )
         self._remember_preferences(

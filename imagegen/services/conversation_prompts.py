@@ -11,6 +11,7 @@ def chat_system_prompt(
     base_prompt: str,
     workspace_prompt: str,
     runtime_prompt: str = "",
+    generation_prompt: str = "",
 ) -> str:
     sections = [
         base_prompt.strip(),
@@ -18,7 +19,31 @@ def chat_system_prompt(
     ]
     if runtime_prompt.strip():
         sections.append(f"本次任务的运行参数如下：\n{runtime_prompt.strip()}")
+    if generation_prompt.strip():
+        sections.append(generation_prompt.strip())
     return "\n\n".join(sections)
+
+
+def generation_mode_prompt(
+    workspace_kind: str,
+    mode: str,
+    reference_count: int,
+) -> str:
+    """给对话和总结模型同一份生成模式/参考图契约。"""
+    normalized_mode = "img2img" if mode == "img2img" else "text2img"
+    count = max(0, int(reference_count))
+    if normalized_mode == "img2img" or count:
+        missing = (
+            "当前尚未收到任何参考图，必须先要求用户上传或选择至少一张参考图，不能返回 ready。"
+            if count == 0
+            else f"当前实际收到 {count} 张参考图。"
+        )
+        return f"""当前生成模式是 img2img（参考图生图）。{missing}
+参考图是最终生成输入，不是泛化的灵感板。必须在需求中逐张建立编号与作用，并明确每张图的“必须保留”和“必须改变”：例如主体身份、产品外形、姿态、构图、版式、材质、色彩或风格。若保留范围与修改目标会互相冲突，先澄清取舍。
+最终提示词必须使用“参考图 1/参考图 2……”的明确指代，先写参考图处理规则，再写目标画面与修改内容；不得把未确认的参考图细节臆造为硬要求，也不得只写“参考这张图”“基于原图优化”等不可执行的空话。"""
+    if workspace_kind == "animation":
+        return "当前尚未进入带参考图的帧生成阶段；不要把不存在的参考图写入最终提示词。"
+    return "当前生成模式是 text2img（文生图），没有参考图作为最终生成输入；不要输出参考图编号或 img2img 指令。"
 
 
 def animation_runtime_prompt(

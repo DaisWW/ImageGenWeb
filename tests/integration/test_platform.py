@@ -973,6 +973,7 @@ class ImageGenPlatformTests(unittest.TestCase):
             model_id="test-chat",
             translate_to_english=False,
         )
+        self.assertEqual(draft.payload["generation_mode"], "img2img")
         self.assertEqual(draft.payload["reference_ids"], [assets[1].id, assets[0].id])
         draft_parts = self.chat_client.calls[-1]["messages"][-1]["content"]
         self.assertEqual([part["type"] for part in draft_parts], ["text", "image_url", "image_url"])
@@ -1178,6 +1179,146 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertIn("帧数：8 帧", system)
         self.assertIn("帧率：8 FPS", system)
         self.assertIn('"status":"needs_clarification"', system)
+
+    def test_img2img_prompt_draft_uses_selected_generation_references(self):
+        workspace = self.create_workspace("产品换场景")
+        assets = self.services.workspaces.add_assets(
+            workspace,
+            [
+                ("product.png", png_bytes()),
+                ("style.png", png_bytes((40, 90, 180))),
+            ],
+        )
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="保留产品外形，换成户外广告场景。",
+        )
+        self.chat_client.prompt_draft_content = json.dumps(
+            {
+                "status": "ready",
+                "summary_zh": "保留产品外形，参考图 2 提供风格，改成户外广告场景。",
+                "prompt": (
+                    "参考图 1 保留产品外形；参考图 2 仅保留色彩和材质风格；"
+                    "改成户外广告场景，不改变产品标志。"
+                ),
+            },
+            ensure_ascii=False,
+        )
+
+        draft = self.services.conversations.create_prompt_draft(
+            workspace,
+            model_id="test-chat",
+            translate_to_english=False,
+            mode="img2img",
+            reference_ids=(assets[0].id, assets[1].id),
+        )
+
+        self.assertEqual(draft.kind, "prompt_draft")
+        self.assertEqual(draft.payload["generation_mode"], "img2img")
+        self.assertEqual(draft.payload["reference_ids"], [assets[0].id, assets[1].id])
+        self.assertEqual(
+            [attachment.asset_id for attachment in draft.attachments],
+            [assets[0].id, assets[1].id],
+        )
+        model_parts = self.chat_client.calls[-1]["messages"][-1]["content"]
+        self.assertEqual([part["type"] for part in model_parts], ["text", "image_url", "image_url"])
+        system = self.chat_client.calls[-1]["system"]
+        self.assertIn("当前生成模式是 img2img", system)
+        self.assertIn("每张图的“必须保留”和“必须改变”", system)
+        self.assertIn("参考图 1/参考图 2", system)
+
+    def test_img2img_prompt_draft_rejects_ready_without_a_reference(self):
+        workspace = self.create_workspace("缺少垫图")
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="把这张产品图换成白色背景。",
+        )
+        self.chat_client.prompt_draft_content = json.dumps(
+            {
+                "status": "ready",
+                "summary_zh": "产品白底图",
+                "prompt": "白色背景的产品图",
+            },
+            ensure_ascii=False,
+        )
+
+        message = self.services.conversations.create_prompt_draft(
+            workspace,
+            model_id="test-chat",
+            translate_to_english=False,
+            mode="img2img",
+        )
+
+        self.assertEqual(message.kind, "message")
+        self.assertEqual(message.payload["generation_mode"], "img2img")
+        self.assertEqual(message.payload["status"], "needs_clarification")
+        self.assertNotIn("prompt", message.payload)
+        self.assertIn("上传或选择至少一张参考图", message.content)
+
+    def test_text2img_prompt_draft_ignores_previous_chat_attachments(self):
+        workspace = self.create_workspace("文生图草稿")
+        asset = self.services.workspaces.add_assets(
+            workspace,
+            [("history.png", png_bytes())],
+        )[0]
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="先分析这张历史参考图。",
+            attachment_ids=(asset.id,),
+        )
+
+        draft = self.services.conversations.create_prompt_draft(
+            workspace,
+            model_id="test-chat",
+            translate_to_english=False,
+            mode="text2img",
+        )
+
+        self.assertEqual(draft.kind, "prompt_draft")
+        self.assertEqual(draft.payload["generation_mode"], "text2img")
+        self.assertEqual(draft.payload["reference_ids"], [])
+        self.assertEqual(draft.attachments, [])
+        self.assertIsInstance(self.chat_client.calls[-1]["messages"][-1]["content"], str)
+        self.assertIn("当前生成模式是 text2img", self.chat_client.calls[-1]["system"])
+
+        with self.assertRaisesRegex(ServiceError, "文生图提示词草稿不能携带参考图"):
+            self.services.conversations.create_prompt_draft(
+                workspace,
+                model_id="test-chat",
+                translate_to_english=False,
+                mode="text2img",
+                reference_ids=(asset.id,),
+            )
+
+    def test_img2img_prompt_draft_does_not_reuse_previous_chat_attachments(self):
+        workspace = self.create_workspace("重新选择垫图")
+        asset = self.services.workspaces.add_assets(
+            workspace,
+            [("history.png", png_bytes())],
+        )[0]
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="先分析这张历史参考图。",
+            attachment_ids=(asset.id,),
+        )
+
+        message = self.services.conversations.create_prompt_draft(
+            workspace,
+            model_id="test-chat",
+            translate_to_english=False,
+            mode="img2img",
+        )
+
+        self.assertEqual(message.kind, "message")
+        self.assertEqual(message.payload["generation_mode"], "img2img")
+        self.assertEqual(message.payload["reference_ids"], [])
+        self.assertEqual(message.attachments, [])
+        self.assertIn("上传或选择至少一张参考图", message.content)
+        self.assertIsInstance(self.chat_client.calls[-1]["messages"][-1]["content"], str)
 
     def test_admin_can_customize_workspace_prompts_for_chat_and_drafts(self):
         client = self.admin_client()
