@@ -910,7 +910,11 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertIn("AI 视觉创作搭档", CHAT_SYSTEM_PROMPT)
         self.assertIn("不要像客服、产品说明书或信息收集表", CHAT_SYSTEM_PROMPT)
         self.assertIn("需求访谈", CHAT_SYSTEM_PROMPT)
-        self.assertIn("一到三个信息增益最高的问题", CHAT_SYSTEM_PROMPT)
+        self.assertIn("在同一条回复中一次性问完", CHAT_SYSTEM_PROMPT)
+        self.assertIn("问题宁少勿多，最多四个", CHAT_SYSTEM_PROMPT)
+        self.assertIn("不得把已经能识别的问题留到后续轮次", CHAT_SYSTEM_PROMPT)
+        self.assertIn("1A 2C 3B", CHAT_SYSTEM_PROMPT)
+        self.assertIn("其他（请自定义）", CHAT_SYSTEM_PROMPT)
         self.assertIn("点击「总结需求」生成最终提示词", CHAT_SYSTEM_PROMPT)
         self.assertNotIn("公司内部 AI 视觉创作工作台的需求顾问", CHAT_SYSTEM_PROMPT)
 
@@ -1519,8 +1523,11 @@ class ImageGenPlatformTests(unittest.TestCase):
             {
                 "status": "needs_clarification",
                 "questions": [
-                    "海报用于什么场景：活动宣传、产品推广还是社交媒体？",
-                    "主视觉主体是什么？也可以回答“你决定”。",
+                    "海报用于什么场景？\nA. 活动宣传（推荐）\nB. 产品推广\nC. 社交媒体\nD. 其他（请自定义）",
+                    "主视觉主体是什么？\nA. 人物\nB. 产品（推荐）\nC. 抽象图形\nD. 其他（请自定义）",
+                    "画幅比例是什么？\nA. 竖版 3:4（推荐）\nB. 横版 16:9\nC. 方形 1:1\nD. 其他（请自定义）",
+                    "画面是否包含文字？\nA. 不含文字（推荐）\nB. 仅标题\nC. 标题和副文案\nD. 其他（请自定义）",
+                    "背景环境是什么？\nA. 纯色背景（推荐）\nB. 室内场景\nC. 户外场景\nD. 其他（请自定义）",
                 ],
             },
             ensure_ascii=False,
@@ -1534,9 +1541,14 @@ class ImageGenPlatformTests(unittest.TestCase):
 
         self.assertEqual(clarification.kind, "message")
         self.assertEqual(clarification.payload["status"], "needs_clarification")
-        self.assertEqual(len(clarification.payload["questions"]), 2)
+        self.assertEqual(len(clarification.payload["questions"]), 4)
         self.assertNotIn("prompt", clarification.payload)
         self.assertIn("还需要确认", clarification.content)
+        self.assertIn("4. 画面是否包含文字？", clarification.content)
+        self.assertIn("D. 其他（请自定义）", clarification.content)
+        self.assertNotIn("5. 背景环境是什么？", clarification.content)
+        self.assertIn("问题宁少勿多，最多四个", self.chat_client.calls[-1]["system"])
+        self.assertIn("不得把已经能识别的问题拆到后续轮次", self.chat_client.calls[-1]["system"])
         self.assertIn("禁止输出半成品提示词", self.chat_client.calls[-1]["system"])
         self.assertIn('"status":"ready"', self.chat_client.calls[-1]["system"])
 
