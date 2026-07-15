@@ -317,9 +317,10 @@ class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
             raise ValueError(f"{label} 至少需要配置一个模型")
         models: list[ChannelModel] = []
         identifiers: set[str] = set()
-        for item in raw_models:
-            if isinstance(item, str):
-                item = {"id": item, "label": item}
+        for raw_model in raw_models:
+            item = (
+                {"id": raw_model, "label": raw_model} if isinstance(raw_model, str) else raw_model
+            )
             if not isinstance(item, dict):
                 raise ValueError(f"{label} 的模型配置无效")
             identifier = required_string(item, "id", 100, section="渠道")

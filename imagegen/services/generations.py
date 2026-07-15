@@ -336,10 +336,7 @@ class GenerationService:
             query = query.where(GenerationJob.user_id == user_id)
         if workspace_id:
             query = query.where(GenerationJob.workspace_id == workspace_id)
-        counts = {
-            status: count
-            for status, count in db.session.execute(query.group_by(GenerationItem.status))
-        }
+        counts = dict(db.session.execute(query.group_by(GenerationItem.status)).all())
         return (
             int(counts.get("running", 0)) + int(counts.get("canceling", 0)),
             int(counts.get("queued", 0)),

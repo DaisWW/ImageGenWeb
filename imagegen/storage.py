@@ -275,11 +275,11 @@ class ImageStorage:
 
     @staticmethod
     def _thumbnail(content: bytes) -> bytes:
-        with Image.open(io.BytesIO(content)) as image:
-            image = ImageOps.exif_transpose(image)
-            image.thumbnail((640, 640), Image.Resampling.LANCZOS)
-            if image.mode not in {"RGB", "RGBA"}:
-                image = image.convert("RGBA")
+        with Image.open(io.BytesIO(content)) as source:
+            thumbnail = ImageOps.exif_transpose(source)
+            thumbnail.thumbnail((640, 640), Image.Resampling.LANCZOS)
+            if thumbnail.mode not in {"RGB", "RGBA"}:
+                thumbnail = thumbnail.convert("RGBA")
             output = io.BytesIO()
-            image.save(output, format="WEBP", quality=82, method=4)
+            thumbnail.save(output, format="WEBP", quality=82, method=4)
             return output.getvalue()
