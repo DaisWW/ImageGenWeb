@@ -271,6 +271,7 @@
           button.type = "button";
           button.className = `workspace-item${workspace.id === this.activeWorkspace?.id ? " active" : ""}${operation ? " waiting" : ""}`;
           button.dataset.workspaceId = workspace.id;
+          button.dataset.workspaceKind = workspace.kind;
           const icon = document.createElement("span");
           icon.className = "workspace-icon";
           const workspaceIcon = workspace.kind === "animation" ? "film" : "image";
@@ -281,7 +282,7 @@
           name.textContent = workspace.name;
           const meta = document.createElement("small");
           const typeLabel = workspace.kind === "animation" ? "帧动画" : "图片";
-          meta.textContent = operation?.label || `${typeLabel} · ${workspace.assets.length} 张垫图`;
+          meta.textContent = operation?.label || typeLabel;
           copy.append(name, meta);
           button.append(icon, copy);
           return button;

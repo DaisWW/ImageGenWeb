@@ -548,23 +548,39 @@ select option {
   background: var(--accent-muted);
 }
 
+.workspace-item[data-workspace-kind="image"] {
+  --workspace-icon-color: #7db7d8;
+  --workspace-icon-border: #35586b;
+  --workspace-icon-background: #182a36;
+}
+
+.workspace-item[data-workspace-kind="animation"] {
+  --workspace-icon-color: #c3a0df;
+  --workspace-icon-border: #57436d;
+  --workspace-icon-background: #251e31;
+}
+
 .workspace-icon {
   display: grid;
   width: 34px;
   height: 34px;
   place-items: center;
-  border: 1px solid var(--line);
+  color: var(--workspace-icon-color, currentColor);
+  border: 1px solid var(--workspace-icon-border, var(--line));
   border-radius: 6px;
-  background: var(--surface-2);
+  background: var(--workspace-icon-background, var(--surface-2));
 }
 
 .workspace-item.active .workspace-icon {
-  color: var(--accent);
-  border-color: #755236;
-  background: #2d2118;
+  color: var(--workspace-icon-color, var(--accent));
+  border-color: var(--workspace-icon-border, #755236);
+  background: var(--workspace-icon-background, #2d2118);
 }
 
-.workspace-item.waiting .workspace-icon,
+.workspace-item.waiting .workspace-icon {
+  color: var(--workspace-icon-color, var(--accent));
+}
+
 .workspace-item.waiting .workspace-copy small {
   color: var(--accent);
 }
