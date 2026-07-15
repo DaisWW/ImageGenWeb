@@ -20,9 +20,12 @@
     const contentType = response.headers.get("content-type") || "";
     const payload = contentType.includes("application/json") ? await response.json() : null;
     if (!response.ok) {
-      const error = new Error(payload?.error || `请求失败（HTTP ${response.status}）`);
+      const errorId = payload?.error_id || "";
+      const message = payload?.error || `请求失败（HTTP ${response.status}）`;
+      const error = new Error(errorId ? `${message}（错误 ID：${errorId}）` : message);
       error.code = payload?.code || "request_failed";
       error.status = response.status;
+      error.errorId = errorId;
       throw error;
     }
     return payload;
@@ -51,8 +54,8 @@
     const lucide = window.lucide;
     if (!lucide) return;
     const placeholders = [
-      ...(root.matches?.("[data-lucide]") ? [root] : []),
-      ...root.querySelectorAll("[data-lucide]"),
+      ...(root.matches?.("[data-lucide]:not(svg)") ? [root] : []),
+      ...root.querySelectorAll("[data-lucide]:not(svg)"),
     ];
     placeholders.forEach((placeholder) => {
       const name = placeholder.dataset.lucide;

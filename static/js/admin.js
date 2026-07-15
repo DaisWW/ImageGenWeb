@@ -11,24 +11,41 @@
     failed: "失败",
     canceled: "已取消",
   };
+  const LOG_CATEGORY = { chat: "对话", generation: "生成", worker: "Worker", web: "Web" };
+  const LOG_STATUS = { success: "成功", error: "失败" };
   const copy = (value) => JSON.parse(JSON.stringify(value));
 
   class AdminApp {
     constructor() {
       this.activeTab = "users";
       this.users = [];
+      this.generationWorkspaces = null;
       this.spending = {};
       this.jobs = [];
       this.jobsInitialized = false;
       this.channelConfig = null;
       this.chatConfig = null;
+      this.systemConfig = null;
+      this.logMode = "runtime";
+      this.logs = [];
+      this.logOffsets = { runtime: 0, audit: 0 };
+      this.logPageSize = 50;
+      this.logTotal = 0;
+      this.logsLoading = false;
+      this.logsReloadPending = false;
+      this.logsReloadNotify = false;
+      this.lastLogPoll = 0;
       this.reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
       this.cacheElements();
       this.bindEvents();
       window.requestAnimationFrame(() => this.updateTabIndicator(false));
       this.loadUsers();
+      this.loadSettings(false);
       this.pollTimer = window.setInterval(() => {
         if (this.activeTab === "generations") this.loadJobs(false);
+        if (this.activeTab === "logs" && this.logMode === "runtime" && Date.now() - this.lastLogPoll > 10000) {
+          this.loadLogs(false);
+        }
       }, 3500);
     }
 
@@ -44,6 +61,9 @@
         createUserButton: byId("createUserButton"),
         userDialog: byId("userDialog"),
         userForm: byId("userForm"),
+        editUserDialog: byId("editUserDialog"),
+        editUserDialogTitle: byId("editUserDialogTitle"),
+        editUserForm: byId("editUserForm"),
         balanceDialog: byId("balanceDialog"),
         balanceForm: byId("balanceForm"),
         balanceDialogTitle: byId("balanceDialogTitle"),
@@ -53,6 +73,29 @@
         adminJobList: byId("adminJobList"),
         queueOverview: byId("queueOverview"),
         refreshJobsButton: byId("refreshJobsButton"),
+        generationFilterForm: byId("generationFilterForm"),
+        generationUserFilter: byId("generationUserFilter"),
+        generationWorkspaceFilter: byId("generationWorkspaceFilter"),
+        clearGenerationFilters: byId("clearGenerationFilters"),
+        logModeButtons: [...document.querySelectorAll("[data-log-mode]")],
+        logOverview: byId("logOverview"),
+        refreshLogsButton: byId("refreshLogsButton"),
+        runtimeLogFilterForm: byId("runtimeLogFilterForm"),
+        auditLogFilterForm: byId("auditLogFilterForm"),
+        runtimeLogUserFilter: byId("runtimeLogUserFilter"),
+        auditLogUserFilter: byId("auditLogUserFilter"),
+        runtimeLogTable: byId("runtimeLogTable"),
+        auditLogTable: byId("auditLogTable"),
+        runtimeLogTableBody: byId("runtimeLogTableBody"),
+        auditLogTableBody: byId("auditLogTableBody"),
+        logPageSummary: byId("logPageSummary"),
+        previousLogPage: byId("previousLogPage"),
+        nextLogPage: byId("nextLogPage"),
+        logDetailDialog: byId("logDetailDialog"),
+        logDetailKind: byId("logDetailKind"),
+        logDetailTitle: byId("logDetailTitle"),
+        logDetailMeta: byId("logDetailMeta"),
+        logDetailData: byId("logDetailData"),
         channelTableBody: byId("channelTableBody"),
         configVersion: byId("configVersion"),
         configError: byId("configError"),
@@ -73,8 +116,6 @@
         workspacePromptsForm: byId("workspacePromptsForm"),
         contextSettingsButton: byId("contextSettingsButton"),
         createChatModelButton: byId("createChatModelButton"),
-        promptDraftModelForm: byId("promptDraftModelForm"),
-        promptDraftModelSelect: byId("promptDraftModelSelect"),
         chatModelDialog: byId("chatModelDialog"),
         chatModelDialogTitle: byId("chatModelDialogTitle"),
         chatModelForm: byId("chatModelForm"),
@@ -88,12 +129,27 @@
 
     bindEvents() {
       this.el.tabs.forEach((tab) => tab.addEventListener("click", () => this.selectTab(tab.dataset.tab)));
-      this.el.createUserButton.addEventListener("click", () => UI.openDialog(this.el.userDialog));
+      this.el.createUserButton.addEventListener("click", () => this.openCreateUserDialog());
       this.el.userForm.addEventListener("submit", (event) => this.createUser(event));
+      this.el.editUserForm.addEventListener("submit", (event) => this.updateUser(event));
       this.el.userTableBody.addEventListener("click", (event) => this.handleUserAction(event));
       this.el.balanceForm.addEventListener("submit", (event) => this.adjustBalance(event));
       this.el.resetForm.addEventListener("submit", (event) => this.resetPassword(event));
       this.el.refreshJobsButton.addEventListener("click", () => this.loadJobs(true));
+      this.el.generationFilterForm.addEventListener("submit", (event) => this.applyGenerationFilters(event));
+      this.el.generationUserFilter.addEventListener("change", () => this.renderGenerationWorkspaceFilter());
+      this.el.clearGenerationFilters.addEventListener("click", () => this.clearGenerationFilters());
+      this.el.logModeButtons.forEach((button) => button.addEventListener("click", () => this.selectLogMode(button.dataset.logMode)));
+      this.el.refreshLogsButton.addEventListener("click", () => this.loadLogs(true));
+      this.el.runtimeLogFilterForm.addEventListener("submit", (event) => this.applyLogFilters(event));
+      this.el.auditLogFilterForm.addEventListener("submit", (event) => this.applyLogFilters(event));
+      document.querySelectorAll("[data-clear-log-filters]").forEach((button) => {
+        button.addEventListener("click", () => this.clearLogFilters(button.dataset.clearLogFilters));
+      });
+      this.el.runtimeLogTableBody.addEventListener("click", (event) => this.handleLogAction(event));
+      this.el.auditLogTableBody.addEventListener("click", (event) => this.handleLogAction(event));
+      this.el.previousLogPage.addEventListener("click", () => this.changeLogPage(-1));
+      this.el.nextLogPage.addEventListener("click", () => this.changeLogPage(1));
       this.el.adminJobList.addEventListener("click", (event) => this.handleJobAction(event));
       this.el.queueSettingsButton.addEventListener("click", () => this.openQueueDialog());
       this.el.createChannelButton.addEventListener("click", () => this.openChannelDialog());
@@ -109,7 +165,6 @@
       this.el.workspacePromptsForm.addEventListener("submit", (event) => this.saveWorkspacePrompts(event));
       this.el.contextSettingsButton.addEventListener("click", () => this.openContextDialog());
       this.el.createChatModelButton.addEventListener("click", () => this.openChatModelDialog());
-      this.el.promptDraftModelForm.addEventListener("submit", (event) => this.savePromptDraftModel(event));
       this.el.chatModelTableBody.addEventListener("click", (event) => this.handleChatModelAction(event));
       this.el.chatModelForm.addEventListener("submit", (event) => this.saveChatModel(event));
       this.el.contextForm.addEventListener("submit", (event) => this.saveContext(event));
@@ -128,11 +183,14 @@
       this.updateTabIndicator();
       if (changed) this.animateAdminView(name, nextIndex >= previousIndex ? 1 : -1);
       if (name === "users") this.loadUsers();
-      if (name === "generations") this.loadJobs();
+      if (name === "generations") {
+        this.loadGenerationFilters().then(() => this.loadJobs());
+      }
       if (name === "channels") {
         this.loadChannels();
         this.loadChatModels();
       }
+      if (name === "logs") this.loadLogs();
       if (name === "settings") this.loadSettings();
     }
 
@@ -167,6 +225,8 @@
         this.users = data.users;
         this.spending = data.spending;
         this.renderUsers();
+        this.renderLogUserFilters();
+        if (this.generationWorkspaces !== null) this.renderGenerationWorkspaceFilter();
       } catch (error) {
         UI.toast(error.message, "error");
       }
@@ -185,6 +245,7 @@
           <td>${user.generation_concurrency}</td>
           <td>${UI.dateTime(user.last_login_at)}</td>
           <td class="actions-cell"><div class="row-actions">
+            <button class="icon-button" type="button" data-edit-user="${user.id}" title="编辑用户" aria-label="编辑用户"><i data-lucide="pencil"></i></button>
             <button class="icon-button" type="button" data-balance-user="${user.id}" title="调整余额" aria-label="调整余额"><i data-lucide="wallet-cards"></i></button>
             <button class="icon-button" type="button" data-reset-user="${user.id}" title="重置密码" aria-label="重置密码"><i data-lucide="key-round"></i></button>
             <button class="icon-button ${user.status === "active" ? "danger" : "accent"}" type="button" data-status-user="${user.id}" data-next-status="${user.status === "active" ? "disabled" : "active"}" title="${user.status === "active" ? "停用账户" : "启用账户"}" aria-label="${user.status === "active" ? "停用账户" : "启用账户"}"><i data-lucide="${user.status === "active" ? "user-x" : "user-check"}"></i></button>
@@ -193,11 +254,32 @@
       UI.icons(this.el.userTableBody);
     }
 
+    renderLogUserFilters() {
+      const runtimeValue = this.el.runtimeLogUserFilter.value;
+      const auditValue = this.el.auditLogUserFilter.value;
+      const options = this.users.map((user) => `<option value="${user.id}">${UI.escapeHtml(user.display_name || user.username)} · ${UI.escapeHtml(user.username)}</option>`).join("");
+      const admins = this.users.filter((user) => user.role === "admin").map((user) => `<option value="${user.id}">${UI.escapeHtml(user.display_name || user.username)} · ${UI.escapeHtml(user.username)}</option>`).join("");
+      this.el.runtimeLogUserFilter.innerHTML = `<option value="">全部用户</option>${options}`;
+      this.el.auditLogUserFilter.innerHTML = `<option value="">全部管理员</option>${admins}`;
+      this.el.runtimeLogUserFilter.value = runtimeValue;
+      this.el.auditLogUserFilter.value = auditValue;
+    }
+
     userById(id) {
       return this.users.find((user) => user.id === Number(id));
     }
 
     async handleUserAction(event) {
+      const edit = event.target.closest("[data-edit-user]");
+      if (edit) {
+        const user = this.userById(edit.dataset.editUser);
+        this.el.editUserDialogTitle.textContent = `编辑 ${user.display_name || user.username}`;
+        this.el.editUserForm.elements.user_id.value = user.id;
+        this.el.editUserForm.elements.display_name.value = user.display_name || "";
+        this.el.editUserForm.elements.generation_concurrency.value = user.generation_concurrency;
+        UI.openDialog(this.el.editUserDialog);
+        return;
+      }
       const balance = event.target.closest("[data-balance-user]");
       if (balance) {
         const user = this.userById(balance.dataset.balanceUser);
@@ -235,6 +317,13 @@
       }
     }
 
+    openCreateUserDialog() {
+      this.el.userForm.reset();
+      this.el.userForm.elements.generation_concurrency.value =
+        this.systemConfig?.runtime?.default_user_concurrency ?? 2;
+      UI.openDialog(this.el.userDialog);
+    }
+
     async createUser(event) {
       event.preventDefault();
       const submit = this.el.userForm.querySelector('[type="submit"]');
@@ -247,6 +336,29 @@
         UI.closeDialog(this.el.userDialog);
         await this.loadUsers();
         UI.toast("用户已创建", "success");
+      } catch (error) {
+        UI.toast(error.message, "error");
+      } finally {
+        submit.disabled = false;
+      }
+    }
+
+    async updateUser(event) {
+      event.preventDefault();
+      const form = Object.fromEntries(new FormData(this.el.editUserForm));
+      const submit = this.el.editUserForm.querySelector('[type="submit"]');
+      submit.disabled = true;
+      try {
+        await UI.api(`/api/admin/users/${form.user_id}`, {
+          method: "PUT",
+          body: {
+            display_name: form.display_name,
+            generation_concurrency: Number(form.generation_concurrency),
+          },
+        });
+        UI.closeDialog(this.el.editUserDialog);
+        await this.loadUsers();
+        UI.toast("用户设置已更新", "success");
       } catch (error) {
         UI.toast(error.message, "error");
       } finally {
@@ -302,7 +414,10 @@
       try {
         const wasInitialized = this.jobsInitialized;
         const previous = new Map(this.jobs.map((job) => [String(job.id), this.jobMotionSignature(job)]));
-        const data = await UI.api("/api/admin/generations?limit=100");
+        const params = new URLSearchParams({ limit: "100" });
+        if (this.el.generationUserFilter.value) params.set("user_id", this.el.generationUserFilter.value);
+        if (this.el.generationWorkspaceFilter.value) params.set("workspace_id", this.el.generationWorkspaceFilter.value);
+        const data = await UI.api(`/api/admin/generations?${params.toString()}`);
         this.jobs = data.jobs;
         this.el.queueOverview.textContent = `生成中 ${data.running_images} 张 · 排队 ${data.queued_images} 张 · 共 ${data.jobs.length} 条记录`;
         this.renderJobs(previous, wasInitialized);
@@ -316,6 +431,207 @@
           this.el.refreshJobsButton.classList.remove("is-loading");
           this.el.refreshJobsButton.removeAttribute("aria-busy");
         }
+      }
+    }
+
+    async loadGenerationFilters() {
+      if (this.generationWorkspaces !== null) return;
+      try {
+        const data = await UI.api("/api/admin/generation-filters");
+        this.generationWorkspaces = data.workspaces || [];
+        this.el.generationUserFilter.innerHTML = [
+          '<option value="">全部用户</option>',
+          ...(data.users || []).map((user) => `<option value="${UI.escapeHtml(String(user.id))}">${UI.escapeHtml(user.display_name || user.username)} · ${UI.escapeHtml(user.username)}</option>`),
+        ].join("");
+        this.renderGenerationWorkspaceFilter();
+      } catch (error) {
+        UI.toast(error.message, "error");
+      }
+    }
+
+    renderGenerationWorkspaceFilter() {
+      const userId = this.el.generationUserFilter.value;
+      const currentWorkspaceId = this.el.generationWorkspaceFilter.value;
+      const availableWorkspaces = this.generationWorkspaces || [];
+      const workspaces = userId
+        ? availableWorkspaces.filter((workspace) => String(workspace.user_id) === userId)
+        : availableWorkspaces;
+      this.el.generationWorkspaceFilter.innerHTML = [
+        '<option value="">全部工作站</option>',
+        ...workspaces.map((workspace) => {
+          const owner = this.users.find((user) => user.id === workspace.user_id);
+          const ownerLabel = owner ? ` · ${owner.display_name || owner.username}` : "";
+          return `<option value="${UI.escapeHtml(workspace.id)}">${UI.escapeHtml(workspace.name)}${UI.escapeHtml(ownerLabel)}</option>`;
+        }),
+      ].join("");
+      const canKeepSelection = workspaces.some((workspace) => workspace.id === currentWorkspaceId);
+      this.el.generationWorkspaceFilter.value = canKeepSelection ? currentWorkspaceId : "";
+    }
+
+    async applyGenerationFilters(event) {
+      event.preventDefault();
+      await this.loadJobs(true);
+    }
+
+    async clearGenerationFilters() {
+      this.el.generationUserFilter.value = "";
+      this.el.generationWorkspaceFilter.value = "";
+      this.renderGenerationWorkspaceFilter();
+      await this.loadJobs(true);
+    }
+
+    selectLogMode(mode) {
+      if (!['runtime', 'audit'].includes(mode) || mode === this.logMode) return;
+      this.logMode = mode;
+      this.el.logModeButtons.forEach((button) => button.classList.toggle("active", button.dataset.logMode === mode));
+      this.el.runtimeLogFilterForm.hidden = mode !== "runtime";
+      this.el.auditLogFilterForm.hidden = mode !== "audit";
+      this.el.runtimeLogTable.hidden = mode !== "runtime";
+      this.el.auditLogTable.hidden = mode !== "audit";
+      this.loadLogs();
+    }
+
+    async applyLogFilters(event) {
+      event.preventDefault();
+      this.logOffsets[this.logMode] = 0;
+      await this.loadLogs(true);
+    }
+
+    async clearLogFilters(mode) {
+      const form = mode === "audit" ? this.el.auditLogFilterForm : this.el.runtimeLogFilterForm;
+      form.reset();
+      this.logOffsets[mode] = 0;
+      if (mode === this.logMode) await this.loadLogs(true);
+    }
+
+    async changeLogPage(direction) {
+      const next = Math.max(0, this.logOffsets[this.logMode] + direction * this.logPageSize);
+      if (next === this.logOffsets[this.logMode] || next >= this.logTotal && direction > 0) return;
+      this.logOffsets[this.logMode] = next;
+      await this.loadLogs(true);
+    }
+
+    async loadLogs(notify = true) {
+      if (this.logsLoading) {
+        this.logsReloadPending = true;
+        this.logsReloadNotify = this.logsReloadNotify || notify;
+        return;
+      }
+      this.logsLoading = true;
+      this.el.refreshLogsButton.classList.add("is-loading");
+      try {
+        const mode = this.logMode;
+        const form = mode === "audit" ? this.el.auditLogFilterForm : this.el.runtimeLogFilterForm;
+        const params = new URLSearchParams({
+          limit: String(this.logPageSize),
+          offset: String(this.logOffsets[mode]),
+        });
+        for (const [name, value] of new FormData(form)) {
+          if (String(value).trim()) params.set(name, String(value).trim());
+        }
+        const endpoint = mode === "audit" ? "audit-logs" : "runtime-logs";
+        const data = await UI.api(`/api/admin/${endpoint}?${params.toString()}`);
+        if (mode !== this.logMode || this.logsReloadPending) return;
+        this.logs = data.logs || [];
+        this.logTotal = Number(data.total || 0);
+        this.lastLogPoll = Date.now();
+        this.renderLogs();
+      } catch (error) {
+        if (notify) UI.toast(error.message, "error");
+      } finally {
+        this.logsLoading = false;
+        this.el.refreshLogsButton.classList.remove("is-loading");
+        if (this.logsReloadPending) {
+          const pendingNotify = this.logsReloadNotify;
+          this.logsReloadPending = false;
+          this.logsReloadNotify = false;
+          void this.loadLogs(pendingNotify);
+        }
+      }
+    }
+
+    renderLogs() {
+      if (this.logMode === "audit") this.renderAuditLogs();
+      else this.renderRuntimeLogs();
+      const offset = this.logOffsets[this.logMode];
+      const first = this.logTotal ? offset + 1 : 0;
+      const last = Math.min(offset + this.logs.length, this.logTotal);
+      this.el.logOverview.textContent = `${this.logMode === "audit" ? "操作审计" : "运行日志"} · ${this.logTotal} 条`;
+      this.el.logPageSummary.textContent = `${first}-${last} / ${this.logTotal}`;
+      this.el.previousLogPage.disabled = offset === 0;
+      this.el.nextLogPage.disabled = offset + this.logs.length >= this.logTotal;
+    }
+
+    renderRuntimeLogs() {
+      if (!this.logs.length) {
+        this.el.runtimeLogTableBody.innerHTML = '<tr><td colspan="7" class="log-empty-cell">暂无运行日志</td></tr>';
+        return;
+      }
+      this.el.runtimeLogTableBody.innerHTML = this.logs.map((log) => {
+        const elapsed = log.elapsed_seconds == null ? "--" : `${Number(log.elapsed_seconds).toFixed(3)}s`;
+        const user = log.user_label || (log.user_id ? `用户 #${log.user_id}` : "系统");
+        const workspace = log.workspace_label || log.workspace_id || "--";
+        const provider = log.provider_label || log.provider_id || "--";
+        const model = log.model || "--";
+        const error = log.error_code || (log.http_status ? `HTTP ${log.http_status}` : "--");
+        return `<tr>
+          <td><span class="log-primary">${UI.dateTime(log.created_at)}</span><small class="log-secondary">${UI.escapeHtml(log.source)}</small></td>
+          <td><span class="status-badge ${log.status === "error" ? "failed" : "succeeded"}"><span></span>${LOG_STATUS[log.status] || UI.escapeHtml(log.status)}</span></td>
+          <td><span class="log-primary">${UI.escapeHtml(LOG_CATEGORY[log.category] || log.category)}</span><small class="log-secondary">${UI.escapeHtml(log.event)}</small></td>
+          <td><span class="log-primary">${UI.escapeHtml(user)}</span><small class="log-secondary">${UI.escapeHtml(workspace)}</small></td>
+          <td><span class="log-primary">${UI.escapeHtml(provider)}</span><small class="log-secondary">${UI.escapeHtml(model)}</small></td>
+          <td><span class="log-primary ${log.status === "error" ? "log-error" : ""}">${UI.escapeHtml(error)}</span><small class="log-secondary">${UI.escapeHtml(elapsed)}</small></td>
+          <td class="actions-cell"><button class="icon-button" type="button" data-log-detail="${UI.escapeHtml(log.id)}" data-log-kind="runtime" title="查看详情" aria-label="查看详情"><i data-lucide="eye"></i></button></td>
+        </tr>`;
+      }).join("");
+      UI.icons(this.el.runtimeLogTableBody);
+    }
+
+    renderAuditLogs() {
+      if (!this.logs.length) {
+        this.el.auditLogTableBody.innerHTML = '<tr><td colspan="5" class="log-empty-cell">暂无操作审计</td></tr>';
+        return;
+      }
+      this.el.auditLogTableBody.innerHTML = this.logs.map((log) => `<tr>
+        <td><span class="log-primary">${UI.dateTime(log.created_at)}</span><small class="log-secondary">#${log.id}</small></td>
+        <td><span class="log-primary">${UI.escapeHtml(log.actor_label)}</span><small class="log-secondary">${log.actor_user_id ? `用户 #${log.actor_user_id}` : "系统"}</small></td>
+        <td><span class="log-primary">${UI.escapeHtml(log.action)}</span></td>
+        <td><span class="log-primary">${UI.escapeHtml(log.target_type)}</span><small class="log-secondary">${UI.escapeHtml(log.target_id)}</small></td>
+        <td class="actions-cell"><button class="icon-button" type="button" data-log-detail="${log.id}" data-log-kind="audit" title="查看详情" aria-label="查看详情"><i data-lucide="eye"></i></button></td>
+      </tr>`).join("");
+      UI.icons(this.el.auditLogTableBody);
+    }
+
+    handleLogAction(event) {
+      const button = event.target.closest("[data-log-detail]");
+      if (button) this.openLogDetail(button.dataset.logKind, button.dataset.logDetail);
+    }
+
+    async openLogDetail(kind, id) {
+      try {
+        const endpoint = kind === "audit" ? "audit-logs" : "runtime-logs";
+        const data = await UI.api(`/api/admin/${endpoint}/${encodeURIComponent(id)}`);
+        const log = data.log;
+        const fields = kind === "audit"
+          ? [
+              ["日志 ID", log.id], ["时间", UI.dateTime(log.created_at)], ["管理员", log.actor_label],
+              ["操作", log.action], ["对象类型", log.target_type], ["对象 ID", log.target_id],
+            ]
+          : [
+              ["日志 ID", log.id], ["时间", UI.dateTime(log.created_at)], ["状态", LOG_STATUS[log.status] || log.status],
+              ["分类", LOG_CATEGORY[log.category] || log.category], ["事件", log.event], ["来源", log.source],
+              ["用户", log.user_label || log.user_id], ["工作站", log.workspace_label || log.workspace_id],
+              ["任务 ID", log.job_id], ["条目 ID", log.item_id], ["渠道", log.provider_label || log.provider_id],
+              ["模型", log.model], ["错误码", log.error_code], ["HTTP 状态", log.http_status],
+              ["上游请求 ID", log.upstream_request_id], ["耗时", log.elapsed_seconds == null ? "" : `${Number(log.elapsed_seconds).toFixed(3)}s`],
+            ];
+        this.el.logDetailKind.textContent = kind === "audit" ? "Audit Log" : "Runtime Log";
+        this.el.logDetailTitle.textContent = log.message || log.action || "日志详情";
+        this.el.logDetailMeta.innerHTML = fields.filter(([, value]) => value !== "" && value != null).map(([label, value]) => `<div><dt>${UI.escapeHtml(label)}</dt><dd>${UI.escapeHtml(value)}</dd></div>`).join("");
+        this.el.logDetailData.textContent = JSON.stringify(log.details || {}, null, 2);
+        UI.openDialog(this.el.logDetailDialog);
+      } catch (error) {
+        UI.toast(error.message, "error");
       }
     }
 
@@ -426,13 +742,12 @@
 
       const capabilities = channel?.capabilities || {};
       this.setChecks(form, "mode", capabilities.modes || ["text2img", "img2img"], ["text2img", "img2img"]);
-      this.setChecks(form, "quality", capabilities.qualities || ["medium"], ["auto", "low", "medium", "high"]);
+      this.setChecks(form, "quality", capabilities.qualities || ["auto"], ["auto", "low", "medium", "high"]);
       this.setChecks(form, "format", capabilities.formats || ["png"], ["png", "jpeg", "webp"]);
       form.elements.sizes.value = (capabilities.sizes || ["1024x1024"]).join(", ");
       form.elements.max_reference_images.value = capabilities.max_reference_images ?? 1;
       form.elements.max_reference_image_mb.value = capabilities.max_reference_image_mb ?? 10;
       form.elements.max_reference_total_mb.value = capabilities.max_reference_total_mb ?? 40;
-      form.elements.reference_field.value = capabilities.reference_field || "image";
       form.elements.max_concurrency.value = channel?.limits.max_concurrency ?? 2;
       form.elements.timeout_seconds.value = channel?.limits.timeout_seconds ?? 600;
       form.elements.estimated_seconds.value = channel?.limits.estimated_seconds ?? 180;
@@ -523,7 +838,6 @@
           max_reference_images: Number(form.elements.max_reference_images.value),
           max_reference_image_mb: Number(form.elements.max_reference_image_mb.value),
           max_reference_total_mb: Number(form.elements.max_reference_total_mb.value),
-          reference_field: form.elements.reference_field.value,
         },
         limits: {
           max_concurrency: Number(form.elements.max_concurrency.value),
@@ -587,11 +901,6 @@
       this.el.chatConfigVersion.textContent = `${origin} · 版本 ${config.version} · 最大上下文 ${context.max_context_tokens.toLocaleString()} tokens`;
       this.el.chatConfigError.hidden = !config.last_error;
       this.el.chatConfigError.textContent = config.last_error || "";
-      this.el.promptDraftModelSelect.innerHTML = [
-        '<option value="">跟随用户选择</option>',
-        ...config.models.map((model) => `<option value="${UI.escapeHtml(model.id)}">${UI.escapeHtml(model.label)} · ${UI.escapeHtml(model.model)}</option>`),
-      ].join("");
-      this.el.promptDraftModelSelect.value = config.prompt_draft_model_id || "";
       this.el.chatModelTableBody.innerHTML = config.models.map((model) => `
         <tr>
           <td><strong>${UI.escapeHtml(model.label)}</strong><small class="subline">${UI.escapeHtml(model.id)}</small></td>
@@ -640,7 +949,6 @@
       if (!window.confirm(`删除对话模型“${model.label}”？`)) return;
       const next = copy(this.chatConfig);
       next.models = next.models.filter((item) => item.id !== model.id);
-      if (next.prompt_draft_model_id === model.id) next.prompt_draft_model_id = "";
       try {
         await this.persistChatModels(next, "对话模型已删除");
       } catch (error) {
@@ -682,7 +990,10 @@
 
     openWorkspacePromptsDialog() {
       const prompts = this.chatConfig?.workspace_prompts;
-      if (!prompts) return;
+      const systemPrompts = this.chatConfig?.system_prompts;
+      if (!prompts || !systemPrompts) return;
+      this.el.workspacePromptsForm.elements.chat.value = systemPrompts.chat;
+      this.el.workspacePromptsForm.elements.summary.value = systemPrompts.summary;
       this.el.workspacePromptsForm.elements.image.value = prompts.image;
       this.el.workspacePromptsForm.elements.animation.value = prompts.animation;
       UI.openDialog(this.el.workspacePromptsDialog);
@@ -694,11 +1005,15 @@
       submit.disabled = true;
       try {
         const next = copy(this.chatConfig);
+        next.system_prompts = {
+          chat: this.el.workspacePromptsForm.elements.chat.value.trim(),
+          summary: this.el.workspacePromptsForm.elements.summary.value.trim(),
+        };
         next.workspace_prompts = {
           image: this.el.workspacePromptsForm.elements.image.value.trim(),
           animation: this.el.workspacePromptsForm.elements.animation.value.trim(),
         };
-        await this.persistChatModels(next, "工作站提示词已更新");
+        await this.persistChatModels(next, "提示词策略已更新");
         UI.closeDialog(this.el.workspacePromptsDialog);
       } catch (error) {
         UI.toast(error.message, "error");
@@ -732,27 +1047,12 @@
       }
     }
 
-    async savePromptDraftModel(event) {
-      event.preventDefault();
-      const submit = this.el.promptDraftModelForm.querySelector('[type="submit"]');
-      submit.disabled = true;
-      try {
-        const next = copy(this.chatConfig);
-        next.prompt_draft_model_id = this.el.promptDraftModelSelect.value;
-        await this.persistChatModels(next, "提示词整理模型已更新");
-      } catch (error) {
-        UI.toast(error.message, "error");
-      } finally {
-        submit.disabled = false;
-      }
-    }
-
     async persistChatModels(config, message) {
       const data = await UI.api("/api/admin/chat-models", {
         method: "PUT",
         body: {
           revision: this.chatConfig.revision,
-          prompt_draft_model_id: config.prompt_draft_model_id,
+          system_prompts: config.system_prompts,
           workspace_prompts: config.workspace_prompts,
           context: config.context,
           models: config.models,
@@ -773,13 +1073,28 @@
       return values.filter((value) => form.elements[`${prefix}_${value}`].checked);
     }
 
-    async loadSettings() {
+    applySystemConfig(data) {
+      this.systemConfig = data;
+      this.el.siteTitleInput.value = data.site_title;
+      this.el.versionInput.value = data.version;
+      Object.entries(data.runtime || {}).forEach(([name, value]) => {
+        const input = this.el.settingsForm.elements[name];
+        if (!input) return;
+        if (input.type === "checkbox") input.checked = value === true;
+        else input.value = value;
+      });
+      if (!this.el.userDialog.open) {
+        this.el.userForm.elements.generation_concurrency.value =
+          data.runtime?.default_user_concurrency ?? 2;
+      }
+    }
+
+    async loadSettings(notify = true) {
       try {
         const data = await UI.api("/api/admin/settings");
-        this.el.siteTitleInput.value = data.site_title;
-        this.el.versionInput.value = data.version;
+        this.applySystemConfig(data);
       } catch (error) {
-        UI.toast(error.message, "error");
+        if (notify) UI.toast(error.message, "error");
       }
     }
 
@@ -788,12 +1103,23 @@
       const submit = this.el.settingsForm.querySelector('[type="submit"]');
       submit.disabled = true;
       try {
-        const data = await UI.api("/api/admin/settings", {
-          method: "PUT", body: { site_title: this.el.siteTitleInput.value },
+        const runtime = {};
+        Object.keys(this.systemConfig?.runtime || {}).forEach((name) => {
+          const input = this.el.settingsForm.elements[name];
+          runtime[name] = input.type === "checkbox" ? input.checked : Number(input.value);
         });
+        const data = await UI.api("/api/admin/settings", {
+          method: "PUT",
+          body: {
+            site_title: this.el.siteTitleInput.value,
+            revision: this.systemConfig?.revision || "",
+            runtime,
+          },
+        });
+        this.applySystemConfig(data);
         document.querySelectorAll("[data-site-title]").forEach((node) => { node.textContent = data.site_title; });
         document.title = `管理后台 · ${data.site_title}`;
-        UI.toast("系统 Title 已更新", "success");
+        UI.toast("系统设置已更新", "success");
       } catch (error) {
         UI.toast(error.message, "error");
       } finally {
