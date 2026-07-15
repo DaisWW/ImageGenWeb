@@ -1109,6 +1109,19 @@ select option {
   background: #17150f;
 }
 
+.message-row.error .message-card {
+  border-color: #6a3338;
+  background: var(--danger-muted);
+}
+
+.message-row.error .message-content {
+  color: #efb0b3;
+}
+
+.message-row.error .button {
+  margin-top: 11px;
+}
+
 .message-meta {
   display: flex;
   min-width: 0;

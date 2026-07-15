@@ -226,6 +226,7 @@
         referenceLimit: byId("referenceLimit"),
         promptInput: byId("promptInput"),
         promptCounter: byId("promptCounter"),
+        priceEstimateLabel: byId("priceEstimateLabel"),
         priceEstimate: byId("priceEstimate"),
         saveState: byId("saveState"),
         generateButton: byId("generateButton"),
@@ -314,6 +315,11 @@
       this.el.chatReferenceButton.addEventListener("click", () => this.toggleChatReferences());
       this.el.chatReferenceList.addEventListener("click", (event) => this.handleChatReferenceClick(event));
       this.el.messageList.addEventListener("click", (event) => {
+        const retryButton = event.target.closest("[data-retry-message]");
+        if (retryButton) {
+          this.retryChatMessage(retryButton.dataset.retryMessage);
+          return;
+        }
         const button = event.target.closest("[data-use-prompt-draft]");
         if (button) {
           this.applyPromptDraft(button.dataset.usePromptDraft);
@@ -1543,6 +1549,14 @@
         content.className = "message-content";
         content.textContent = message.content || "";
         card.append(content);
+        if (message.kind === "error" && message.payload?.retry_user_message_id) {
+          const retry = document.createElement("button");
+          retry.type = "button";
+          retry.className = "button ghost small";
+          retry.dataset.retryMessage = message.id;
+          retry.innerHTML = '<i data-lucide="refresh-cw"></i>重新发送';
+          card.append(retry);
+        }
       }
 
       if (message.attachments?.length) {
@@ -1639,7 +1653,7 @@
         return;
       }
       this.startLocalChatOperation(workspaceId, "reply", "正在等待 AI 回复");
-      let rejectedAsBusy = false;
+      let failure = null;
       try {
         await this.flushSettings();
         if (this.activeWorkspace?.id !== workspaceId) return;
@@ -1656,6 +1670,7 @@
         selection.clear();
         this.chatReferencePickerOpen = false;
         this.renderChatReferences();
+        this.renderMessages();
         const data = await UI.api(`/api/workspaces/${workspaceId}/messages`, {
           method: "POST",
           body: {
@@ -1685,11 +1700,38 @@
           this.chatReferencePickerOpen = attachmentIds.length > 0;
           this.renderChatReferences();
         }
-        rejectedAsBusy = error.code === "conversation_busy";
-        UI.toast(error.message, "error");
+        failure = error;
       } finally {
-        this.finishLocalChatOperation(workspaceId);
-        if (rejectedAsBusy) await this.loadMessages(workspaceId);
+        await this.finishLocalChatOperation(workspaceId, failure);
+      }
+    }
+
+    async retryChatMessage(errorMessageId) {
+      if (this.workspaceLoading || !this.activeWorkspace
+        || this.workspaceChatBusy() || this.workspaceHasActiveJob()) return;
+      const workspaceId = this.activeWorkspace.id;
+      const modelId = this.el.chatModelSelect.value;
+      if (!modelId) {
+        UI.toast("管理员尚未配置可用的对话模型", "error");
+        return;
+      }
+      this.startLocalChatOperation(workspaceId, "reply", "正在重新发送消息");
+      let failure = null;
+      try {
+        await this.flushSettings();
+        if (this.activeWorkspace?.id !== workspaceId) return;
+        const data = await UI.api(
+          `/api/workspaces/${workspaceId}/messages/${errorMessageId}/retry`,
+          { method: "POST", body: { model_id: modelId } },
+        );
+        if (this.activeWorkspace?.id === workspaceId) {
+          this.messages.push(data.message);
+          this.conversationContext = data.context;
+        }
+      } catch (error) {
+        failure = error;
+      } finally {
+        await this.finishLocalChatOperation(workspaceId, failure);
       }
     }
 
@@ -1718,7 +1760,7 @@
         "prompt_draft",
         this.isAnimationWorkspace() ? "正在检查并总结帧动画需求" : "正在检查并总结生图需求",
       );
-      let rejectedAsBusy = false;
+      let failure = null;
       try {
         await this.flushSettings();
         if (this.activeWorkspace?.id !== workspaceId) return;
@@ -1749,11 +1791,9 @@
         }
         workspace.settings.translate_prompt = translateToEnglish;
       } catch (error) {
-        rejectedAsBusy = error.code === "conversation_busy";
-        UI.toast(error.message, "error");
+        failure = error;
       } finally {
-        this.finishLocalChatOperation(workspaceId);
-        if (rejectedAsBusy) await this.loadMessages(workspaceId);
+        await this.finishLocalChatOperation(workspaceId, failure);
       }
     }
 
@@ -1796,12 +1836,15 @@
       if (this.activeWorkspace?.id === workspaceId) this.renderMessages();
     }
 
-    finishLocalChatOperation(workspaceId) {
+    async finishLocalChatOperation(workspaceId, failure = null) {
       if (this.chatOperations.get(workspaceId)?.local) {
         this.chatOperations.delete(workspaceId);
       }
       this.renderWorkspaceList();
       if (this.activeWorkspace?.id === workspaceId) this.renderMessages();
+      if (!failure) return;
+      UI.toast(failure.message, "error");
+      await this.loadMessages(workspaceId);
     }
 
     syncServerChatOperation(workspaceId, operation) {
@@ -1860,6 +1903,9 @@
         const activeLocked = workspaceId === this.activeWorkspace?.id
           && (locked || referenceUploading);
         setDisabled(button, this.chatOperations.has(workspaceId) || activeLocked);
+      });
+      this.el.messageList.querySelectorAll("[data-retry-message]").forEach((button) => {
+        setDisabled(button, locked || !hasModel);
       });
       this.el.messageList.querySelectorAll("[data-retry-job]").forEach((button) => {
         setDisabled(button, locked);
@@ -2343,14 +2389,16 @@
         : Math.min(
           this.limits.max_batch_images, Math.max(1, Number(this.el.batchCount.value || 1)),
         );
-      const unit = this.animationNeedsMaster() ? "张母图" : this.isAnimationWorkspace() ? "帧" : "张";
+      const needsMaster = this.animationNeedsMaster();
+      const unit = !needsMaster && this.isAnimationWorkspace() ? "帧" : "张";
       const price = Number(this.currentChannel()?.price_rmb || 0);
+      this.el.priceEstimateLabel.textContent = needsMaster ? "母图预计总价" : `${count} ${unit}预计总价`;
       this.el.priceEstimate.textContent = UI.money(price * count);
       this.channels.forEach((channel, index) => {
         const option = this.el.channelSelect.options[index];
         if (option) {
-          const total = UI.money(Number(channel.price_rmb || 0) * count);
-          option.textContent = `${channel.label} · ${count} ${unit}总价 ${total}${channel.configured ? "" : " · 未配置"}`;
+          const unitPrice = UI.money(channel.price_rmb);
+          option.textContent = `${channel.label} · ${unitPrice}/${unit}${channel.configured ? "" : " · 未配置"}`;
         }
       });
     }
