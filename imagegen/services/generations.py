@@ -22,6 +22,7 @@ from ..models import (
 )
 from .billing import BillingService
 from .common import money, normalize_image_size
+from .settings import SystemSettingsService
 from .workspace_settings import sanitize_workspace_settings
 
 
@@ -38,16 +39,23 @@ class SubmitGeneration:
     batch_count: int
     reference_ids: tuple[str, ...]
     transparent_background: bool = False
-    frame_count: int = 6
-    animation_fps: int = 6
+    frame_count: int = 8
+    animation_fps: int = 8
     animation_loop: bool = True
     animation_format: str = "webp"
+    master_only: bool = False
 
 
 class GenerationService:
-    def __init__(self, channels: ChannelRegistry, billing: BillingService):
+    def __init__(
+        self,
+        channels: ChannelRegistry,
+        billing: BillingService,
+        settings: SystemSettingsService,
+    ):
         self.channels = channels
         self.billing = billing
+        self.settings = settings
 
     def submit(
         self,
@@ -76,10 +84,24 @@ class GenerationService:
         except ValueError as exc:
             raise ServiceError(str(exc)) from exc
         normalized_size = self._validate_request(channel, request, workspace.kind)
-        requested_count = (
-            request.frame_count if workspace.kind == "animation" else request.batch_count
-        )
         references = self._load_references(workspace, request.reference_ids)
+        if request.master_only:
+            if workspace.kind != "animation":
+                raise ServiceError("母图任务仅适用于帧动画工作站")
+            if request.mode != "text2img" or references:
+                raise ServiceError("母图任务必须使用文生图且不能携带垫图")
+            job_kind = "animation_master"
+            requested_count = 1
+        elif workspace.kind == "animation":
+            if request.mode != "img2img" or not references:
+                raise ServiceError("请先生成、上传或选择母图")
+            if len(references) != 1:
+                raise ServiceError("帧动画任务必须且只能选择一张母图")
+            job_kind = "animation"
+            requested_count = request.frame_count
+        else:
+            job_kind = "image"
+            requested_count = request.batch_count
         self._validate_references(channel, request.mode, references)
 
         user = self.billing.lock_user(user_id)
@@ -122,7 +144,7 @@ class GenerationService:
             channel_id=channel.identifier,
             channel_label=channel.label,
             channel_config_version=self.channels.version,
-            kind=workspace.kind,
+            kind=job_kind,
             mode=request.mode,
             prompt=request.prompt.strip(),
             model=selected_model.identifier,
@@ -188,7 +210,8 @@ class GenerationService:
                 "animation_fps": request.animation_fps,
                 "animation_loop": request.animation_loop,
                 "animation_format": request.animation_format,
-            }
+            },
+            self.settings.runtime(),
         )
         db.session.commit()
         return self.get_job(job.id, user_id=user.id)
@@ -267,12 +290,14 @@ class GenerationService:
         admin: bool = False,
         limit: int = 100,
     ) -> list[GenerationJob]:
-        query = select(GenerationJob).options(
+        eager_options = [
             selectinload(GenerationJob.items),
             selectinload(GenerationJob.references).selectinload(GenerationReference.asset),
-            selectinload(GenerationJob.user),
-        )
-        if not admin:
+        ]
+        if admin:
+            eager_options.append(selectinload(GenerationJob.user))
+        query = select(GenerationJob).options(*eager_options)
+        if not admin or user_id is not None:
             query = query.where(GenerationJob.user_id == user_id)
         if workspace_id:
             query = query.where(GenerationJob.workspace_id == workspace_id)
@@ -282,6 +307,43 @@ class GenerationService:
         )
         query = query.order_by(GenerationJob.created_at.desc()).limit(min(max(limit, 1), 200))
         return list(db.session.scalars(query))
+
+    def list_active_jobs(self, user_id: int) -> list[GenerationJob]:
+        return list(
+            db.session.scalars(
+                select(GenerationJob)
+                .options(selectinload(GenerationJob.items))
+                .where(
+                    GenerationJob.user_id == user_id,
+                    GenerationJob.status.in_(("queued", "running", "canceling")),
+                )
+                .order_by(GenerationJob.created_at)
+            )
+        )
+
+    def queue_item_counts(
+        self,
+        *,
+        user_id: int | None = None,
+        workspace_id: str | None = None,
+    ) -> tuple[int, int]:
+        query = (
+            select(GenerationItem.status, func.count(GenerationItem.id))
+            .join(GenerationJob)
+            .where(GenerationItem.status.in_(("running", "canceling", "queued")))
+        )
+        if user_id is not None:
+            query = query.where(GenerationJob.user_id == user_id)
+        if workspace_id:
+            query = query.where(GenerationJob.workspace_id == workspace_id)
+        counts = {
+            status: count
+            for status, count in db.session.execute(query.group_by(GenerationItem.status))
+        }
+        return (
+            int(counts.get("running", 0)) + int(counts.get("canceling", 0)),
+            int(counts.get("queued", 0)),
+        )
 
     def queue_positions(self) -> dict[str, int]:
         queued_ids = list(
@@ -376,15 +438,17 @@ class GenerationService:
             raise ServiceError("选择的垫图不存在")
         return [by_id[asset_id] for asset_id in reference_ids]
 
-    @staticmethod
-    def _validate_request(channel: Channel, request: SubmitGeneration, workspace_kind: str) -> str:
+    def _validate_request(
+        self, channel: Channel, request: SubmitGeneration, workspace_kind: str
+    ) -> str:
+        runtime = self.settings.runtime()
         if workspace_kind not in {"image", "animation"}:
             raise ServiceError("工作站类型无效")
         if request.mode not in channel.capabilities.modes:
             raise ServiceError(f"{channel.label} 不支持当前生成模式")
         prompt = request.prompt.strip()
-        if not prompt or len(prompt) > 8000:
-            raise ServiceError("提示词长度必须在 1 到 8000 个字符之间")
+        if not prompt or len(prompt) > runtime.max_prompt_characters:
+            raise ServiceError(f"提示词长度必须在 1 到 {runtime.max_prompt_characters} 个字符之间")
         normalized_size = normalize_image_size(request.size)
         if request.quality not in channel.capabilities.qualities:
             raise ServiceError(f"{channel.label} 不支持质量 {request.quality}")
@@ -394,22 +458,26 @@ class GenerationService:
             raise ServiceError("透明背景仅支持 PNG 或 WebP 格式")
         if not 0 <= request.compression <= 100:
             raise ServiceError("压缩质量必须在 0 到 100 之间")
-        if not 1 <= request.batch_count <= 20:
-            raise ServiceError("单批生成张数必须在 1 到 20 之间")
-        if not 2 <= request.frame_count <= 20:
-            raise ServiceError("动画帧数必须在 2 到 20 之间")
-        if not 1 <= request.animation_fps <= 24:
-            raise ServiceError("动画帧率必须在 1 到 24 FPS 之间")
+        if not 1 <= request.batch_count <= runtime.max_batch_images:
+            raise ServiceError(f"单批生成张数必须在 1 到 {runtime.max_batch_images} 之间")
+        if not 2 <= request.frame_count <= runtime.max_animation_frames:
+            raise ServiceError(f"动画帧数必须在 2 到 {runtime.max_animation_frames} 之间")
+        if not 1 <= request.animation_fps <= runtime.max_animation_fps:
+            raise ServiceError(f"动画帧率必须在 1 到 {runtime.max_animation_fps} FPS 之间")
         if request.animation_format not in {"webp", "gif"}:
             raise ServiceError("动画导出格式仅支持 WebP 或 GIF")
         return normalized_size
 
-    @staticmethod
-    def _validate_references(channel: Channel, mode: str, references: list[Asset]) -> None:
+    def _validate_references(self, channel: Channel, mode: str, references: list[Asset]) -> None:
         if mode == "img2img" and not references:
             raise ServiceError("垫图生图至少需要一张垫图")
         if mode == "text2img" and references:
             raise ServiceError("文生图任务不能携带垫图")
+        runtime = self.settings.runtime()
+        if any(asset.byte_count > runtime.max_attachment_bytes for asset in references):
+            raise ServiceError(f"单张参考图不能超过 {runtime.max_attachment_mb} MiB")
+        if sum(asset.byte_count for asset in references) > runtime.max_attachment_total_bytes:
+            raise ServiceError(f"参考图合计不能超过 {runtime.max_attachment_total_mb} MiB")
         capabilities = channel.capabilities
         if len(references) > capabilities.max_reference_images:
             raise ServiceError(

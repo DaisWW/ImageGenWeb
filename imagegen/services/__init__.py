@@ -1,11 +1,13 @@
 from ..errors import ServiceError
 from .auth import AuthService
+from .automatic_titles import AutomaticTitleService
 from .billing import BillingService, SpendingSummary
 from .common import money
 from .conversation import ConversationService
 from .generations import GenerationService, SubmitGeneration
 from .retention import RetentionService
-from .settings import SystemSettingsService
+from .runtime_logs import RuntimeLogService
+from .settings import RuntimeSettings, SystemSettingsService
 from .users import UserService
 from .workspace_settings import (
     default_workspace_settings,
@@ -14,11 +16,14 @@ from .workspace_settings import (
 from .workspaces import WorkspaceService
 
 __all__ = [
+    "AutomaticTitleService",
     "AuthService",
     "BillingService",
     "ConversationService",
     "GenerationService",
     "RetentionService",
+    "RuntimeLogService",
+    "RuntimeSettings",
     "ServiceError",
     "SpendingSummary",
     "SubmitGeneration",

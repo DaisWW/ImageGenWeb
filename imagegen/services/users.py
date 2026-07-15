@@ -98,6 +98,43 @@ class UserService:
         db.session.commit()
         return user
 
+    def update_profile(
+        self,
+        user_id: int,
+        *,
+        display_name: str,
+        generation_concurrency: int,
+        actor_user_id: int,
+    ) -> User:
+        if not 1 <= generation_concurrency <= 16:
+            raise ServiceError("用户并发必须在 1 到 16 之间")
+        user = db.session.get(User, user_id)
+        if user is None:
+            raise ServiceError("用户不存在", status_code=404)
+        old = {
+            "display_name": user.display_name,
+            "generation_concurrency": user.generation_concurrency,
+        }
+        user.display_name = display_name.strip()[:100]
+        user.generation_concurrency = generation_concurrency
+        db.session.add(
+            AuditLog(
+                actor_user_id=actor_user_id,
+                action="user.profile.update",
+                target_type="user",
+                target_id=str(user.id),
+                details={
+                    "old": old,
+                    "new": {
+                        "display_name": user.display_name,
+                        "generation_concurrency": user.generation_concurrency,
+                    },
+                },
+            )
+        )
+        db.session.commit()
+        return user
+
     def reset_password(self, user_id: int, password: str, actor_user_id: int) -> None:
         user = db.session.get(User, user_id)
         if user is None:

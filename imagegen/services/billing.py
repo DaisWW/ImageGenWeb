@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Iterable
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 
 from ..errors import ServiceError
 from ..extensions import db
@@ -47,28 +47,31 @@ class BillingService:
             return {}
 
         day_start = _shanghai_day_start_utc(now or utcnow())
-        totals = self._charge_totals(identifiers)
-        today = self._charge_totals(identifiers, since=day_start)
-        return {
-            user_id: SpendingSummary(
-                total_rmb=totals.get(user_id, money(0)),
-                today_rmb=today.get(user_id, money(0)),
+        rows = db.session.execute(
+            select(
+                WalletLedger.user_id,
+                func.sum(WalletLedger.amount_rmb),
+                func.sum(
+                    case(
+                        (WalletLedger.created_at >= day_start, WalletLedger.amount_rmb),
+                        else_=0,
+                    )
+                ),
             )
-            for user_id in identifiers
-        }
-
-    @staticmethod
-    def _charge_totals(
-        user_ids: tuple[int, ...], *, since: datetime | None = None
-    ) -> dict[int, Decimal]:
-        query = select(WalletLedger.user_id, func.sum(WalletLedger.amount_rmb)).where(
-            WalletLedger.entry_type == "generation_charge",
-            WalletLedger.user_id.in_(user_ids),
+            .where(
+                WalletLedger.entry_type == "generation_charge",
+                WalletLedger.user_id.in_(identifiers),
+            )
+            .group_by(WalletLedger.user_id)
         )
-        if since is not None:
-            query = query.where(WalletLedger.created_at >= since)
-        rows = db.session.execute(query.group_by(WalletLedger.user_id))
-        return {user_id: money(-amount) for user_id, amount in rows if amount is not None}
+        summaries = {
+            user_id: SpendingSummary(
+                total_rmb=money(-total),
+                today_rmb=money(-today),
+            )
+            for user_id, total, today in rows
+        }
+        return {user_id: summaries.get(user_id, SpendingSummary()) for user_id in identifiers}
 
     def adjust(
         self,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import os
 import secrets
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 from flask import Flask, jsonify, request
 from flask_login import current_user
 from flask_wtf.csrf import CSRFError
+from werkzeug.exceptions import HTTPException
 
 from .config import (
     ChannelRegistry,
@@ -22,9 +24,11 @@ from .models import User
 from .serializers import display_amount
 from .services import (
     AuthService,
+    AutomaticTitleService,
     BillingService,
     ConversationService,
     GenerationService,
+    RuntimeLogService,
     SystemSettingsService,
     UserService,
     WorkspaceService,
@@ -85,19 +89,29 @@ def create_app(config: dict | None = None) -> Flask:
     auth = AuthService()
     billing = BillingService()
     users = UserService(auth)
+    settings = SystemSettingsService()
+    runtime_logs = RuntimeLogService()
     repository = RuntimeConfigRepository(SecretCipher(app.config["CONFIG_ENCRYPTION_KEY"]))
 
     with app.app_context():
         if app.config.get("AUTO_CREATE_DB", True):
             db.create_all()
         _bootstrap_admin(app, users)
-        channels = ChannelRegistry(app.config["CHANNEL_CONFIG_PATH"], repository.load_channels)
+        channels = ChannelRegistry(
+            app.config["CHANNEL_CONFIG_PATH"],
+            repository.load_channels,
+            repository.channel_revision,
+        )
         chat_models = ChatModelRegistry(
-            app.config["CHAT_MODEL_CONFIG_PATH"], repository.load_chat_models
+            app.config["CHAT_MODEL_CONFIG_PATH"],
+            repository.load_chat_models,
+            repository.chat_revision,
         )
 
     configuration = RuntimeConfigService(repository, channels, chat_models)
+    automatic_titles = AutomaticTitleService(chat_models, app=app)
     services = ApplicationServices(
+        automatic_titles=automatic_titles,
         auth=auth,
         billing=billing,
         users=users,
@@ -105,17 +119,26 @@ def create_app(config: dict | None = None) -> Flask:
             storage,
             billing,
             BASE_DIR / "static" / "assets" / "starter-ocean-sky-reference.png",
+            settings,
         ),
-        generations=GenerationService(channels, billing),
-        conversations=ConversationService(chat_models, storage),
-        settings=SystemSettingsService(),
+        generations=GenerationService(channels, billing, settings),
+        conversations=ConversationService(
+            chat_models,
+            storage,
+            settings,
+            runtime_logs,
+            automatic_titles,
+        ),
+        runtime_logs=runtime_logs,
+        settings=settings,
         configuration=configuration,
     )
     app.extensions["channel_registry"] = channels
     app.extensions["chat_model_registry"] = chat_models
     app.extensions["image_storage"] = storage
-    app.extensions["runtime_config_repository"] = repository
     app.extensions["imagegen_services"] = services
+    if not app.testing:
+        atexit.register(services.close)
     app.register_blueprint(web)
     _register_handlers(app)
 
@@ -164,11 +187,14 @@ def _register_handlers(app: Flask) -> None:
     @app.errorhandler(ServiceError)
     def service_error(error: ServiceError):
         if request.path.startswith("/api/") or request.path.startswith("/account/"):
-            return jsonify(error=str(error), code=error.code), error.status_code
+            payload = {"error": str(error), "code": error.code}
+            if error.error_id:
+                payload["error_id"] = error.error_id
+            return jsonify(payload), error.status_code
         return str(error), error.status_code
 
     @app.errorhandler(CSRFError)
-    def csrf_error(error: CSRFError):
+    def csrf_error(_error: CSRFError):
         if request.path.startswith("/api/") or request.path.startswith("/account/"):
             return jsonify(error="页面凭证已失效，请刷新后重试", code="csrf_error"), 400
         return "页面凭证已失效，请刷新后重试", 400
@@ -183,6 +209,43 @@ def _register_handlers(app: Flask) -> None:
     def too_large(_error):
         return jsonify(error="上传内容超过 45 MiB 限制", code="payload_too_large"), 413
 
+    @app.errorhandler(Exception)
+    def unexpected_error(error: Exception):
+        if isinstance(error, HTTPException):
+            return error
+        db.session.rollback()
+        user_id = current_user.id if current_user.is_authenticated else None
+        user_label = (
+            current_user.display_name or current_user.username
+            if current_user.is_authenticated
+            else ""
+        )
+        entry = app.extensions["imagegen_services"].runtime_logs.commit_best_effort(
+            category="web",
+            event="web.unhandled_exception",
+            status="error",
+            message="Web 请求发生未处理异常",
+            source="web",
+            user_id=user_id,
+            user_label=user_label,
+            error_code="internal_error",
+            details={
+                "exception_type": error.__class__.__name__,
+                "method": request.method,
+                "path": request.path,
+                "endpoint": request.endpoint or "",
+            },
+        )
+        app.logger.exception("未处理的 Web 异常：%s", request.path)
+        error_id = entry.id if entry is not None else ""
+        message = "服务器内部错误"
+        if request.path.startswith("/api/") or request.path.startswith("/account/"):
+            payload = {"error": message, "code": "internal_error"}
+            if error_id:
+                payload["error_id"] = error_id
+            return jsonify(payload), 500
+        return f"{message}{f'（错误 ID：{error_id}）' if error_id else ''}", 500
+
 
 def _bootstrap_admin(app: Flask, users: UserService) -> None:
     if db.session.query(User.id).first() is not None:
@@ -190,9 +253,7 @@ def _bootstrap_admin(app: Flask, users: UserService) -> None:
     username = os.environ.get("ADMIN_USERNAME", "").strip()
     password = os.environ.get("ADMIN_PASSWORD", "")
     if not username or not password:
-        app.logger.warning(
-            "database is empty; set ADMIN_USERNAME and ADMIN_PASSWORD to create the first admin"
-        )
+        app.logger.warning("数据库为空；请设置 ADMIN_USERNAME 和 ADMIN_PASSWORD 以创建首个管理员")
         return
     users.create(
         username=username,
@@ -201,7 +262,7 @@ def _bootstrap_admin(app: Flask, users: UserService) -> None:
         role="admin",
         actor_user_id=None,
     )
-    app.logger.info("initial administrator created: %s", username)
+    app.logger.info("已创建初始管理员：%s", username)
 
 
 def _persistent_secret(data_dir: Path) -> str:

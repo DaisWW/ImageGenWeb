@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from ..errors import ServiceError
@@ -25,6 +26,7 @@ from ..models import (
 from ..storage import ImageStorage
 from .billing import BillingService
 from .common import money
+from .settings import SystemSettingsService
 from .starter_content import (
     REFERENCE_STARTER_ASSET_NAME,
     REFERENCE_STARTER_NAME,
@@ -41,25 +43,29 @@ from .workspace_settings import (
 
 
 class WorkspaceService:
-    MAX_WORKSPACES = 10
-    MAX_ACTIVE_ASSETS = 8
-
     def __init__(
         self,
         storage: ImageStorage,
         billing: BillingService,
         starter_reference_path: str | Path,
+        settings: SystemSettingsService,
     ):
         self.storage = storage
         self.billing = billing
         self.starter_reference_path = Path(starter_reference_path)
+        self.settings = settings
+
+    @property
+    def max_workspaces(self) -> int:
+        return self.settings.runtime().max_workspaces_per_user
 
     def list(self, user_id: int) -> list[Workspace]:
         return list(
             db.session.scalars(
                 select(Workspace)
+                .options(selectinload(Workspace.assets))
                 .where(Workspace.user_id == user_id)
-                .order_by(Workspace.updated_at.desc())
+                .order_by(Workspace.position.asc(), Workspace.updated_at.desc())
             )
         )
 
@@ -69,9 +75,10 @@ class WorkspaceService:
             db.session.scalar(select(func.count(Workspace.id)).where(Workspace.user_id == user_id))
             or 0
         )
-        if count >= self.MAX_WORKSPACES:
+        max_workspaces = self.max_workspaces
+        if count >= max_workspaces:
             raise ServiceError(
-                f"每个用户最多创建 {self.MAX_WORKSPACES} 个工作站",
+                f"每个用户最多创建 {max_workspaces} 个工作站",
                 code="workspace_limit",
                 status_code=409,
             )
@@ -79,27 +86,27 @@ class WorkspaceService:
         kind = str(kind).strip().lower()
         if kind not in {"image", "animation"}:
             raise ServiceError("工作站类型无效")
-        if db.session.scalar(
-            select(Workspace.id).where(
-                Workspace.user_id == user_id,
-                func.lower(Workspace.name) == name.lower(),
-            )
-        ):
-            raise ServiceError("工作站名称已存在", status_code=409)
+        self._ensure_name_available(user_id, name)
+        minimum_position = db.session.scalar(
+            select(func.min(Workspace.position)).where(Workspace.user_id == user_id)
+        )
         workspace = Workspace(
             user_id=user_id,
             name=name,
             kind=kind,
-            settings=default_workspace_settings(),
+            position=0 if minimum_position is None else minimum_position - 1,
+            settings=default_workspace_settings(kind),
         )
         db.session.add(workspace)
-        db.session.commit()
+        self._commit_name_change()
         return workspace
 
     def ensure_starter_workspaces(self, user_id: int) -> list[Workspace]:
         existing = self.list(user_id)
         if existing:
             return existing
+        if not self.settings.runtime().create_starter_workspaces:
+            return []
 
         self.billing.lock_user(user_id)
         if db.session.scalar(select(Workspace.id).where(Workspace.user_id == user_id).limit(1)):
@@ -113,6 +120,7 @@ class WorkspaceService:
             user_id=user_id,
             name=REFERENCE_STARTER_NAME,
             kind="image",
+            position=1,
             settings=default_workspace_settings(),
             created_at=reference_time,
             updated_at=reference_time,
@@ -122,6 +130,7 @@ class WorkspaceService:
             user_id=user_id,
             name=TEXT_STARTER_NAME,
             kind="image",
+            position=0,
             settings=default_workspace_settings(),
             created_at=text_time,
             updated_at=text_time,
@@ -165,7 +174,9 @@ class WorkspaceService:
 
     def update(self, workspace: Workspace, payload: dict[str, Any]) -> Workspace:
         if "name" in payload:
-            workspace.name = self._validate_name(str(payload["name"]))
+            name = self._validate_name(str(payload["name"]))
+            self._ensure_name_available(workspace.user_id, name, exclude_id=workspace.id)
+            workspace.name = name
             settings = dict(workspace.settings or {})
             settings["auto_title"] = False
             workspace.settings = settings
@@ -173,17 +184,39 @@ class WorkspaceService:
             if not isinstance(payload["settings"], dict):
                 raise ServiceError("工作站参数格式无效")
             workspace.settings = sanitize_workspace_settings(
-                {**(workspace.settings or {}), **payload["settings"]}
+                {**(workspace.settings or {}), **payload["settings"]},
+                self.settings.runtime(),
             )
-        db.session.commit()
+        if "name" in payload:
+            self._commit_name_change()
+        else:
+            db.session.commit()
         return workspace
+
+    def reorder(self, user_id: int, workspace_ids: list[str]) -> None:
+        if len(workspace_ids) != len(set(workspace_ids)):
+            raise ServiceError("工作站排序数据不能包含重复项")
+        self.billing.lock_user(user_id)
+        workspaces = list(db.session.scalars(select(Workspace).where(Workspace.user_id == user_id)))
+        by_id = {workspace.id: workspace for workspace in workspaces}
+        if len(workspace_ids) != len(workspaces) or set(workspace_ids) != set(by_id):
+            raise ServiceError("工作站排序数据必须包含当前账户的全部工作站")
+        ordered = [by_id[workspace_id] for workspace_id in workspace_ids]
+        for position, workspace in enumerate(ordered):
+            workspace.position = position
+        db.session.commit()
 
     def add_assets(self, workspace: Workspace, uploads: Iterable[tuple[str, bytes]]) -> list[Asset]:
         uploads = list(uploads)
         if not uploads:
             raise ServiceError("请选择参考图")
-        if len(uploads) > self.MAX_ACTIVE_ASSETS:
-            raise ServiceError("单次最多上传 8 张参考图")
+        runtime = self.settings.runtime()
+        if len(uploads) > runtime.max_assets_per_workspace:
+            raise ServiceError(f"单次最多上传 {runtime.max_assets_per_workspace} 张参考图")
+        if any(len(content) > runtime.max_attachment_bytes for _name, content in uploads):
+            raise ServiceError(f"单张参考图不能超过 {runtime.max_attachment_mb} MiB")
+        if sum(len(content) for _name, content in uploads) > runtime.max_attachment_total_bytes:
+            raise ServiceError(f"参考图合计不能超过 {runtime.max_attachment_total_mb} MiB")
         db.session.scalar(
             select(Workspace.id).where(Workspace.id == workspace.id).with_for_update()
         )
@@ -196,8 +229,8 @@ class WorkspaceService:
             )
             or 0
         )
-        if active_count + len(uploads) > self.MAX_ACTIVE_ASSETS:
-            raise ServiceError(f"每个工作站最多保留 {self.MAX_ACTIVE_ASSETS} 张参考图")
+        if active_count + len(uploads) > runtime.max_assets_per_workspace:
+            raise ServiceError(f"每个工作站最多保留 {runtime.max_assets_per_workspace} 张参考图")
         next_position = (
             db.session.scalar(
                 select(func.max(Asset.position)).where(Asset.workspace_id == workspace.id)
@@ -351,7 +384,7 @@ class WorkspaceService:
             db.session.delete(asset)
         settings = dict(workspace.settings or {})
         settings["prompt"] = ""
-        workspace.settings = sanitize_workspace_settings(settings)
+        workspace.settings = sanitize_workspace_settings(settings, self.settings.runtime())
         workspace.updated_at = utcnow()
         db.session.commit()
         self.storage.delete_workspace(workspace.user_id, workspace.id)
@@ -417,6 +450,33 @@ class WorkspaceService:
         if not 1 <= len(name) <= 80:
             raise ServiceError("工作站名称长度必须在 1 到 80 个字符之间")
         return name
+
+    @staticmethod
+    def _ensure_name_available(user_id: int, name: str, *, exclude_id: str = "") -> None:
+        query = select(Workspace.id).where(
+            Workspace.user_id == user_id,
+            func.lower(Workspace.name) == name.lower(),
+        )
+        if exclude_id:
+            query = query.where(Workspace.id != exclude_id)
+        if db.session.scalar(query.limit(1)):
+            raise WorkspaceService._name_conflict_error()
+
+    @staticmethod
+    def _commit_name_change() -> None:
+        try:
+            db.session.commit()
+        except IntegrityError as exc:
+            db.session.rollback()
+            raise WorkspaceService._name_conflict_error() from exc
+
+    @staticmethod
+    def _name_conflict_error() -> ServiceError:
+        return ServiceError(
+            "工作站名称已存在",
+            code="workspace_name_exists",
+            status_code=409,
+        )
 
     @staticmethod
     def _next_workspace_name(user_id: int) -> str:

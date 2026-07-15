@@ -19,4 +19,7 @@ if __name__ == "__main__":
 
     signal.signal(signal.SIGTERM, stop_worker)
     signal.signal(signal.SIGINT, stop_worker)
-    worker.run_forever()
+    try:
+        worker.run_forever()
+    finally:
+        app.extensions["imagegen_services"].close()

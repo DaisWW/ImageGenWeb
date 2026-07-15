@@ -23,29 +23,29 @@ from .integrations.images import (
     ReferencePayload,
 )
 from .models import GenerationItem, GenerationJob, User, utcnow
-from .services import BillingService, GenerationService, RetentionService, money
+from .services import RetentionService, money
 from .storage import ImageStorage, StorageError
 
 LOGGER = logging.getLogger(__name__)
 
 
 class GenerationWorker:
-    HEARTBEAT_INTERVAL_SECONDS = 15.0
-    RECOVERY_INTERVAL_SECONDS = 60.0
-
     def __init__(
         self,
         app: Flask,
         channels: ChannelRegistry,
         storage: ImageStorage,
         *,
-        poll_seconds: float = 0.5,
+        poll_seconds: float | None = None,
     ):
         self.app = app
         self.channels = channels
         self.storage = storage
-        self.billing = BillingService()
-        self.generations = GenerationService(channels, self.billing)
+        services = app.extensions["imagegen_services"]
+        self.settings = services.settings
+        self.runtime_logs = services.runtime_logs
+        self.billing = services.billing
+        self.generations = services.generations
         self.retention = RetentionService(storage, channels)
         self.providers = ProviderFactory()
         self.poll_seconds = poll_seconds
@@ -58,8 +58,16 @@ class GenerationWorker:
         self._last_cleanup = 0.0
 
     def run_forever(self) -> None:
-        LOGGER.info("generation worker started: %s", self.worker_id)
+        LOGGER.info("生成 Worker 已启动：%s", self.worker_id)
         with self.app.app_context():
+            self.runtime_logs.commit_best_effort(
+                category="worker",
+                event="worker.started",
+                status="success",
+                message="生成 Worker 已启动",
+                source="worker",
+                details={"worker_id": self.worker_id},
+            )
             self._recover_orphaned_items(immediate=True)
             self._last_recovery = time.monotonic()
         try:
@@ -70,14 +78,29 @@ class GenerationWorker:
                     self._maintain_claims()
                 self._schedule_available()
                 self._run_periodic_cleanup()
-                self._stopping.wait(self.poll_seconds)
+                with self.app.app_context():
+                    wait_seconds = (
+                        self.poll_seconds
+                        if self.poll_seconds is not None
+                        else self.settings.runtime().worker_poll_milliseconds / 1000
+                    )
+                self._stopping.wait(wait_seconds)
         finally:
             self._stopping.set()
             for future in self._futures.values():
                 future.cancel()
             if hasattr(self, "_thread_pool"):
                 self._thread_pool.shutdown(wait=True, cancel_futures=True)
-            LOGGER.info("generation worker stopped")
+            LOGGER.info("生成 Worker 已停止")
+            with self.app.app_context():
+                self.runtime_logs.commit_best_effort(
+                    category="worker",
+                    event="worker.stopped",
+                    status="success",
+                    message="生成 Worker 已停止",
+                    source="worker",
+                    details={"worker_id": self.worker_id},
+                )
 
     def stop(self) -> None:
         self._stopping.set()
@@ -98,7 +121,18 @@ class GenerationWorker:
             try:
                 future.result()
             except Exception:
-                LOGGER.exception("generation item crashed: %s", item_id)
+                LOGGER.exception("生成任务线程异常退出：%s", item_id)
+                with self.app.app_context():
+                    self.runtime_logs.commit_best_effort(
+                        category="worker",
+                        event="worker.item_crashed",
+                        status="error",
+                        message="生成任务线程异常退出",
+                        source="worker",
+                        error_code="worker_item_crashed",
+                        item_id=item_id,
+                        details={"worker_id": self.worker_id},
+                    )
 
     def _schedule_available(self) -> None:
         with self.app.app_context():
@@ -264,6 +298,7 @@ class GenerationWorker:
                     upstream_status=exc.status_code,
                     upstream_request_id=exc.request_id,
                     started=started,
+                    details=exc.details,
                 )
             except (StorageError, OSError) as exc:
                 self._settle_failure(
@@ -273,9 +308,10 @@ class GenerationWorker:
                     upstream_status=None,
                     upstream_request_id="",
                     started=started,
+                    details={"exception_type": exc.__class__.__name__},
                 )
             except Exception as exc:
-                LOGGER.exception("unexpected generation error: %s", item_id)
+                LOGGER.exception("生成任务发生未预期异常：%s", item_id)
                 self._settle_failure(
                     item_id,
                     code="internal_error",
@@ -283,6 +319,7 @@ class GenerationWorker:
                     upstream_status=None,
                     upstream_request_id="",
                     started=started,
+                    details={"exception_type": exc.__class__.__name__},
                 )
             finally:
                 db.session.remove()
@@ -321,13 +358,43 @@ class GenerationWorker:
             return (previous_reference,)
         return (*base_references[: limit - 1], previous_reference)
 
-    @staticmethod
-    def _request_prompt(item: GenerationItem) -> str:
+    def _request_prompt(self, item: GenerationItem) -> str:
         job = item.job
         if job.kind != "animation":
             return job.prompt
-        denominator = job.requested_count if job.animation_loop else max(1, job.requested_count - 1)
-        phase = round(item.position / denominator * 100)
+        frame_count = max(1, int(job.requested_count or 1))
+        fps = max(1, int(job.animation_fps or 8))
+        frame_duration_ms = 1000 / fps
+        sequence_duration = frame_count / fps
+        timestamp = item.position / fps
+        denominator = frame_count if job.animation_loop else max(1, frame_count - 1)
+        phase = item.position / denominator * 100
+        if job.animation_loop:
+            temporal_roles = (
+                "start key pose A; establish the readable silhouette",
+                "departure transition; move visibly away from pose A",
+                "first motion extreme; show clear extension or compression",
+                "transition toward the opposing key pose",
+                "opposing key pose B; show the strongest contrast with pose A",
+                "return transition; reverse the direction without a jump",
+                "recovery motion extreme; show the second side of the cycle",
+                "closing transition; approach pose A without duplicating it",
+            )
+            role_index = min(
+                len(temporal_roles) - 1,
+                item.position * len(temporal_roles) // frame_count,
+            )
+        else:
+            temporal_roles = (
+                "defined start pose A",
+                "early transition away from pose A",
+                "mid-action transition with a readable silhouette change",
+                "main action key pose",
+                "late transition toward the endpoint",
+                "defined end pose B; settle and hold the final state",
+            )
+            role_index = round(item.position * (len(temporal_roles) - 1) / denominator)
+        temporal_role = temporal_roles[min(len(temporal_roles) - 1, role_index)]
         loop_instruction = (
             "The motion must form a seamless loop; the final frame should naturally lead back "
             "to the first without duplicating it."
@@ -335,22 +402,29 @@ class GenerationWorker:
             else "The motion progresses once from the defined start pose to the defined end pose."
         )
         reference_instruction = (
-            "Establish the exact visual identity and starting pose for the sequence."
+            "Reference image 1 is the authoritative master image: preserve its exact identity, "
+            "named colors, patterns, proportions, camera, and starting-pose baseline."
             if item.position == 0
-            else "Use the supplied previous frame as continuity reference and change only the "
-            "motion required for this phase."
+            else "When two references are supplied, reference image 1 is the authoritative master "
+            "for identity, colors, patterns, proportions, and camera; reference image 2 is the "
+            "immediately previous frame for local pose continuity. If only one reference is "
+            "available, use it for continuity but never replace the master identity described "
+            "in the prompt."
         )
         sequence = f"""
 
 Frame-by-frame animation instructions:
 - Render exactly one full-canvas frame, never a contact sheet, storyboard, grid, or collage.
-- This is frame {item.position + 1} of {job.requested_count}; motion phase {phase}%.
+- This is frame {item.position + 1} of {frame_count}; {fps} FPS; frame duration {frame_duration_ms:.1f} ms; timestamp {timestamp:.3f} s; sequence duration {sequence_duration:.3f} s; motion phase {phase:.1f}%.
+- Temporal role for this frame: {temporal_role}.
 - {reference_instruction}
-- Keep character identity, proportions, clothing, camera, composition, background, lighting, palette, and line style stable across every frame.
-- Advance the action described by the user in a small, readable increment.
+- Keep character identity, face, hair, proportions, clothing silhouette, exact colors, patterns, camera, composition, background, lighting, palette, materials, and line style stable across every frame.
+- Make motion visible through joint angles, limb positions, body orientation, center-of-mass shift, object displacement, or controlled deformation. Advance the action in a small but unmistakable spatial increment.
+- Never substitute color changes, texture changes, clothing-pattern changes, lighting flicker, blur, or identity/shape drift for movement. Do not redesign the subject or invent a different costume in later frames.
+- Render only the current temporal role; do not show other phases, arrows, labels, frame numbers, or explanatory text.
 - {loop_instruction}
 """
-        return f"{job.prompt[:6800]}{sequence}"[:8000]
+        return f"{job.prompt}{sequence}"
 
     def _settle_success(
         self, item_id: str, content: bytes, request_id: str, started: float
@@ -409,6 +483,30 @@ Frame-by-frame animation instructions:
             item.output_height = stored.image.height
             self.billing.capture(user, job, item)
             self.generations.refresh_job_status(job)
+            self.runtime_logs.record(
+                category="generation",
+                event="generation.provider",
+                status="success",
+                message="生图渠道调用成功",
+                source="worker",
+                user_id=item.user_id,
+                user_label=user.display_name or user.username,
+                workspace_id=job.workspace_id,
+                workspace_label=job.workspace.name,
+                job_id=job.id,
+                item_id=item.id,
+                provider_id=job.channel_id,
+                provider_label=job.channel_label,
+                model=job.model,
+                upstream_request_id=request_id,
+                elapsed_seconds=float(item.elapsed_seconds),
+                details={
+                    "output_mime_type": stored.image.mime_type,
+                    "output_byte_count": stored.image.byte_count,
+                    "output_width": stored.image.width,
+                    "output_height": stored.image.height,
+                },
+            )
             db.session.commit()
         except Exception:
             db.session.rollback()
@@ -425,6 +523,7 @@ Frame-by-frame animation instructions:
         upstream_status: int | None,
         upstream_request_id: str,
         started: float,
+        details: dict | None = None,
     ) -> None:
         db.session.expire_all()
         preview = db.session.get(GenerationItem, item_id, populate_existing=True)
@@ -460,6 +559,28 @@ Frame-by-frame animation instructions:
             self.billing.release(user, job, money(job.price_per_image_rmb))
             self._cancel_animation_tail(user, job, item.position)
             self.generations.refresh_job_status(job)
+        elapsed_seconds = round(time.monotonic() - started, 3)
+        self.runtime_logs.record(
+            category="generation",
+            event="generation.provider",
+            status="error",
+            message="生图渠道调用失败",
+            source="worker",
+            user_id=item.user_id,
+            user_label=user.display_name or user.username,
+            workspace_id=job.workspace_id,
+            workspace_label=job.workspace.name,
+            job_id=job.id,
+            item_id=item.id,
+            provider_id=job.channel_id,
+            provider_label=job.channel_label,
+            model=job.model,
+            error_code=code,
+            http_status=upstream_status,
+            upstream_request_id=upstream_request_id,
+            elapsed_seconds=elapsed_seconds,
+            details={"diagnostics": details or {}},
+        )
         db.session.commit()
 
     def _cancel_animation_tail(self, user: User, job: GenerationJob, position: int) -> None:
@@ -514,14 +635,6 @@ Frame-by-frame animation instructions:
             self.billing.release(user, job, money(job.price_per_image_rmb))
         self.generations.refresh_job_status(job)
 
-    def _cancel_claimed(self, item: GenerationItem) -> None:
-        user = self.billing.lock_user(item.user_id)
-        item.status = "canceled"
-        item.cancel_requested_at = item.cancel_requested_at or utcnow()
-        item.completed_at = utcnow()
-        self.billing.release(user, item.job, money(item.job.price_per_image_rmb))
-        self.generations.refresh_job_status(item.job)
-
     def _fail_unavailable_item(self, item_id: str) -> None:
         item = db.session.get(GenerationItem, item_id)
         if item is None or item.status != "queued":
@@ -539,6 +652,23 @@ Frame-by-frame animation instructions:
         self.billing.release(user, job, money(job.price_per_image_rmb))
         self._cancel_animation_tail(user, job, item.position)
         self.generations.refresh_job_status(job)
+        self.runtime_logs.record(
+            category="generation",
+            event="generation.channel_unavailable",
+            status="error",
+            message=item.error_message,
+            source="worker",
+            user_id=item.user_id,
+            user_label=user.display_name or user.username,
+            workspace_id=job.workspace_id,
+            workspace_label=job.workspace.name,
+            job_id=job.id,
+            item_id=item.id,
+            provider_id=job.channel_id,
+            provider_label=job.channel_label,
+            model=job.model,
+            error_code=item.error_code,
+        )
         db.session.commit()
 
     @staticmethod
@@ -550,10 +680,11 @@ Frame-by-frame animation instructions:
 
     def _maintain_claims(self) -> None:
         now = time.monotonic()
-        if now - self._last_heartbeat >= self.HEARTBEAT_INTERVAL_SECONDS:
+        runtime = self.settings.runtime()
+        if now - self._last_heartbeat >= runtime.worker_heartbeat_seconds:
             self._heartbeat_claims()
             self._last_heartbeat = now
-        if now - self._last_recovery >= self.RECOVERY_INTERVAL_SECONDS:
+        if now - self._last_recovery >= runtime.worker_recovery_seconds:
             self._recover_orphaned_items(immediate=False)
             self._last_recovery = now
         db.session.remove()
@@ -598,7 +729,7 @@ Frame-by-frame animation instructions:
             if self._recover_orphaned_item(item_id, cutoff=cutoff, immediate=immediate):
                 recovered += 1
         if recovered:
-            LOGGER.warning("recovered %d orphaned generation items", recovered)
+            LOGGER.warning("已恢复 %d 个孤立的生成任务", recovered)
 
     def _recover_orphaned_item(self, item_id: str, *, cutoff, immediate: bool) -> bool:
         db.session.expire_all()
@@ -649,16 +780,48 @@ Frame-by-frame animation instructions:
         if item.status == "interrupted":
             self._cancel_animation_tail(user, job, item.position)
         self.generations.refresh_job_status(job)
+        self.runtime_logs.record(
+            category="worker",
+            event="worker.recovered_item",
+            status="error",
+            level="warning",
+            message=item.error_message,
+            source="worker",
+            user_id=item.user_id,
+            user_label=user.display_name or user.username,
+            workspace_id=job.workspace_id,
+            workspace_label=job.workspace.name,
+            job_id=job.id,
+            item_id=item.id,
+            provider_id=job.channel_id,
+            provider_label=job.channel_label,
+            model=job.model,
+            error_code=item.error_code,
+            details={"worker_id": self.worker_id, "immediate": immediate},
+        )
         db.session.commit()
         return True
 
     def _run_periodic_cleanup(self) -> None:
         now = time.monotonic()
-        if now - self._last_cleanup < 3600:
-            return
         with self.app.app_context():
+            runtime = self.settings.runtime()
+            interval = runtime.cleanup_interval_minutes * 60
+            if now - self._last_cleanup < interval:
+                return
             result = self.retention.cleanup()
+            result["runtime_logs"] = self.runtime_logs.purge(runtime.runtime_log_retention_days)
+            if any(result.values()):
+                self.runtime_logs.record(
+                    category="worker",
+                    event="worker.retention_cleanup",
+                    status="success",
+                    message="定时清理已完成",
+                    source="worker",
+                    details=result,
+                )
+                db.session.commit()
             db.session.remove()
         self._last_cleanup = now
-        if result["jobs"] or result["assets"]:
-            LOGGER.info("retention cleanup: %s", result)
+        if any(result.values()):
+            LOGGER.info("记录清理结果：%s", result)

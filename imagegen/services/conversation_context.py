@@ -9,21 +9,20 @@ from ..config.chat_models import ChatModelConfig, ChatModelRegistry
 from ..extensions import db
 from ..integrations.openai_chat import OpenAIChatClient
 from ..models import ConversationMessage, ConversationState, Workspace
-from .conversation_prompts import SUMMARY_SYSTEM_PROMPT
 
 
 class ConversationContextManager:
-    """Builds bounded model context while retaining the full persisted transcript."""
+    """在保留完整持久化会话的同时构建有长度上限的模型上下文。"""
 
-    def __init__(self, registry: ChatModelRegistry, client: OpenAIChatClient):
+    def __init__(self, registry: ChatModelRegistry):
         self.registry = registry
-        self.client = client
 
     def build(
         self,
         workspace: Workspace,
         model: ChatModelConfig,
         *,
+        client: OpenAIChatClient,
         pending_message: dict[str, Any],
         pending_text: str,
         pending_image_count: int = 0,
@@ -46,9 +45,9 @@ class ConversationContextManager:
             older = active[: -policy.keep_recent_messages]
             summary_input = self._summary_input(state.summary, older)
             db.session.commit()
-            summary = self.client.complete(
+            summary = client.complete(
                 model,
-                system=SUMMARY_SYSTEM_PROMPT,
+                system=self.registry.system_prompt("summary"),
                 messages=[{"role": "user", "content": summary_input}],
                 max_output_tokens=min(model.max_output_tokens, 1800),
             )

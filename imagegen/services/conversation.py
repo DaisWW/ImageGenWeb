@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -26,12 +25,12 @@ from ..models import (
     utcnow,
 )
 from ..storage import ImageStorage
+from .automatic_titles import AutomaticTitleService
 from .conversation_context import ConversationContextManager
-from .conversation_prompts import CHAT_SYSTEM_PROMPT as IMAGE_CHAT_SYSTEM_PROMPT
-from .conversation_prompts import chat_system_prompt
+from .conversation_prompts import animation_runtime_prompt, chat_system_prompt
 from .prompt_drafts import PromptDraftParser
-
-CHAT_SYSTEM_PROMPT = IMAGE_CHAT_SYSTEM_PROMPT
+from .runtime_logs import RuntimeLogService
+from .settings import SystemSettingsService
 
 
 @dataclass(frozen=True)
@@ -58,23 +57,22 @@ class ConversationOperation:
 
 
 class ConversationService:
-    MAX_MESSAGE_LENGTH = 12000
-    MAX_ATTACHMENTS = 8
-    MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
-    MAX_ATTACHMENT_TOTAL_BYTES = 40 * 1024 * 1024
-    MAX_CONCURRENT_OPERATIONS = 4
-    MAX_CONCURRENT_PER_USER = 2
-
     def __init__(
         self,
         chat_models: ChatModelRegistry,
         storage: ImageStorage,
+        settings: SystemSettingsService,
+        runtime_logs: RuntimeLogService,
+        automatic_titles: AutomaticTitleService,
         client: OpenAIChatClient | None = None,
     ):
         self.chat_models = chat_models
         self.storage = storage
+        self.settings = settings
+        self.runtime_logs = runtime_logs
+        self.automatic_titles = automatic_titles
         self.client = client or OpenAIChatClient()
-        self.context = ConversationContextManager(chat_models, self.client)
+        self.context = ConversationContextManager(chat_models)
         self._operation_lock = Lock()
         self._operations: dict[str, ConversationOperation] = {}
 
@@ -147,6 +145,7 @@ class ConversationService:
             context = self.context.build(
                 workspace,
                 model,
+                client=self.client,
                 pending_message=pending,
                 pending_text=content,
                 pending_image_count=len(attachments),
@@ -154,11 +153,15 @@ class ConversationService:
             db.session.commit()
             result = self.client.complete(
                 model,
-                system=chat_system_prompt(self.chat_models.workspace_prompt(workspace.kind)),
+                system=chat_system_prompt(
+                    self.chat_models.system_prompt("chat"),
+                    self.chat_models.workspace_prompt(workspace.kind),
+                    animation_runtime_prompt(workspace.kind, workspace.settings),
+                ),
                 messages=context,
             )
         except OpenAIChatError as exc:
-            self._raise_chat_error(exc)
+            self._raise_chat_error(workspace, model, "chat.reply", exc)
 
         user_message = ConversationMessage(
             workspace_id=workspace.id,
@@ -176,11 +179,28 @@ class ConversationService:
             workspace, model, result, kind="message", payload={}
         )
         db.session.add_all([user_message, assistant_message])
+        self._record_chat_success(
+            workspace,
+            model,
+            "chat.reply",
+            result,
+            details={"attachment_count": len(attachments)},
+        )
         self._remember_preferences(workspace, model_id=model.identifier)
-        if first_user_message and bool((workspace.settings or {}).get("auto_title", True)):
-            self._set_automatic_title(workspace, content)
+        should_auto_title = first_user_message and bool(
+            (workspace.settings or {}).get("auto_title", True)
+        )
+        expected_title = workspace.name
         workspace.updated_at = utcnow()
         db.session.commit()
+        if should_auto_title:
+            self.automatic_titles.schedule(
+                workspace_id=workspace.id,
+                message_id=user_message.id,
+                expected_title=expected_title,
+                content=content,
+                model_id=model.identifier,
+            )
         return user_message, assistant_message
 
     def create_prompt_draft(
@@ -190,7 +210,11 @@ class ConversationService:
         model_id: str,
         translate_to_english: bool,
     ) -> ConversationMessage:
-        label = "正在整理帧动画提示词" if workspace.kind == "animation" else "正在整理生图提示词"
+        label = (
+            "正在检查并总结帧动画需求"
+            if workspace.kind == "animation"
+            else "正在检查并总结生图需求"
+        )
         with self._workspace_operation(workspace, "prompt_draft", label):
             return self._create_prompt_draft(
                 workspace,
@@ -206,9 +230,7 @@ class ConversationService:
         translate_to_english: bool,
     ) -> ConversationMessage:
         self._ensure_workspace_unlocked(workspace)
-        selected_model = self._model(model_id)
-        prompt_draft_model_id = self.chat_models.prompt_draft_model_id
-        model = self._model(prompt_draft_model_id) if prompt_draft_model_id else selected_model
+        model = self._model(model_id)
         if not db.session.scalar(
             select(ConversationMessage.id)
             .where(
@@ -230,6 +252,7 @@ class ConversationService:
             context = self.context.build(
                 workspace,
                 model,
+                client=self.client,
                 pending_message=pending,
                 pending_text=request_text,
                 pending_image_count=len(attachments),
@@ -241,37 +264,62 @@ class ConversationService:
                     translate_to_english=translate_to_english,
                     workspace_kind=workspace.kind,
                     workspace_prompt=self.chat_models.workspace_prompt(workspace.kind),
+                    runtime_prompt=animation_runtime_prompt(workspace.kind, workspace.settings),
                 ),
                 messages=context,
                 max_output_tokens=min(model.max_output_tokens, 2400),
             )
         except OpenAIChatError as exc:
-            self._raise_chat_error(exc)
-        draft = PromptDraftParser.parse(result.content, translate_to_english=translate_to_english)
-        draft["reference_ids"] = [asset.id for asset in attachments]
-        label = (
-            "English prompt"
-            if translate_to_english
-            else ("帧动画提示词" if workspace.kind == "animation" else "生图提示词")
+            self._raise_chat_error(workspace, model, "chat.prompt_draft", exc)
+        draft = PromptDraftParser.parse(
+            result.content,
+            translate_to_english=translate_to_english,
+            max_prompt_characters=self.settings.runtime().max_prompt_characters,
         )
+        if draft["status"] == "needs_clarification":
+            questions = "\n".join(
+                f"{index}. {question}" for index, question in enumerate(draft["questions"], 1)
+            )
+            content = f"为了让生成结果更符合预期，还需要确认：\n{questions}"
+            message_kind = "message"
+        else:
+            draft["reference_ids"] = [asset.id for asset in attachments]
+            label = (
+                "English prompt"
+                if translate_to_english
+                else ("帧动画提示词" if workspace.kind == "animation" else "生图提示词")
+            )
+            content = f"需求确认\n{draft['summary_zh']}\n\n{label}\n{draft['prompt']}"
+            message_kind = "prompt_draft"
         message = self._assistant_message(
             workspace,
             model,
             ChatCompletion(
-                content=f"需求确认\n{draft['summary_zh']}\n\n{label}\n{draft['prompt']}",
+                content=content,
                 request_id=result.request_id,
                 input_tokens=result.input_tokens,
                 output_tokens=result.output_tokens,
                 elapsed_seconds=result.elapsed_seconds,
             ),
-            kind="prompt_draft",
+            kind=message_kind,
             payload=draft,
         )
         self._attach(message, attachments)
         db.session.add(message)
+        self._record_chat_success(
+            workspace,
+            model,
+            "chat.prompt_draft",
+            result,
+            details={
+                "attachment_count": len(attachments),
+                "translate_to_english": translate_to_english,
+                "outcome": draft["status"],
+            },
+        )
         self._remember_preferences(
             workspace,
-            model_id=selected_model.identifier,
+            model_id=model.identifier,
             translate_to_english=translate_to_english,
         )
         workspace.updated_at = utcnow()
@@ -301,6 +349,7 @@ class ConversationService:
 
     @contextmanager
     def _workspace_operation(self, workspace: Workspace, kind: str, label: str) -> Iterator[None]:
+        runtime = self.settings.runtime()
         operation = ConversationOperation(
             user_id=workspace.user_id,
             kind=kind,
@@ -314,13 +363,13 @@ class ConversationService:
             user_operations = sum(
                 active.user_id == workspace.user_id for active in self._operations.values()
             )
-            if user_operations >= self.MAX_CONCURRENT_PER_USER:
+            if user_operations >= runtime.max_concurrent_chats_per_user:
                 raise ServiceError(
-                    f"同一账户最多同时进行 {self.MAX_CONCURRENT_PER_USER} 个 AI 对话请求",
+                    f"同一账户最多同时进行 {runtime.max_concurrent_chats_per_user} 个 AI 对话请求",
                     code="conversation_user_limit",
                     status_code=429,
                 )
-            if len(self._operations) >= self.MAX_CONCURRENT_OPERATIONS:
+            if len(self._operations) >= runtime.max_concurrent_chats:
                 raise ServiceError(
                     "当前 AI 对话请求较多，请稍后重试",
                     code="conversation_capacity",
@@ -349,10 +398,11 @@ class ConversationService:
             raise ServiceError(str(exc)) from exc
 
     def _load_assets(self, workspace: Workspace, asset_ids: tuple[str, ...]) -> list[Asset]:
+        runtime = self.settings.runtime()
         if len(asset_ids) != len(set(asset_ids)):
             raise ServiceError("参考图不能重复")
-        if len(asset_ids) > self.MAX_ATTACHMENTS:
-            raise ServiceError(f"单条消息最多附加 {self.MAX_ATTACHMENTS} 张参考图")
+        if len(asset_ids) > runtime.max_chat_attachments:
+            raise ServiceError(f"单条消息最多附加 {runtime.max_chat_attachments} 张参考图")
         if not asset_ids:
             return []
         assets = list(
@@ -368,10 +418,10 @@ class ConversationService:
         if any(asset_id not in by_id for asset_id in asset_ids):
             raise ServiceError("选择的参考图不存在")
         ordered = [by_id[asset_id] for asset_id in asset_ids]
-        if any(asset.byte_count > self.MAX_ATTACHMENT_BYTES for asset in ordered):
-            raise ServiceError("单张参考图不能超过 10 MiB")
-        if sum(asset.byte_count for asset in ordered) > self.MAX_ATTACHMENT_TOTAL_BYTES:
-            raise ServiceError("参考图合计不能超过 40 MiB")
+        if any(asset.byte_count > runtime.max_attachment_bytes for asset in ordered):
+            raise ServiceError(f"单张参考图不能超过 {runtime.max_attachment_mb} MiB")
+        if sum(asset.byte_count for asset in ordered) > runtime.max_attachment_total_bytes:
+            raise ServiceError(f"参考图合计不能超过 {runtime.max_attachment_total_mb} MiB")
         return ordered
 
     def _latest_user_attachments(self, workspace: Workspace) -> list[Asset]:
@@ -442,15 +492,15 @@ class ConversationService:
             for position, asset in enumerate(assets)
         ]
 
-    @staticmethod
-    def _validate_message(content: str, *, has_attachments: bool) -> str:
+    def _validate_message(self, content: str, *, has_attachments: bool) -> str:
         content = content.strip()
         if not content and has_attachments:
             content = "请分析这些参考图，帮助我明确生图需求。"
         if not content:
             raise ServiceError("请输入消息")
-        if len(content) > ConversationService.MAX_MESSAGE_LENGTH:
-            raise ServiceError(f"单条消息不能超过 {ConversationService.MAX_MESSAGE_LENGTH} 个字符")
+        maximum = self.settings.runtime().max_message_characters
+        if len(content) > maximum:
+            raise ServiceError(f"单条消息不能超过 {maximum} 个字符")
         return content
 
     @staticmethod
@@ -485,26 +535,67 @@ class ConversationService:
                 status_code=409,
             )
 
-    @staticmethod
-    def _set_automatic_title(workspace: Workspace, content: str) -> None:
-        base = re.sub(r"\s+", " ", content).strip()[:36] or "新会话"
-        candidate = base
-        suffix = 2
-        while db.session.scalar(
-            select(Workspace.id)
-            .where(
-                Workspace.user_id == workspace.user_id,
-                Workspace.id != workspace.id,
-                func.lower(Workspace.name) == candidate.lower(),
-            )
-            .limit(1)
-        ):
-            marker = f" {suffix}"
-            candidate = f"{base[: 36 - len(marker)]}{marker}"
-            suffix += 1
-        workspace.name = candidate
+    def _record_chat_success(
+        self,
+        workspace: Workspace,
+        model: ChatModelConfig,
+        event: str,
+        result: ChatCompletion,
+        *,
+        details: dict[str, Any],
+    ) -> None:
+        self.runtime_logs.record(
+            category="chat",
+            event=event,
+            status="success",
+            message="对话模型调用成功",
+            source="web",
+            user_id=workspace.user_id,
+            user_label=workspace.user.display_name or workspace.user.username,
+            workspace_id=workspace.id,
+            workspace_label=workspace.name,
+            provider_id=model.identifier,
+            provider_label=model.label,
+            model=model.model,
+            upstream_request_id=result.request_id,
+            elapsed_seconds=result.elapsed_seconds,
+            details={
+                **details,
+                "input_tokens": result.input_tokens,
+                "output_tokens": result.output_tokens,
+            },
+        )
 
-    @staticmethod
-    def _raise_chat_error(error: OpenAIChatError) -> None:
+    def _raise_chat_error(
+        self,
+        workspace: Workspace,
+        model: ChatModelConfig,
+        event: str,
+        error: OpenAIChatError,
+    ) -> None:
         db.session.rollback()
-        raise ServiceError(str(error), code=error.code, status_code=error.status_code) from error
+        entry = self.runtime_logs.commit_best_effort(
+            category="chat",
+            event=event,
+            status="error",
+            message="对话模型调用失败",
+            source="web",
+            user_id=workspace.user_id,
+            user_label=workspace.user.display_name or workspace.user.username,
+            workspace_id=workspace.id,
+            workspace_label=workspace.name,
+            provider_id=model.identifier,
+            provider_label=model.label,
+            model=model.model,
+            error_code=error.code,
+            http_status=error.upstream_status,
+            upstream_request_id=error.request_id,
+            elapsed_seconds=error.elapsed_seconds,
+            details={"diagnostics": error.details},
+        )
+        raise ServiceError(
+            str(error),
+            code=error.code,
+            status_code=error.status_code,
+            error_id=entry.id if entry is not None else "",
+        ) from error
