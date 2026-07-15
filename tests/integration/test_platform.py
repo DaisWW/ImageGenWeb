@@ -486,6 +486,20 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertIn("先直接回应用户当前的问题", CHAT_SYSTEM_PROMPT)
         self.assertNotIn("公司内部 AI 视觉创作工作台的需求顾问", CHAT_SYSTEM_PROMPT)
 
+    def test_image_workspace_chat_uses_static_image_guidance(self):
+        workspace = self.create_workspace("单图讨论")
+
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="设计一张电影感人物海报",
+        )
+
+        system = self.chat_client.calls[-1]["system"]
+        self.assertIn("当前是静态图片工作站", system)
+        self.assertIn("一张完整画面", system)
+        self.assertNotIn("当前工作站用于制作帧动画", system)
+
     def test_animation_workspace_chat_uses_motion_specific_guidance(self):
         workspace = self.create_workspace("动作讨论", kind="animation")
 
@@ -963,6 +977,47 @@ class ImageGenPlatformTests(unittest.TestCase):
         )
         self.assertEqual(translated.payload["language"], "en")
         self.assertIn("英文生图提示词", self.chat_client.calls[-1]["system"])
+
+    def test_admin_can_customize_workspace_prompts_for_chat_and_drafts(self):
+        client = self.admin_client()
+        config = client.get("/api/admin/chat-models").json["config"]
+        self.assertIn("当前是静态图片工作站", config["workspace_prompts"]["image"])
+        self.assertIn(
+            "当前工作站用于制作帧动画",
+            config["workspace_prompts"]["animation"],
+        )
+        config["workspace_prompts"] = {
+            "image": "自定义图片规则：画面只采用一个明确的视觉中心。",
+            "animation": "自定义动画规则：角色造型和镜头必须逐帧稳定。",
+        }
+
+        response = client.put("/api/admin/chat-models", json=config)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["config"]["workspace_prompts"], config["workspace_prompts"])
+        image_workspace = self.create_workspace("自定义单图")
+        self.services.conversations.send(
+            image_workspace,
+            model_id="test-chat",
+            content="生成一张产品主视觉",
+        )
+        self.assertIn("自定义图片规则", self.chat_client.calls[-1]["system"])
+        self.services.conversations.create_prompt_draft(
+            image_workspace,
+            model_id="test-chat",
+            translate_to_english=False,
+        )
+        self.assertIn("自定义图片规则", self.chat_client.calls[-1]["system"])
+        self.assertIn("只输出一个 JSON 对象", self.chat_client.calls[-1]["system"])
+
+        animation_workspace = self.create_workspace("自定义动画", kind="animation")
+        self.services.conversations.send(
+            animation_workspace,
+            model_id="test-chat",
+            content="角色转身后挥手",
+        )
+        self.assertIn("自定义动画规则", self.chat_client.calls[-1]["system"])
+        self.assertNotIn("自定义图片规则", self.chat_client.calls[-1]["system"])
 
     def test_admin_can_assign_a_dedicated_prompt_draft_model(self):
         config = self.admin_client().get("/api/admin/chat-models").json["config"]

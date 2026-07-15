@@ -154,7 +154,7 @@ class ConversationService:
             db.session.commit()
             result = self.client.complete(
                 model,
-                system=chat_system_prompt(workspace.kind),
+                system=chat_system_prompt(self.chat_models.workspace_prompt(workspace.kind)),
                 messages=context,
             )
         except OpenAIChatError as exc:
@@ -240,6 +240,7 @@ class ConversationService:
                 system=PromptDraftParser.system_prompt(
                     translate_to_english=translate_to_english,
                     workspace_kind=workspace.kind,
+                    workspace_prompt=self.chat_models.workspace_prompt(workspace.kind),
                 ),
                 messages=context,
                 max_output_tokens=min(model.max_output_tokens, 2400),

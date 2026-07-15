@@ -159,9 +159,20 @@ class RuntimeConfigService:
         context = payload.get("context")
         if not isinstance(context, dict):
             raise ServiceError("上下文配置格式无效")
+        workspace_prompts = payload.get("workspace_prompts")
+        if workspace_prompts is None:
+            workspace_prompts = {
+                kind: self.chat_models.workspace_prompt(kind) for kind in ("image", "animation")
+            }
+        if not isinstance(workspace_prompts, dict):
+            raise ServiceError("工作站提示词格式无效")
         return {
             "version": 1,
             "prompt_draft_model_id": str(payload.get("prompt_draft_model_id", "")).strip(),
+            "workspace_prompts": {
+                "image": workspace_prompts.get("image"),
+                "animation": workspace_prompts.get("animation"),
+            },
             "context": {
                 "compact_at_tokens": context.get("compact_at_tokens"),
                 "max_context_tokens": context.get("max_context_tokens"),
