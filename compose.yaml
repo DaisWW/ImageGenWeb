@@ -21,6 +21,7 @@ x-app: &app
     LUCEN_API_BASE_URL: ${LUCEN_API_BASE_URL:-https://lucen.plus}
     LUCEN_API_KEY: ${LUCEN_API_KEY:-}
     COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
     IMAGEGEN_DATA_DIR: /data
     IMAGE_STORAGE_PATH: /data/files
     AUTO_CREATE_DB: "false"
@@ -49,12 +50,12 @@ services:
       sh -c "alembic upgrade head &&
       gunicorn --bind 0.0.0.0:7860 --workers 1 --threads 8 --timeout 700 app:app"
     ports:
-      - "${IMAGEGEN_BIND_HOST:-0.0.0.0}:${IMAGEGEN_PORT:-18081}:7860"
+      - "${IMAGEGEN_BIND_HOST:-127.0.0.1}:${IMAGEGEN_PORT:-18081}:7860"
     depends_on:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/health', timeout=3)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/health/live', timeout=3)"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -63,9 +64,16 @@ services:
   worker:
     <<: *app
     command: ["python", "run_worker.py"]
+    stop_grace_period: 12m
     depends_on:
       web:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://web:7860/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
 
 volumes:
   imagegen-data:

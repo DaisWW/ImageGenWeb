@@ -6,7 +6,7 @@ param(
     [ValidatePattern("^[A-Za-z0-9_.-]+$")]
     [string]$AdminUsername = "admin",
 
-    [switch]$Lan = $true,
+    [switch]$Lan,
     [switch]$LocalOnly,
     [switch]$SkipFirewall,
     [switch]$SkipAutostart,
@@ -145,6 +145,7 @@ function Initialize-EnvironmentFile {
     $bindHost = if ($Lan) { "0.0.0.0" } else { "127.0.0.1" }
     Set-EnvValue $lines "IMAGEGEN_BIND_HOST" $bindHost | Out-Null
     Set-EnvValue $lines "COOKIE_SECURE" "false" | Out-Null
+    Set-EnvValue $lines "TRUST_PROXY_HEADERS" "false" | Out-Null
 
     [IO.File]::WriteAllLines($envPath, $lines, (New-Object Text.UTF8Encoding($false)))
     if ($adminPasswordChanged) {
@@ -295,7 +296,7 @@ try {
             Write-Host "局域网地址（明文 HTTP）：http://${address}:$Port"
         }
     } else {
-        Write-Host "局域网访问未启用。移除 -LocalOnly 后重新运行即可启用。"
+        Write-Host "局域网访问未启用。如确需共享，请使用 -Lan 重新运行。"
     }
     if ($generatedAdminPassword) {
         Write-Host "初始管理员：$AdminUsername" -ForegroundColor Yellow

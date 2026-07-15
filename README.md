@@ -36,15 +36,15 @@ tests/integration/ 业务与 HTTP 合同测试
 .\deploy-docker.cmd
 ```
 
-脚本默认监听所有网卡的 `18081` 端口，并配置仅允许本地子网访问的 Windows 防火墙规则；同时自动生成数据库密码、加密密钥和首次管理员密码，构建容器、等待健康检查、注册当前用户登录自启。部署完成后可通过本机局域网 IP 的 `18081` 端口访问。
+脚本默认只监听 `127.0.0.1:18081`；同时自动生成数据库密码、加密密钥和首次管理员密码，构建容器、等待健康检查、注册当前用户登录自启。
 
-如需仅允许本机访问，显式启用本机模式：
+确需在可信局域网共享时，显式启用 LAN 模式：
 
 ```powershell
-.\deploy-docker.ps1 -LocalOnly
+.\deploy-docker.ps1 -Lan
 ```
 
-局域网模式使用明文 HTTP，请只在可信网络内使用；正式共享应在服务前配置 TLS 反向代理并设置 `COOKIE_SECURE=true`。
+LAN 模式会监听所有网卡并配置仅允许本地子网访问的 Windows 防火墙规则。它仍使用明文 HTTP，登录密码和会话 Cookie 可被同网段观察；跨机器或跨网段共享前必须配置 TLS 反向代理，并设置 `COOKIE_SECURE=true`、`TRUST_PROXY_HEADERS=true`。后一个开关只适用于请求必经一个可信反向代理的部署，不能在应用直接暴露时启用。`-LocalOnly` 仅为旧部署脚本兼容参数，新部署无需指定。
 
 端口被占用时可从 PowerShell 指定其他端口：
 
@@ -52,13 +52,15 @@ tests/integration/ 业务与 HTTP 合同测试
 .\deploy-docker.ps1 -Port 18082
 ```
 
-本地开发仍使用 `7860`，Docker 对外端口为 `18081`，二者不会冲突。如通过 HTTPS 反向代理部署，将 `.env` 中的 `COOKIE_SECURE` 改为 `true`。
+本地开发仍使用 `7860`，Docker 对外端口为 `18081`，二者不会冲突。如通过单个 HTTPS 反向代理部署，将 `.env` 中的 `COOKIE_SECURE` 和 `TRUST_PROXY_HEADERS` 都改为 `true`。
 
 Compose 包含三个容器：
 
 - `web`：Flask/Gunicorn Web 服务，启动前执行 Alembic 数据库迁移。
 - `worker`：独立队列 Worker，执行生图、结算和 30 天清理。
 - `db`：PostgreSQL 17。
+
+当前架构明确只支持一个 Gunicorn Web 进程和一个 Worker。登录限流、对话与工作站互斥是 Web 进程内状态，Worker 则通过数据库租约拒绝第二个活跃实例；不要通过增加 Gunicorn worker 数或复制 Compose 服务进行水平扩容。
 
 数据库与图片分别保存在 `postgres-data`、`imagegen-data` 命名卷。渠道、模型、价格、队列和上下文配置也保存在 PostgreSQL，重建容器不需要重新修改 YAML。服务默认 `restart: unless-stopped`：Docker 引擎恢复后容器会自动恢复。Windows Docker Desktop 由启动目录入口在当前用户登录后启动；Linux Docker Engine 设置为系统服务后可在无人登录时随系统启动。
 
@@ -77,7 +79,7 @@ docker compose up -d --build
 py scripts/backup.py
 ```
 
-命令会在 `backups/<时间>/` 生成 `database.dump`、`files.tar.gz` 和权限收紧的 `deployment.env`。后者包含恢复数据库中加密 API Key 所必需的 `CONFIG_ENCRYPTION_KEY`/`SECRET_KEY`，必须与数据库备份一起离线加密保管；整个备份目录都不要提交到版本库。
+命令会短暂停止当前正在运行的 Web 与 Worker，在没有应用写入时生成一致的数据库和文件快照，然后只恢复备份前处于运行状态的服务。结果位于 `backups/<时间>/`，包含 `database.dump`、`files.tar.gz` 和权限收紧的 `deployment.env`。后者包含恢复数据库中加密 API Key 所必需的 `CONFIG_ENCRYPTION_KEY`/`SECRET_KEY`，必须与数据库备份一起离线加密保管；整个备份目录都不要提交到版本库。
 
 ## 本地运行
 
