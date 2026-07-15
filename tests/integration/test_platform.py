@@ -53,6 +53,14 @@ def png_bytes(color=(35, 160, 110)) -> bytes:
     return stream.getvalue()
 
 
+def opaque_icon_png_bytes() -> bytes:
+    stream = io.BytesIO()
+    image = Image.new("RGB", (64, 64), (255, 255, 255))
+    image.paste((35, 160, 110), (16, 16, 48, 48))
+    image.save(stream, format="PNG")
+    return stream.getvalue()
+
+
 def png_bytes_with_dimensions(width: int, height: int) -> bytes:
     content = bytearray(png_bytes())
     content[16:20] = width.to_bytes(4, "big")
@@ -118,22 +126,29 @@ models:
 
 
 class FakeAdapter:
-    def __init__(self, *, fail: bool = False):
+    def __init__(self, *, fail: bool = False, vary: bool = False):
         self.fail = fail
+        self.vary = vary
         self.request = None
+        self.requests = []
 
     def generate(self, _channel, request):
         self.request = request
+        self.requests.append(request)
         if self.fail:
             from imagegen.integrations.images import ProviderError
 
             raise ProviderError("测试失败", code="test_failure", status_code=502)
-        return ProviderResult(content=png_bytes(), request_id="request-test")
+        index = len(self.requests)
+        return ProviderResult(
+            content=png_bytes((35, min(250, 130 + index * 20), 110)) if self.vary else png_bytes(),
+            request_id=f"request-test-{index}",
+        )
 
 
 class FakeProviderFactory:
-    def __init__(self, *, fail: bool = False):
-        self.adapter = FakeAdapter(fail=fail)
+    def __init__(self, *, fail: bool = False, vary: bool = False):
+        self.adapter = FakeAdapter(fail=fail, vary=vary)
 
     def for_channel(self, _channel):
         return self.adapter
@@ -160,21 +175,49 @@ class BlockingProviderFactory:
 
 
 class FakeImageHTTPResponse:
-    status_code = 200
     headers = {"x-request-id": "image-http-test"}
 
-    @staticmethod
-    def json():
-        return {"data": [{"b64_json": base64.b64encode(png_bytes()).decode("ascii")}]}
+    def __init__(self, *, content: bytes | None = None, status_code: int = 200, payload=None):
+        self.status_code = status_code
+        self.payload = payload or {
+            "data": [{"b64_json": base64.b64encode(content or png_bytes()).decode("ascii")}]
+        }
+
+    def json(self):
+        return self.payload
+
+    def close(self):
+        pass
 
 
 class RecordingImageSession:
     def __init__(self):
         self.request = None
+        self.requests = []
 
     def post(self, url, **kwargs):
         self.request = {"url": url, **kwargs}
-        return FakeImageHTTPResponse()
+        self.requests.append(self.request)
+        payload = kwargs.get("json") or kwargs.get("data") or {}
+        content = (
+            opaque_icon_png_bytes() if payload.get("background") == "transparent" else png_bytes()
+        )
+        return FakeImageHTTPResponse(content=content)
+
+
+class RejectingTransparencySession(RecordingImageSession):
+    def post(self, url, **kwargs):
+        self.request = {"url": url, **kwargs}
+        self.requests.append(self.request)
+        payload = kwargs.get("json") or kwargs.get("data") or {}
+        if payload.get("background") == "transparent":
+            return FakeImageHTTPResponse(
+                status_code=400,
+                payload={
+                    "error": {"message": "Transparent background is not supported for this model."}
+                },
+            )
+        return FakeImageHTTPResponse(content=opaque_icon_png_bytes())
 
 
 class FakeChatClient:
@@ -312,8 +355,8 @@ class ImageGenPlatformTests(unittest.TestCase):
         os.environ.pop("TEST_IMAGE_KEY", None)
         os.environ.pop("TEST_CHAT_KEY", None)
 
-    def create_workspace(self, name="角色设计"):
-        return self.services.workspaces.create(self.user.id, name)
+    def create_workspace(self, name="角色设计", kind="image"):
+        return self.services.workspaces.create(self.user.id, name, kind)
 
     def test_display_amount_trims_only_redundant_fraction_zeros(self):
         self.assertEqual(display_amount("100.0000"), "100.00")
@@ -442,6 +485,20 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertIn("不要像客服、产品说明书或信息收集表", CHAT_SYSTEM_PROMPT)
         self.assertIn("先直接回应用户当前的问题", CHAT_SYSTEM_PROMPT)
         self.assertNotIn("公司内部 AI 视觉创作工作台的需求顾问", CHAT_SYSTEM_PROMPT)
+
+    def test_animation_workspace_chat_uses_motion_specific_guidance(self):
+        workspace = self.create_workspace("动作讨论", kind="animation")
+
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="角色原地挥手并循环",
+        )
+
+        system = self.chat_client.calls[-1]["system"]
+        self.assertIn("当前工作站用于制作帧动画", system)
+        self.assertIn("动作起点", system)
+        self.assertIn("首尾衔接", system)
 
     def test_admin_creates_user_and_balance_ledger_is_immutable_history(self):
         self.services.billing.adjust(
@@ -1000,8 +1057,14 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertNotIn("data", session.request)
         self.assertEqual(session.request["headers"]["Content-Type"], "application/json")
 
-        adapter.generate(channel, replace(request, transparent_background=True))
+        transparent_result = adapter.generate(
+            channel,
+            replace(request, transparent_background=True),
+        )
         self.assertEqual(session.request["json"]["background"], "transparent")
+        with Image.open(io.BytesIO(transparent_result.content)) as image:
+            self.assertEqual(image.mode, "RGBA")
+            self.assertEqual(image.getchannel("A").getextrema(), (0, 255))
 
         subject = png_bytes((220, 35, 45))
         layout = png_bytes((25, 80, 220))
@@ -1013,7 +1076,7 @@ class ImageGenPlatformTests(unittest.TestCase):
                 ReferencePayload("layout.png", layout, "image/png"),
             ),
         )
-        adapter.generate(channel, edit_request)
+        edit_result = adapter.generate(channel, edit_request)
         self.assertEqual(session.request["url"], "https://relay.example/v1/images/edits")
         self.assertEqual(session.request["data"]["n"], "1")
         self.assertEqual(session.request["data"]["background"], "transparent")
@@ -1027,6 +1090,35 @@ class ImageGenPlatformTests(unittest.TestCase):
             [subject, layout],
         )
         self.assertNotIn("Content-Type", session.request["headers"])
+        with Image.open(io.BytesIO(edit_result.content)) as image:
+            self.assertEqual(image.getchannel("A").getextrema(), (0, 255))
+
+    def test_transparent_background_retries_with_a_convertible_canvas(self):
+        channel = self.app.extensions["channel_registry"].get("test")
+        adapter = OpenAIImagesAdapter()
+        session = RejectingTransparencySession()
+        adapter._local.session = session
+
+        result = adapter.generate(
+            channel,
+            GenerationRequest(
+                prompt="极简上传图标",
+                model="model-a",
+                size="1024x1024",
+                quality="medium",
+                output_format="png",
+                compression=90,
+                transparent_background=True,
+            ),
+        )
+
+        self.assertEqual(len(session.requests), 2)
+        self.assertEqual(session.requests[0]["json"]["background"], "transparent")
+        self.assertNotIn("background", session.requests[1]["json"])
+        self.assertIn("#FFFFFF", session.requests[1]["json"]["prompt"])
+        with Image.open(io.BytesIO(result.content)) as image:
+            self.assertEqual(image.mode, "RGBA")
+            self.assertEqual(image.getchannel("A").getextrema(), (0, 255))
 
     def test_chat_request_sends_configured_reasoning_effort(self):
         model = self.app.extensions["chat_model_registry"].get("test-chat")
@@ -1086,6 +1178,101 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertTrue(workspace.settings["transparent_background"])
         saved_job = db.session.get(GenerationJob, response.json["job"]["id"])
         self.assertTrue(saved_job.transparent_background)
+
+    def test_animation_workspace_creation_and_parameters_are_persisted(self):
+        client = self.user_client()
+        response = client.post(
+            "/api/workspaces",
+            json={"name": "眨眼循环", "kind": "animation"},
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json["workspace"]["kind"], "animation")
+
+        workspace = db.session.get(Workspace, response.json["workspace"]["id"])
+        job = self.submit(
+            workspace,
+            frame_count=8,
+            animation_fps=12,
+            animation_loop=False,
+            animation_format="gif",
+        )
+
+        self.assertEqual(job.kind, "animation")
+        self.assertEqual(job.requested_count, 8)
+        self.assertEqual(job.animation_fps, 12)
+        self.assertFalse(job.animation_loop)
+        self.assertEqual(job.animation_format, "gif")
+        self.assertEqual(job.reserved_rmb, Decimal("10.0000"))
+        self.assertEqual(workspace.settings["animation_frame_count"], 8)
+        payload = client.get(f"/api/generations/{job.id}").json["job"]
+        self.assertEqual(payload["kind"], "animation")
+        self.assertEqual(payload["animation_duration_seconds"], 0.667)
+
+    def test_animation_frames_run_in_order_and_export_animated_webp(self):
+        workspace = self.create_workspace("挥手循环", kind="animation")
+        job = self.submit(
+            workspace,
+            frame_count=3,
+            animation_fps=6,
+            animation_loop=True,
+            animation_format="webp",
+        )
+        item_ids = [item.id for item in job.items]
+        worker = GenerationWorker(
+            self.app,
+            self.app.extensions["channel_registry"],
+            self.app.extensions["image_storage"],
+        )
+        worker.providers = FakeProviderFactory(vary=True)
+        channel = self.app.extensions["channel_registry"].get("test")
+
+        self.assertFalse(worker._claim(item_ids[1], channel))
+        for item_id in item_ids:
+            self.assertTrue(worker._claim(item_id, channel))
+            worker._process_item(item_id)
+
+        db.session.expire_all()
+        saved_job = db.session.get(GenerationJob, job.id)
+        self.assertEqual(saved_job.status, "succeeded")
+        self.assertEqual(len(worker.providers.adapter.requests), 3)
+        self.assertFalse(worker.providers.adapter.requests[0].references)
+        self.assertEqual(len(worker.providers.adapter.requests[1].references), 1)
+        self.assertIn("frame 2 of 3", worker.providers.adapter.requests[1].prompt)
+
+        response = self.user_client().get(f"/media/animations/{job.id}")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "image/webp")
+        content = bytes(response.data)
+        response.close()
+        with Image.open(io.BytesIO(content)) as animation:
+            self.assertTrue(animation.is_animated)
+            self.assertEqual(animation.n_frames, 3)
+
+    def test_animation_failure_stops_tail_and_releases_all_reserved_balance(self):
+        workspace = self.create_workspace("失败动画", kind="animation")
+        job = self.submit(workspace, frame_count=3)
+        first_item_id = job.items[0].id
+        worker = GenerationWorker(
+            self.app,
+            self.app.extensions["channel_registry"],
+            self.app.extensions["image_storage"],
+        )
+        worker.providers = FakeProviderFactory(fail=True)
+        channel = self.app.extensions["channel_registry"].get("test")
+        self.assertTrue(worker._claim(first_item_id, channel))
+
+        worker._process_item(first_item_id)
+
+        db.session.expire_all()
+        saved_job = db.session.get(GenerationJob, job.id)
+        self.assertEqual(
+            [item.status for item in saved_job.items], ["failed", "canceled", "canceled"]
+        )
+        self.assertEqual(saved_job.status, "failed")
+        self.assertEqual(saved_job.items[1].error_code, "animation_dependency_failed")
+        user = db.session.get(User, self.user.id)
+        self.assertEqual(user.balance_rmb, Decimal("20.0000"))
+        self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
 
     def test_custom_size_is_accepted_and_normalized(self):
         workspace = self.create_workspace()

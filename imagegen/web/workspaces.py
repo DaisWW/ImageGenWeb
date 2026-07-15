@@ -30,7 +30,12 @@ def list_workspaces():
 @web.post("/api/workspaces")
 @login_required
 def create_workspace():
-    workspace = services().workspaces.create(current_user.id, str(json_body().get("name", "")))
+    data = json_body()
+    workspace = services().workspaces.create(
+        current_user.id,
+        str(data.get("name", "")),
+        str(data.get("kind", "image")),
+    )
     return jsonify(workspace=workspace_dict(workspace)), 201
 
 

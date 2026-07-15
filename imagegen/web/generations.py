@@ -9,6 +9,7 @@ from ..extensions import db
 from ..models import Asset, Workspace
 from ..serializers import job_dict, workspace_dict
 from ..services import SubmitGeneration
+from ..storage import StorageError
 from . import web
 from .shared import (
     accessible_item,
@@ -35,8 +36,10 @@ def submit_generation():
     try:
         compression = int(data.get("compression", 90))
         batch_count = int(data.get("batch_count", 1))
+        frame_count = int(data.get("animation_frame_count", data.get("frame_count", 6)))
+        animation_fps = int(data.get("animation_fps", 6))
     except (TypeError, ValueError) as exc:
-        raise ServiceError("生成数量或压缩质量无效") from exc
+        raise ServiceError("生成数量、帧率或压缩质量无效") from exc
     generation_service = services().generations
     job = generation_service.submit(
         current_user.id,
@@ -53,6 +56,10 @@ def submit_generation():
             batch_count=batch_count,
             reference_ids=tuple(str(item) for item in reference_ids),
             transparent_background=json_bool(data.get("transparent_background", False)),
+            frame_count=frame_count,
+            animation_fps=animation_fps,
+            animation_loop=json_bool(data.get("animation_loop", True)),
+            animation_format=str(data.get("animation_format", "webp")).lower(),
         ),
     )
     positions = generation_service.queue_positions()
@@ -152,6 +159,40 @@ def output_file(item_id: str):
         mimetype=item.output_mime_type,
         as_attachment=request.args.get("download") == "1",
         download_name=(f"image_{item.id}.{image_extension(item.output_mime_type)}"),
+        conditional=True,
+    )
+
+
+@web.get("/media/animations/<job_id>")
+@login_required
+def animation_file(job_id: str):
+    job = services().generations.get_job(
+        job_id,
+        user_id=current_user.id,
+        admin=current_user.is_admin,
+    )
+    if job.kind != "animation" or job.status != "succeeded":
+        abort(404)
+    frame_paths = [item.output_path for item in job.items]
+    if not all(frame_paths):
+        abort(404)
+    try:
+        animation = storage().save_animation(
+            user_id=job.user_id,
+            workspace_id=job.workspace_id,
+            job_id=job.id,
+            frame_paths=frame_paths,
+            output_format=job.animation_format,
+            fps=job.animation_fps,
+            loop=job.animation_loop,
+        )
+    except StorageError as exc:
+        raise ServiceError(str(exc), code="animation_export_failed", status_code=409) from exc
+    return send_file(
+        storage().read(animation.relative_path),
+        mimetype=animation.mime_type,
+        as_attachment=request.args.get("download") == "1",
+        download_name=f"animation_{job.id}.{animation.extension}",
         conditional=True,
     )
 

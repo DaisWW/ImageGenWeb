@@ -78,6 +78,7 @@ class Workspace(TimestampMixin, db.Model):
     id: Mapped[str] = mapped_column(db.String(32), primary_key=True, default=new_public_id)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(db.String(80))
+    kind: Mapped[str] = mapped_column(db.String(20), default="image")
     settings: Mapped[dict] = mapped_column(MutableDict.as_mutable(JSON_TYPE), default=dict)
 
     user: Mapped[User] = relationship(back_populates="workspaces")
@@ -205,6 +206,7 @@ class GenerationJob(TimestampMixin, db.Model):
     channel_id: Mapped[str] = mapped_column(db.String(64), index=True)
     channel_label: Mapped[str] = mapped_column(db.String(100))
     channel_config_version: Mapped[str] = mapped_column(db.String(64))
+    kind: Mapped[str] = mapped_column(db.String(20), default="image")
     mode: Mapped[str] = mapped_column(db.String(20))
     prompt: Mapped[str] = mapped_column(db.Text)
     model: Mapped[str] = mapped_column(db.String(100))
@@ -213,6 +215,9 @@ class GenerationJob(TimestampMixin, db.Model):
     output_format: Mapped[str] = mapped_column(db.String(20))
     compression: Mapped[int]
     transparent_background: Mapped[bool] = mapped_column(default=False)
+    animation_fps: Mapped[int] = mapped_column(default=6)
+    animation_loop: Mapped[bool] = mapped_column(default=True)
+    animation_format: Mapped[str] = mapped_column(db.String(20), default="webp")
     requested_count: Mapped[int]
     price_per_image_rmb: Mapped[Decimal] = mapped_column(MONEY_TYPE)
     reserved_rmb: Mapped[Decimal] = mapped_column(MONEY_TYPE)

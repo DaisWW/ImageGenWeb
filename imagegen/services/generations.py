@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import func, select
@@ -38,6 +38,10 @@ class SubmitGeneration:
     batch_count: int
     reference_ids: tuple[str, ...]
     transparent_background: bool = False
+    frame_count: int = 6
+    animation_fps: int = 6
+    animation_loop: bool = True
+    animation_format: str = "webp"
 
 
 class GenerationService:
@@ -60,7 +64,9 @@ class GenerationService:
             .limit(1)
         ):
             raise ServiceError(
-                "当前工作站已有图片任务，请等待完成或先取消",
+                "当前工作站已有帧动画任务，请等待完成或先取消"
+                if workspace.kind == "animation"
+                else "当前工作站已有图片任务，请等待完成或先取消",
                 code="workspace_generation_active",
                 status_code=409,
             )
@@ -69,7 +75,10 @@ class GenerationService:
             selected_model = channel.get_model(request.model)
         except ValueError as exc:
             raise ServiceError(str(exc)) from exc
-        normalized_size = self._validate_request(channel, request)
+        normalized_size = self._validate_request(channel, request, workspace.kind)
+        requested_count = (
+            request.frame_count if workspace.kind == "animation" else request.batch_count
+        )
         references = self._load_references(workspace, request.reference_ids)
         self._validate_references(channel, request.mode, references)
 
@@ -92,20 +101,20 @@ class GenerationService:
             or 0
         )
         queue = self.channels.queue
-        if user_queued + request.batch_count > queue.max_queued_per_user:
+        if user_queued + requested_count > queue.max_queued_per_user:
             raise ServiceError(
                 "当前账户排队图片已达到上限",
                 code="queue_full",
                 status_code=429,
             )
-        if global_queued + request.batch_count > queue.max_queued_global:
+        if global_queued + requested_count > queue.max_queued_global:
             raise ServiceError(
                 "系统排队图片已达到上限",
                 code="queue_full",
                 status_code=429,
             )
 
-        reserved = money(channel.price_rmb * request.batch_count)
+        reserved = money(channel.price_rmb * requested_count)
         self.billing.reserve(user, reserved)
         job = GenerationJob(
             user_id=user.id,
@@ -113,6 +122,7 @@ class GenerationService:
             channel_id=channel.identifier,
             channel_label=channel.label,
             channel_config_version=self.channels.version,
+            kind=workspace.kind,
             mode=request.mode,
             prompt=request.prompt.strip(),
             model=selected_model.identifier,
@@ -121,7 +131,10 @@ class GenerationService:
             output_format=request.output_format,
             compression=request.compression,
             transparent_background=request.transparent_background,
-            requested_count=request.batch_count,
+            animation_fps=request.animation_fps,
+            animation_loop=request.animation_loop,
+            animation_format=request.animation_format,
+            requested_count=requested_count,
             price_per_image_rmb=money(channel.price_rmb),
             reserved_rmb=reserved,
             charged_rmb=money(0),
@@ -133,7 +146,9 @@ class GenerationService:
         except IntegrityError as exc:
             db.session.rollback()
             raise ServiceError(
-                "当前工作站已有图片任务，请等待完成或先取消",
+                "当前工作站已有帧动画任务，请等待完成或先取消"
+                if workspace.kind == "animation"
+                else "当前工作站已有图片任务，请等待完成或先取消",
                 code="workspace_generation_active",
                 status_code=409,
             ) from exc
@@ -145,7 +160,7 @@ class GenerationService:
                     position=position,
                 )
             )
-        for position in range(request.batch_count):
+        for position in range(requested_count):
             db.session.add(
                 GenerationItem(
                     job_id=job.id,
@@ -169,6 +184,10 @@ class GenerationService:
                 "compression": request.compression,
                 "transparent_background": request.transparent_background,
                 "batch_count": request.batch_count,
+                "animation_frame_count": request.frame_count,
+                "animation_fps": request.animation_fps,
+                "animation_loop": request.animation_loop,
+                "animation_format": request.animation_format,
             }
         )
         db.session.commit()
@@ -291,6 +310,7 @@ class GenerationService:
                 GenerationItem.status == "succeeded",
                 GenerationItem.elapsed_seconds.is_not(None),
                 GenerationJob.channel_id == job.channel_id,
+                GenerationJob.kind == job.kind,
                 GenerationJob.mode == job.mode,
             )
             .order_by(GenerationItem.completed_at.desc())
@@ -310,7 +330,11 @@ class GenerationService:
             job.status = "canceling" if job.cancel_requested_at else "running"
             return
         if any(status == "queued" for status in statuses):
-            job.status = "queued"
+            job.status = (
+                "running"
+                if job.kind == "animation" and any(status == "succeeded" for status in statuses)
+                else "queued"
+            )
             return
         succeeded = statuses.count("succeeded")
         failed = statuses.count("failed") + statuses.count("interrupted")
@@ -323,8 +347,12 @@ class GenerationService:
             job.status = "partial"
         else:
             job.status = "failed" if failed else "canceled"
+        completed_times = [item.completed_at for item in job.items if item.completed_at]
         job.completed_at = max(
-            (item.completed_at for item in job.items if item.completed_at),
+            completed_times,
+            key=lambda value: value.replace(tzinfo=timezone.utc)
+            if value.tzinfo is None
+            else value.astimezone(timezone.utc),
             default=utcnow(),
         )
 
@@ -349,7 +377,9 @@ class GenerationService:
         return [by_id[asset_id] for asset_id in reference_ids]
 
     @staticmethod
-    def _validate_request(channel: Channel, request: SubmitGeneration) -> str:
+    def _validate_request(channel: Channel, request: SubmitGeneration, workspace_kind: str) -> str:
+        if workspace_kind not in {"image", "animation"}:
+            raise ServiceError("工作站类型无效")
         if request.mode not in channel.capabilities.modes:
             raise ServiceError(f"{channel.label} 不支持当前生成模式")
         prompt = request.prompt.strip()
@@ -366,6 +396,12 @@ class GenerationService:
             raise ServiceError("压缩质量必须在 0 到 100 之间")
         if not 1 <= request.batch_count <= 20:
             raise ServiceError("单批生成张数必须在 1 到 20 之间")
+        if not 2 <= request.frame_count <= 20:
+            raise ServiceError("动画帧数必须在 2 到 20 之间")
+        if not 1 <= request.animation_fps <= 24:
+            raise ServiceError("动画帧率必须在 1 到 24 FPS 之间")
+        if request.animation_format not in {"webp", "gif"}:
+            raise ServiceError("动画导出格式仅支持 WebP 或 GIF")
         return normalized_size
 
     @staticmethod

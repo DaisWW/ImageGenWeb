@@ -27,8 +27,11 @@ from ..models import (
 )
 from ..storage import ImageStorage
 from .conversation_context import ConversationContextManager
-from .conversation_prompts import CHAT_SYSTEM_PROMPT
+from .conversation_prompts import CHAT_SYSTEM_PROMPT as IMAGE_CHAT_SYSTEM_PROMPT
+from .conversation_prompts import chat_system_prompt
 from .prompt_drafts import PromptDraftParser
+
+CHAT_SYSTEM_PROMPT = IMAGE_CHAT_SYSTEM_PROMPT
 
 
 @dataclass(frozen=True)
@@ -149,7 +152,11 @@ class ConversationService:
                 pending_image_count=len(attachments),
             )
             db.session.commit()
-            result = self.client.complete(model, system=CHAT_SYSTEM_PROMPT, messages=context)
+            result = self.client.complete(
+                model,
+                system=chat_system_prompt(workspace.kind),
+                messages=context,
+            )
         except OpenAIChatError as exc:
             self._raise_chat_error(exc)
 
@@ -183,7 +190,8 @@ class ConversationService:
         model_id: str,
         translate_to_english: bool,
     ) -> ConversationMessage:
-        with self._workspace_operation(workspace, "prompt_draft", "正在整理生图提示词"):
+        label = "正在整理帧动画提示词" if workspace.kind == "animation" else "正在整理生图提示词"
+        with self._workspace_operation(workspace, "prompt_draft", label):
             return self._create_prompt_draft(
                 workspace,
                 model_id=model_id,
@@ -209,9 +217,14 @@ class ConversationService:
             )
             .limit(1)
         ):
-            raise ServiceError("请先通过对话描述需要生成的图片")
+            subject = "帧动画" if workspace.kind == "animation" else "图片"
+            raise ServiceError(f"请先通过对话描述需要生成的{subject}")
         attachments = self._latest_user_attachments(workspace)
-        request_text = "请基于以上会话整理当前已确认的最终生图需求。"
+        request_text = (
+            "请基于以上会话整理当前已确认的最终帧动画需求。"
+            if workspace.kind == "animation"
+            else "请基于以上会话整理当前已确认的最终生图需求。"
+        )
         pending = self._user_model_message(request_text, attachments)
         try:
             context = self.context.build(
@@ -224,7 +237,10 @@ class ConversationService:
             db.session.commit()
             result = self.client.complete(
                 model,
-                system=PromptDraftParser.system_prompt(translate_to_english=translate_to_english),
+                system=PromptDraftParser.system_prompt(
+                    translate_to_english=translate_to_english,
+                    workspace_kind=workspace.kind,
+                ),
                 messages=context,
                 max_output_tokens=min(model.max_output_tokens, 2400),
             )
@@ -232,7 +248,11 @@ class ConversationService:
             self._raise_chat_error(exc)
         draft = PromptDraftParser.parse(result.content, translate_to_english=translate_to_english)
         draft["reference_ids"] = [asset.id for asset in attachments]
-        label = "English prompt" if translate_to_english else "生图提示词"
+        label = (
+            "English prompt"
+            if translate_to_english
+            else ("帧动画提示词" if workspace.kind == "animation" else "生图提示词")
+        )
         message = self._assistant_message(
             workspace,
             model,
@@ -457,7 +477,9 @@ class ConversationService:
         )
         if active:
             raise ServiceError(
-                "当前图片尚未生成完成，请等待完成或先取消任务",
+                "当前帧动画尚未生成完成，请等待完成或先取消任务"
+                if workspace.kind == "animation"
+                else "当前图片尚未生成完成，请等待完成或先取消任务",
                 code="workspace_generation_active",
                 status_code=409,
             )

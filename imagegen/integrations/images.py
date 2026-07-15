@@ -2,18 +2,28 @@ from __future__ import annotations
 
 import base64
 import binascii
+import io
 import ipaddress
 import socket
 import threading
+import warnings
+from collections import deque
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import requests
+from PIL import Image, ImageFilter, UnidentifiedImageError
 
 from ..config.channels import Channel
 
 MAX_OUTPUT_BYTES = 50 * 1024 * 1024
+MAX_TRANSPARENCY_PIXELS = 40_000_000
+TRANSPARENT_FALLBACK_SUFFIX = (
+    "\n\nTechnical output requirement: render the subject on a perfectly uniform pure white "
+    "background (#FFFFFF) extending to every canvas edge. Do not add texture, gradients, "
+    "shadows, borders, scenery, or extra objects to the background."
+)
 
 
 class ProviderError(RuntimeError):
@@ -75,53 +85,78 @@ class OpenAIImagesAdapter:
             payload["output_compression"] = request.compression
         if request.transparent_background:
             payload["background"] = "transparent"
-        headers = {"Authorization": f"Bearer {channel.api_key}"}
-        request_data: dict[str, Any]
-        if request.references:
-            request_data = {
-                "data": {key: str(value) for key, value in payload.items()},
-                "files": [
-                    (
-                        channel.capabilities.reference_field,
-                        (reference.filename, reference.content, reference.mime_type),
-                    )
-                    for reference in request.references
-                ],
-            }
-        else:
-            headers["Content-Type"] = "application/json"
-            request_data = {"json": payload}
-        try:
-            response = self._session().post(
-                url,
-                headers=headers,
-                timeout=(15, channel.limits.timeout_seconds),
-                **request_data,
-            )
-        except requests.Timeout as exc:
-            raise ProviderError("上游生成超时", code="timeout") from exc
-        except requests.RequestException as exc:
-            raise ProviderError(
-                f"无法连接生图渠道：{exc.__class__.__name__}", code="connection_error"
-            ) from exc
+        fallback_attempted = False
+        while True:
+            headers = {"Authorization": f"Bearer {channel.api_key}"}
+            request_data: dict[str, Any]
+            if request.references:
+                request_data = {
+                    "data": {key: str(value) for key, value in payload.items()},
+                    "files": [
+                        (
+                            channel.capabilities.reference_field,
+                            (reference.filename, reference.content, reference.mime_type),
+                        )
+                        for reference in request.references
+                    ],
+                }
+            else:
+                headers["Content-Type"] = "application/json"
+                request_data = {"json": payload}
+            try:
+                response = self._session().post(
+                    url,
+                    headers=headers,
+                    timeout=(15, channel.limits.timeout_seconds),
+                    **request_data,
+                )
+            except requests.Timeout as exc:
+                raise ProviderError("上游生成超时", code="timeout") from exc
+            except requests.RequestException as exc:
+                raise ProviderError(
+                    f"无法连接生图渠道：{exc.__class__.__name__}", code="connection_error"
+                ) from exc
 
-        request_id = _request_id(response)
-        if not 200 <= response.status_code < 300:
-            raise ProviderError(
-                _upstream_error(response),
-                code="upstream_error",
-                status_code=response.status_code,
-                request_id=request_id,
-            )
-        try:
-            response_payload = response.json()
-        except ValueError as exc:
-            raise ProviderError(
-                "上游返回了无效 JSON", code="invalid_response", request_id=request_id
-            ) from exc
-        content = self._extract(response_payload, channel, request_id)
+            request_id = _request_id(response)
+            if not 200 <= response.status_code < 300:
+                message = _upstream_error(response)
+                if (
+                    request.transparent_background
+                    and not fallback_attempted
+                    and "background" in payload
+                    and _transparent_background_unsupported(message)
+                ):
+                    response.close()
+                    payload = {
+                        **payload,
+                        "prompt": f"{request.prompt.rstrip()}{TRANSPARENT_FALLBACK_SUFFIX}",
+                    }
+                    payload.pop("background", None)
+                    fallback_attempted = True
+                    continue
+                raise ProviderError(
+                    message,
+                    code="upstream_error",
+                    status_code=response.status_code,
+                    request_id=request_id,
+                )
+            try:
+                response_payload = response.json()
+            except ValueError as exc:
+                raise ProviderError(
+                    "上游返回了无效 JSON", code="invalid_response", request_id=request_id
+                ) from exc
+            content = self._extract(response_payload, channel, request_id)
+            break
+
         if len(content) > MAX_OUTPUT_BYTES:
             raise ProviderError("生成图片超过 50 MiB 限制", code="output_too_large")
+        if request.transparent_background:
+            content = _ensure_transparent_image(
+                content,
+                output_format=request.output_format,
+                compression=request.compression,
+            )
         return ProviderResult(content=content, request_id=request_id)
 
     def _extract(self, payload: Any, channel: Channel, request_id: str) -> bytes:
@@ -205,6 +240,114 @@ class ProviderFactory:
         if channel.adapter == "openai_images":
             return self._openai_images
         raise ProviderError(f"不支持的渠道适配器：{channel.adapter}", code="adapter_error")
+
+
+def _transparent_background_unsupported(message: str) -> bool:
+    normalized = message.lower()
+    return (
+        "transparent" in normalized
+        and "background" in normalized
+        and ("not supported" in normalized or "unsupported" in normalized)
+    ) or ("透明背景" in message and "不支持" in message)
+
+
+def _ensure_transparent_image(
+    content: bytes,
+    *,
+    output_format: str,
+    compression: int,
+) -> bytes:
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(content)) as image:
+                width, height = image.size
+                if width * height > MAX_TRANSPARENCY_PIXELS:
+                    raise ProviderError(
+                        "生成图片像素数量超过透明背景处理限制",
+                        code="output_too_large",
+                    )
+                image.load()
+                rgba = image.convert("RGBA")
+    except ProviderError:
+        raise
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+        raise ProviderError("生成图片像素数量超过安全限制", code="invalid_response") from exc
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise ProviderError("上游返回的图片无效", code="invalid_response") from exc
+
+    if rgba.getchannel("A").getextrema()[0] < 255:
+        return content
+
+    converted = _remove_simple_light_background(rgba.convert("RGB"))
+    if converted is None:
+        raise ProviderError(
+            "上游未返回透明通道，且背景无法可靠转换",
+            code="transparent_background_unsupported",
+        )
+
+    output = io.BytesIO()
+    if output_format == "webp":
+        converted.save(output, format="WEBP", quality=compression, method=4)
+    else:
+        converted.save(output, format="PNG")
+    result = output.getvalue()
+    if len(result) > MAX_OUTPUT_BYTES:
+        raise ProviderError("生成图片超过 50 MiB 限制", code="output_too_large")
+    return result
+
+
+def _remove_simple_light_background(image: Image.Image) -> Image.Image | None:
+    width, height = image.size
+    total = width * height
+    candidate = bytearray(total)
+    for index, (red, green, blue) in enumerate(image.get_flattened_data()):
+        if min(red, green, blue) >= 224 and max(red, green, blue) - min(red, green, blue) <= 18:
+            candidate[index] = 1
+
+    connected = bytearray(total)
+    pending: deque[int] = deque()
+
+    def enqueue(index: int) -> None:
+        if candidate[index] and not connected[index]:
+            connected[index] = 1
+            pending.append(index)
+
+    for x in range(width):
+        enqueue(x)
+        enqueue((height - 1) * width + x)
+    for y in range(height):
+        enqueue(y * width)
+        enqueue(y * width + width - 1)
+
+    while pending:
+        index = pending.popleft()
+        x = index % width
+        y = index // width
+        if x:
+            enqueue(index - 1)
+        if x + 1 < width:
+            enqueue(index + 1)
+        if y:
+            enqueue(index - width)
+        if y + 1 < height:
+            enqueue(index + width)
+
+    background_ratio = connected.count(1) / total
+    if not 0.05 <= background_ratio <= 0.98:
+        return None
+
+    background = Image.frombytes(
+        "L",
+        image.size,
+        bytes(255 if value else 0 for value in connected),
+    )
+    background = background.filter(ImageFilter.MaxFilter(3))
+    background = background.filter(ImageFilter.GaussianBlur(0.65))
+    alpha = background.point(lambda value: 255 - value)
+    result = image.convert("RGBA")
+    result.putalpha(alpha)
+    return result
 
 
 def _request_id(response: requests.Response) -> str:

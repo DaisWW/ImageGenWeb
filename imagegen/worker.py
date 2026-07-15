@@ -121,19 +121,31 @@ class GenerationWorker:
             candidates = list(
                 db.session.scalars(
                     select(GenerationItem)
-                    .options(selectinload(GenerationItem.user), selectinload(GenerationItem.job))
+                    .options(
+                        selectinload(GenerationItem.user),
+                        selectinload(GenerationItem.job).selectinload(GenerationJob.items),
+                    )
                     .where(GenerationItem.status == "queued")
                     .order_by(GenerationItem.created_at, GenerationItem.position)
                     .limit(200)
                 )
             )
             scheduled_users: set[int] = set()
+            scheduled_animation_jobs: set[str] = set()
             selected: list[str] = []
             for item in candidates:
                 if len(selected) >= available:
                     break
                 if item.user_id in scheduled_users and len(candidates) > available:
                     continue
+                if item.job.kind == "animation":
+                    if item.job_id in scheduled_animation_jobs:
+                        continue
+                    if any(
+                        frame.position < item.position and frame.status != "succeeded"
+                        for frame in item.job.items
+                    ):
+                        continue
                 try:
                     channel = self.channels.get(item.channel_id)
                 except ValueError:
@@ -145,6 +157,8 @@ class GenerationWorker:
                     continue
                 if self._claim(item.id, channel):
                     selected.append(item.id)
+                    if item.job.kind == "animation":
+                        scheduled_animation_jobs.add(item.job_id)
                     scheduled_users.add(item.user_id)
                     user_active[item.user_id] = user_active.get(item.user_id, 0) + 1
                     channel_active[item.channel_id] = channel_active.get(item.channel_id, 0) + 1
@@ -155,17 +169,29 @@ class GenerationWorker:
 
     def _claim(self, item_id: str, channel) -> bool:
         db.session.expire_all()
-        job_id = db.session.scalar(
-            select(GenerationItem.job_id).where(GenerationItem.id == item_id)
-        )
-        if job_id is None:
+        item_identity = db.session.execute(
+            select(GenerationItem.job_id, GenerationItem.position).where(
+                GenerationItem.id == item_id
+            )
+        ).one_or_none()
+        if item_identity is None:
             db.session.rollback()
             return False
+        job_id, position = item_identity
 
         job = db.session.scalar(
             select(GenerationJob).where(GenerationJob.id == job_id).with_for_update()
         )
         if job is None or job.cancel_requested_at:
+            db.session.rollback()
+            return False
+        if job.kind == "animation" and db.session.scalar(
+            select(func.count(GenerationItem.id)).where(
+                GenerationItem.job_id == job.id,
+                GenerationItem.position < position,
+                GenerationItem.status != "succeeded",
+            )
+        ):
             db.session.rollback()
             return False
 
@@ -203,6 +229,7 @@ class GenerationWorker:
                 select(GenerationItem)
                 .options(
                     selectinload(GenerationItem.job).selectinload(GenerationJob.references),
+                    selectinload(GenerationItem.job).selectinload(GenerationJob.items),
                 )
                 .where(GenerationItem.id == item_id)
             )
@@ -213,19 +240,12 @@ class GenerationWorker:
                 return
             try:
                 channel = self.channels.get(item.channel_id)
-                references = tuple(
-                    ReferencePayload(
-                        filename=reference.asset.original_name,
-                        content=self.storage.read_bytes(reference.asset.storage_path),
-                        mime_type=reference.asset.mime_type,
-                    )
-                    for reference in item.job.references
-                )
+                references = self._request_references(item, channel)
                 adapter = self.providers.for_channel(channel)
                 result = adapter.generate(
                     channel,
                     GenerationRequest(
-                        prompt=item.job.prompt,
+                        prompt=self._request_prompt(item),
                         model=item.job.model,
                         size=item.job.size,
                         quality=item.job.quality,
@@ -266,6 +286,71 @@ class GenerationWorker:
                 )
             finally:
                 db.session.remove()
+
+    def _request_references(self, item: GenerationItem, channel) -> tuple[ReferencePayload, ...]:
+        base_references = tuple(
+            ReferencePayload(
+                filename=reference.asset.original_name,
+                content=self.storage.read_bytes(reference.asset.storage_path),
+                mime_type=reference.asset.mime_type,
+            )
+            for reference in item.job.references
+        )
+        if item.job.kind != "animation" or item.position == 0:
+            return base_references
+        previous = next(
+            (frame for frame in item.job.items if frame.position == item.position - 1),
+            None,
+        )
+        if previous is None or previous.status != "succeeded" or not previous.output_path:
+            raise StorageError("上一帧尚未成功生成")
+        extension = {
+            "image/png": "png",
+            "image/jpeg": "jpg",
+            "image/webp": "webp",
+        }.get(previous.output_mime_type or "", "img")
+        previous_reference = ReferencePayload(
+            filename=f"frame_{previous.position + 1:03d}.{extension}",
+            content=self.storage.read_bytes(previous.output_path),
+            mime_type=previous.output_mime_type or "image/png",
+        )
+        limit = channel.capabilities.max_reference_images
+        if limit <= 0:
+            return ()
+        if limit == 1:
+            return (previous_reference,)
+        return (*base_references[: limit - 1], previous_reference)
+
+    @staticmethod
+    def _request_prompt(item: GenerationItem) -> str:
+        job = item.job
+        if job.kind != "animation":
+            return job.prompt
+        denominator = job.requested_count if job.animation_loop else max(1, job.requested_count - 1)
+        phase = round(item.position / denominator * 100)
+        loop_instruction = (
+            "The motion must form a seamless loop; the final frame should naturally lead back "
+            "to the first without duplicating it."
+            if job.animation_loop
+            else "The motion progresses once from the defined start pose to the defined end pose."
+        )
+        reference_instruction = (
+            "Establish the exact visual identity and starting pose for the sequence."
+            if item.position == 0
+            else "Use the supplied previous frame as continuity reference and change only the "
+            "motion required for this phase."
+        )
+        sequence = f"""
+
+Frame-by-frame animation instructions:
+- Render exactly one full-canvas frame, never a contact sheet, storyboard, grid, or collage.
+- This is frame {item.position + 1} of {job.requested_count}; motion phase {phase}%.
+- {reference_instruction}
+- Keep character identity, proportions, clothing, camera, composition, background, lighting, palette, and line style stable across every frame.
+- Advance the action described by the user in a small, readable increment.
+- {loop_instruction}
+"""
+        return f"{job.prompt[:6800]}{sequence}"[:8000]
 
     def _settle_success(
         self, item_id: str, content: bytes, request_id: str, started: float
@@ -373,8 +458,25 @@ class GenerationWorker:
             item.completed_at = utcnow()
             item.elapsed_seconds = Decimal(str(round(time.monotonic() - started, 3)))
             self.billing.release(user, job, money(job.price_per_image_rmb))
+            self._cancel_animation_tail(user, job, item.position)
             self.generations.refresh_job_status(job)
         db.session.commit()
+
+    def _cancel_animation_tail(self, user: User, job: GenerationJob, position: int) -> None:
+        if job.kind != "animation":
+            return
+        now = utcnow()
+        releasable = Decimal("0")
+        for frame in job.items:
+            if frame.position <= position or frame.status != "queued":
+                continue
+            frame.status = "canceled"
+            frame.completed_at = now
+            frame.error_code = "animation_dependency_failed"
+            frame.error_message = "前序帧生成失败，后续帧已停止"
+            releasable += money(job.price_per_image_rmb)
+        if releasable:
+            self.billing.release(user, job, releasable)
 
     def _settle_canceled(self, item_id: str, started: float) -> None:
         db.session.expire_all()
@@ -435,6 +537,7 @@ class GenerationWorker:
         item.error_message = "渠道已禁用或 API Key 未配置"
         item.completed_at = utcnow()
         self.billing.release(user, job, money(job.price_per_image_rmb))
+        self._cancel_animation_tail(user, job, item.position)
         self.generations.refresh_job_status(job)
         db.session.commit()
 
@@ -543,6 +646,8 @@ class GenerationWorker:
         item.error_message = "Worker 中断，任务结果未知且未向用户扣费"
         item.completed_at = utcnow()
         self.billing.release(user, job, money(job.price_per_image_rmb))
+        if item.status == "interrupted":
+            self._cancel_animation_tail(user, job, item.position)
         self.generations.refresh_job_status(job)
         db.session.commit()
         return True

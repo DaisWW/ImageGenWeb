@@ -20,6 +20,10 @@ ALLOWED_WORKSPACE_SETTING_KEYS = {
     "compression",
     "transparent_background",
     "batch_count",
+    "animation_frame_count",
+    "animation_fps",
+    "animation_loop",
+    "animation_format",
 }
 
 
@@ -38,6 +42,10 @@ def default_workspace_settings() -> dict[str, Any]:
         "compression": 90,
         "transparent_background": False,
         "batch_count": 1,
+        "animation_frame_count": 6,
+        "animation_fps": 6,
+        "animation_loop": True,
+        "animation_format": "webp",
     }
 
 
@@ -59,11 +67,17 @@ def sanitize_workspace_settings(raw: Any) -> dict[str, Any]:
     settings["quality"] = str(settings["quality"])[:20]
     settings["output_format"] = str(settings["output_format"])[:20]
     settings["transparent_background"] = as_bool(settings["transparent_background"])
+    settings["animation_loop"] = as_bool(settings["animation_loop"])
     if settings["output_format"] not in {"png", "webp"}:
         settings["transparent_background"] = False
     try:
         settings["compression"] = min(100, max(0, int(settings["compression"])))
         settings["batch_count"] = min(20, max(1, int(settings["batch_count"])))
+        settings["animation_frame_count"] = min(20, max(2, int(settings["animation_frame_count"])))
+        settings["animation_fps"] = min(24, max(1, int(settings["animation_fps"])))
     except (TypeError, ValueError) as exc:
         raise ServiceError("工作站数字参数无效") from exc
+    settings["animation_format"] = str(settings["animation_format"]).lower()
+    if settings["animation_format"] not in {"webp", "gif"}:
+        settings["animation_format"] = "webp"
     return settings

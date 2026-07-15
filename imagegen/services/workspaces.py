@@ -63,7 +63,7 @@ class WorkspaceService:
             )
         )
 
-    def create(self, user_id: int, name: str) -> Workspace:
+    def create(self, user_id: int, name: str, kind: str = "image") -> Workspace:
         self.billing.lock_user(user_id)
         count = (
             db.session.scalar(select(func.count(Workspace.id)).where(Workspace.user_id == user_id))
@@ -76,6 +76,9 @@ class WorkspaceService:
                 status_code=409,
             )
         name = self._validate_name(name.strip() or self._next_workspace_name(user_id))
+        kind = str(kind).strip().lower()
+        if kind not in {"image", "animation"}:
+            raise ServiceError("工作站类型无效")
         if db.session.scalar(
             select(Workspace.id).where(
                 Workspace.user_id == user_id,
@@ -86,6 +89,7 @@ class WorkspaceService:
         workspace = Workspace(
             user_id=user_id,
             name=name,
+            kind=kind,
             settings=default_workspace_settings(),
         )
         db.session.add(workspace)
@@ -108,6 +112,7 @@ class WorkspaceService:
             id=new_public_id(),
             user_id=user_id,
             name=REFERENCE_STARTER_NAME,
+            kind="image",
             settings=default_workspace_settings(),
             created_at=reference_time,
             updated_at=reference_time,
@@ -116,6 +121,7 @@ class WorkspaceService:
             id=new_public_id(),
             user_id=user_id,
             name=TEXT_STARTER_NAME,
+            kind="image",
             settings=default_workspace_settings(),
             created_at=text_time,
             updated_at=text_time,
@@ -318,7 +324,9 @@ class WorkspaceService:
         )
         if active:
             raise ServiceError(
-                "当前图片尚未生成完成，请等待完成或先取消任务",
+                "当前帧动画尚未生成完成，请等待完成或先取消任务"
+                if workspace.kind == "animation"
+                else "当前图片尚未生成完成，请等待完成或先取消任务",
                 code="workspace_generation_active",
                 status_code=409,
             )
