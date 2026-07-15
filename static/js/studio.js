@@ -90,7 +90,7 @@
       this.chatReferenceSelections = new Map();
       this.chatDrafts = new Map();
       this.chatOperations = new Map();
-      this.pendingUserMessages = new Map();
+      this.outgoingMessages = new Map();
       this.saveTimer = null;
       this.promptCounterTimer = null;
       this.workspaceSkeletonTimer = null;
@@ -318,6 +318,11 @@
       this.el.chatReferenceButton.addEventListener("click", () => this.toggleChatReferences());
       this.el.chatReferenceList.addEventListener("click", (event) => this.handleChatReferenceClick(event));
       this.el.messageList.addEventListener("click", (event) => {
+        const retrySendButton = event.target.closest("[data-retry-send]");
+        if (retrySendButton) {
+          this.retryFailedChatMessage(retrySendButton.dataset.retrySend);
+          return;
+        }
         const retryButton = event.target.closest("[data-retry-message]");
         if (retryButton) {
           this.retryChatMessage(retryButton.dataset.retryMessage);
@@ -1245,7 +1250,7 @@
         this.chatDrafts.delete(workspaceId);
         this.chatOperations.delete(workspaceId);
         this.workspaceJobs.delete(workspaceId);
-        this.pendingUserMessages.delete(workspaceId);
+        this.clearOutgoingMessages(workspaceId);
         this.workspaces.splice(index, 1);
         this.activeWorkspace = null;
         if (!this.workspaces.length) {
@@ -1294,7 +1299,7 @@
         this.referenceSelections.set(workspace.id, new Set());
         this.chatReferenceSelections.set(workspace.id, new Set());
         this.chatDrafts.set(workspace.id, "");
-        this.pendingUserMessages.delete(workspace.id);
+        this.clearOutgoingMessages(workspace.id);
         this.chatReferencePickerOpen = false;
         this.applyWorkspaceSettings();
         this.renderReferences();
@@ -1325,31 +1330,24 @@
             data.conversation_operation,
           );
           if (operationChanged) this.renderWorkspaceList();
+          const nextMessages = data.messages || [];
+          const serverMessageIds = new Set(nextMessages.map((message) => message.id));
+          let outgoingChanged = false;
+          for (const [id, message] of this.outgoingMessages) {
+            if (message.workspace_id === workspaceId && serverMessageIds.has(id)) {
+              this.outgoingMessages.delete(id);
+              outgoingChanged = true;
+            }
+          }
           if (this.activeWorkspace?.id === workspaceId) {
-            const nextMessages = data.messages || [];
-            const pendingUserMessage = this.pendingUserMessages.get(workspaceId);
-            const pendingAttachmentIds = (pendingUserMessage?.attachments || [])
-              .map((attachment) => attachment.id)
-              .sort()
-              .join(",");
-            const pendingResolved = Boolean(pendingUserMessage && nextMessages.some((message) => (
-              message.role === "user"
-              && !pendingUserMessage.knownMessageIds.has(message.id)
-              && message.content === pendingUserMessage.content
-              && (message.attachments || [])
-                .map((attachment) => attachment.id)
-                .sort()
-                .join(",") === pendingAttachmentIds
-            )));
             const messagesChanged = this.messages.length !== nextMessages.length
               || this.messages[0]?.id !== nextMessages[0]?.id
               || this.messages.at(-1)?.id !== nextMessages.at(-1)?.id;
             const contextChanged = JSON.stringify(this.conversationContext)
               !== JSON.stringify(data.context);
-            if (pendingResolved) this.pendingUserMessages.delete(workspaceId);
             if (messagesChanged) this.messages = nextMessages;
             if (contextChanged) this.conversationContext = data.context;
-            if (messagesChanged || contextChanged || operationChanged || pendingResolved) {
+            if (messagesChanged || contextChanged || operationChanged || outgoingChanged) {
               this.renderMessages();
             }
           }
@@ -1372,6 +1370,8 @@
         - this.el.conversationScroll.scrollTop
         - this.el.conversationScroll.clientHeight;
       const keepAtBottom = scrollGap < 120;
+      const workspaceId = this.activeWorkspace?.id;
+      const messageIds = new Set(this.messages.map((message) => message.id));
       const timeline = [
         ...this.messages.map((message) => ({
           type: "message",
@@ -1385,21 +1385,21 @@
           id: job.id,
           value: job,
         })),
+        ...[...this.outgoingMessages.values()]
+          .filter((message) => (
+            message.workspace_id === workspaceId && !messageIds.has(message.id)
+          ))
+          .map((message) => ({
+            type: "message",
+            createdAt: message.created_at,
+            id: message.id,
+            value: message,
+          })),
       ].sort((left, right) => {
         const time = new Date(left.createdAt || 0).getTime() - new Date(right.createdAt || 0).getTime();
         return time || String(left.id).localeCompare(String(right.id));
       });
-      const workspaceId = this.activeWorkspace?.id;
-      const pendingUserMessage = this.pendingUserMessages.get(workspaceId);
       const operation = this.chatOperations.get(workspaceId);
-      if (pendingUserMessage) {
-        timeline.push({
-          type: "message",
-          createdAt: pendingUserMessage.created_at,
-          id: `pending-user-${workspaceId}`,
-          value: pendingUserMessage,
-        });
-      }
       if (operation) {
         timeline.push({
           type: "message",
@@ -1465,8 +1465,15 @@
             node = node ? this.updateJobCard(node, entry.value) : this.jobCard(entry.value);
             if (previousStatus !== entry.value.status) layoutChanged = true;
           }
-        } else if (!node) {
-          node = this.messageCard(entry.value);
+        } else {
+          const state = `${entry.value.kind || "message"}:${entry.value.delivery_state || "stored"}`;
+          if (!node || node.dataset.messageState !== state) {
+            const replacement = this.messageCard(entry.value);
+            if (node) node.replaceWith(replacement);
+            node = replacement;
+            UI.icons(node);
+            layoutChanged = true;
+          }
         }
         if (node.dataset.timelineKey !== key) node.dataset.timelineKey = key;
         const current = this.el.messageList.children[index];
@@ -1517,7 +1524,13 @@
 
     messageCard(message) {
       const row = document.createElement("article");
-      row.className = `message-row ${message.role} ${message.kind || "message"}`;
+      row.className = [
+        "message-row",
+        message.role,
+        message.kind || "message",
+        message.delivery_state || "",
+      ].filter(Boolean).join(" ");
+      row.dataset.messageState = `${message.kind || "message"}:${message.delivery_state || "stored"}`;
       if (message.id) row.dataset.messageId = message.id;
 
       const avatar = document.createElement("span");
@@ -1539,7 +1552,9 @@
       author.textContent = message.role === "user" ? "你" : (message.provider_label || "AI 助手");
       const timing = document.createElement("span");
       const timingParts = [];
-      if (message.created_at) timingParts.push(UI.dateTime(message.created_at));
+      if (message.delivery_state === "sending") timingParts.push("发送中");
+      else if (message.delivery_state === "failed") timingParts.push("发送失败");
+      else if (message.created_at) timingParts.push(UI.dateTime(message.created_at));
       if (message.role === "assistant" && Number.isFinite(Number(message.elapsed_seconds))) {
         timingParts.push(`响应 ${this.formatElapsed(message.elapsed_seconds)}`);
       }
@@ -1566,6 +1581,15 @@
           retry.className = "button ghost small";
           retry.dataset.retryMessage = message.id;
           retry.innerHTML = '<i data-lucide="refresh-cw"></i>重新发送';
+          card.append(retry);
+        }
+        if (message.delivery_state === "failed") {
+          const retry = document.createElement("button");
+          retry.type = "button";
+          retry.className = "button danger small";
+          retry.dataset.retrySend = message.id;
+          retry.title = message.delivery_error || "消息发送失败，点击重试";
+          retry.innerHTML = '<i data-lucide="circle-alert"></i><span>重试发送</span>';
           card.append(retry);
         }
       }
@@ -1631,6 +1655,18 @@
       return `${minutes} 分 ${Math.round(seconds % 60)} 秒`;
     }
 
+    newMessageId() {
+      const bytes = new Uint8Array(16);
+      window.crypto.getRandomValues(bytes);
+      return [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
+    }
+
+    clearOutgoingMessages(workspaceId) {
+      for (const [id, message] of this.outgoingMessages) {
+        if (message.workspace_id === workspaceId) this.outgoingMessages.delete(id);
+      }
+    }
+
     async sendChatMessage(event) {
       event.preventDefault();
       if (this.workspaceLoading || !this.activeWorkspace
@@ -1642,10 +1678,18 @@
       const workspace = this.activeWorkspace;
       const workspaceId = workspace.id;
       const modelId = this.el.chatModelSelect.value;
-      const draft = this.el.chatInput.value;
-      const content = draft.trim();
+      const content = this.el.chatInput.value.trim();
       const selection = this.currentChatSelection();
-      if (!content && !selection.size) {
+      const omitted = this.trimReferenceSelection(
+        selection,
+        this.referenceSelectionLimit("chat", workspace),
+      );
+      if (omitted) {
+        this.renderChatReferences();
+        UI.toast(`附件上限已更新，已取消 ${omitted} 张超限图片`, "info");
+      }
+      const attachmentIds = [...selection];
+      if (!content && !attachmentIds.length) {
         UI.toast("请输入消息或添加参考图", "error");
         this.el.chatInput.focus();
         return;
@@ -1654,78 +1698,76 @@
         UI.toast("管理员尚未配置可用的对话模型", "error");
         return;
       }
-      this.startLocalChatOperation(workspaceId, "reply", "正在等待 AI 回复", modelId);
+      const selectedIds = new Set(attachmentIds);
+      const message = {
+        id: this.newMessageId(),
+        workspace_id: workspaceId,
+        model_id: modelId,
+        role: "user",
+        kind: "message",
+        content,
+        attachments: workspace.assets.filter((asset) => selectedIds.has(asset.id)),
+        attachment_ids: attachmentIds,
+        created_at: new Date().toISOString(),
+      };
+      this.el.chatInput.value = "";
+      this.chatDrafts.set(workspaceId, "");
+      selection.clear();
+      this.chatReferencePickerOpen = false;
+      this.renderChatReferences();
+      await this.submitOutgoingMessage(message);
+    }
+
+    async retryFailedChatMessage(messageId) {
+      const message = this.outgoingMessages.get(messageId);
+      if (!message || message.delivery_state !== "failed"
+        || this.activeWorkspace?.id !== message.workspace_id
+        || this.workspaceChatBusy() || this.workspaceHasActiveJob()) return;
+      await this.submitOutgoingMessage(message);
+    }
+
+    async submitOutgoingMessage(message) {
+      message.delivery_state = "sending";
+      message.delivery_error = "";
+      this.outgoingMessages.set(message.id, message);
+      this.startLocalChatOperation(message.workspace_id, "reply", "正在等待 AI 回复");
       let failure = null;
-      let attachmentIds = [];
       try {
-        await this.loadRuntimeSettings(false);
-        if (this.activeWorkspace?.id !== workspaceId) return;
-        const omitted = this.trimReferenceSelection(
-          selection,
-          this.referenceSelectionLimit("chat", workspace),
-        );
-        if (omitted) {
-          this.renderChatReferences();
-          UI.toast(`附件上限已更新，已取消 ${omitted} 张超限图片`, "info");
-        }
-        attachmentIds = [...selection];
-        if (!content && !attachmentIds.length) {
-          UI.toast("请输入消息或添加参考图", "error");
-          this.el.chatInput.focus();
-          return;
-        }
         await this.flushSettings();
-        if (this.activeWorkspace?.id !== workspaceId) return;
-        const selectedIds = new Set(attachmentIds);
-        this.pendingUserMessages.set(workspaceId, {
-          role: "user",
-          kind: "message",
-          content,
-          attachments: workspace.assets.filter((asset) => selectedIds.has(asset.id)),
-          created_at: new Date().toISOString(),
-          knownMessageIds: new Set(this.messages.map((message) => message.id)),
-        });
-        this.el.chatInput.value = "";
-        this.chatDrafts.set(workspaceId, "");
-        selection.clear();
-        this.chatReferencePickerOpen = false;
-        this.renderChatReferences();
-        this.renderMessages();
-        const data = await UI.api(`/api/workspaces/${workspaceId}/messages`, {
+        const data = await UI.api(`/api/workspaces/${message.workspace_id}/messages`, {
           method: "POST",
           body: {
-            model_id: modelId,
-            content,
-            attachment_ids: attachmentIds,
+            message_id: message.id,
+            model_id: message.model_id,
+            content: message.content,
+            attachment_ids: message.attachment_ids,
           },
         });
-        this.pendingUserMessages.delete(workspaceId);
-        if (this.activeWorkspace?.id === workspaceId) {
+        this.outgoingMessages.delete(message.id);
+        if (this.activeWorkspace?.id === message.workspace_id) {
           this.messages = [...new Map(
-            [...this.messages, ...data.messages].map((message) => [message.id, message]),
+            [...this.messages, ...data.messages].map((item) => [item.id, item]),
           ).values()];
           this.conversationContext = data.context;
         }
-        if (data.workspace) {
+        const workspace = this.workspaces.find((item) => item.id === message.workspace_id);
+        if (workspace && data.workspace) {
           Object.assign(workspace, data.workspace);
-          if (this.activeWorkspace?.id === workspaceId) {
-            this.el.workspaceTitle.textContent = workspace.name;
-          }
+          if (workspace === this.activeWorkspace) this.el.workspaceTitle.textContent = workspace.name;
           this.renderWorkspaceList();
         }
       } catch (error) {
-        this.pendingUserMessages.delete(workspaceId);
-        this.chatDrafts.set(workspaceId, draft);
-        attachmentIds.forEach((id) => selection.add(id));
-        if (this.activeWorkspace?.id === workspaceId) {
-          this.el.chatInput.value = draft;
-          this.chatReferencePickerOpen = attachmentIds.length > 0;
-          this.renderChatReferences();
-        }
         failure = error;
       } finally {
-        await this.finishLocalChatOperation(workspaceId, failure);
+        await this.finishLocalChatOperation(message.workspace_id);
       }
+      if (!failure) return;
+      await this.loadMessages(message.workspace_id);
+      const outgoing = this.outgoingMessages.get(message.id);
+      if (!outgoing) return;
+      outgoing.delivery_state = "failed";
+      outgoing.delivery_error = failure.message;
+      if (this.activeWorkspace?.id === message.workspace_id) this.renderMessages();
     }
 
     async retryChatMessage(errorMessageId) {
@@ -1747,7 +1789,9 @@
           { method: "POST", body: { model_id: modelId } },
         );
         if (this.activeWorkspace?.id === workspaceId) {
-          this.messages.push(data.message);
+          this.messages = [...new Map(
+            [...this.messages, data.message].map((message) => [message.id, message]),
+          ).values()];
           this.conversationContext = data.context;
         }
       } catch (error) {
@@ -1882,6 +1926,7 @@
       });
       this.renderWorkspaceList();
       if (this.activeWorkspace?.id === workspaceId) this.renderMessages();
+      this.schedulePoll(ACTIVE_POLL_INTERVAL);
     }
 
     async finishLocalChatOperation(workspaceId, failure = null) {
@@ -1960,6 +2005,9 @@
         setDisabled(button, this.chatOperations.has(workspaceId) || activeLocked);
       });
       this.el.messageList.querySelectorAll("[data-retry-message]").forEach((button) => {
+        setDisabled(button, locked || !hasModel);
+      });
+      this.el.messageList.querySelectorAll("[data-retry-send]").forEach((button) => {
         setDisabled(button, locked || !hasModel);
       });
       this.el.messageList.querySelectorAll("[data-use-prompt-draft]").forEach((button) => {
@@ -3008,7 +3056,6 @@
         await this.loadWorkspaceJobs();
         const selectedIsActive = this.workspaceJobs.has(this.activeWorkspace?.id);
         const requests = [...this.chatOperations]
-          .filter(([, operation]) => !operation.local)
           .map(([workspaceId]) => this.loadMessages(workspaceId));
         if (selectedWasActive || selectedIsActive) requests.push(this.loadJobs());
         if (hadActiveWorkspace || this.workspaceJobs.size > 0 || selectedWasActive) {

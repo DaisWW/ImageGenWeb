@@ -157,6 +157,7 @@ def send_conversation_message(workspace_id: str):
         model_id=str(data.get("model_id", "")),
         content=str(data.get("content", "")),
         attachment_ids=tuple(str(item) for item in attachment_ids),
+        message_id=str(data.get("message_id", "")),
     )
     return jsonify(
         messages=[

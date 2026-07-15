@@ -2174,7 +2174,19 @@ class ImageGenPlatformTests(unittest.TestCase):
         )
 
         self.assertEqual(retried.status_code, 201)
+        self.assertRegex(retried.json["message"]["id"], r"^[a-f0-9]{32}$")
         self.assertEqual(retried.json["message"]["kind"], "message")
+        self.assertEqual(
+            retried.json["message"]["payload"]["reply_to_message_id"],
+            user_message["id"],
+        )
+        calls_after_retry = len(chat.calls)
+        repeated_retry = client.post(
+            f"/api/workspaces/{workspace.id}/messages/{error_message['id']}/retry",
+            json={"model_id": "test-chat"},
+        )
+        self.assertEqual(repeated_retry.json["message"]["id"], retried.json["message"]["id"])
+        self.assertEqual(len(chat.calls), calls_after_retry)
         retry_context = chat.calls[-1]["messages"]
         self.assertEqual(retry_context, [{"role": "user", "content": user_message["content"]}])
         self.assertNotIn(error_message["content"], json.dumps(retry_context, ensure_ascii=False))
@@ -2211,6 +2223,53 @@ class ImageGenPlatformTests(unittest.TestCase):
                 ("assistant", "message"),
             ],
         )
+
+    def test_chat_message_ids_make_send_idempotent(self):
+        workspace = self.create_workspace()
+        client = self.user_client()
+        payload = {
+            "message_id": "1" * 32,
+            "model_id": "test-chat",
+            "content": "同一条消息只发送一次",
+            "attachment_ids": [],
+        }
+
+        first = client.post(f"/api/workspaces/{workspace.id}/messages", json=payload)
+        calls_after_first = len(self.chat_client.calls)
+        replay = client.post(f"/api/workspaces/{workspace.id}/messages", json=payload)
+
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(replay.status_code, 201)
+        self.assertEqual(
+            first.json["messages"][0]["id"],
+            payload["message_id"],
+        )
+        self.assertRegex(first.json["messages"][1]["id"], r"^[a-f0-9]{32}$")
+        self.assertEqual(
+            first.json["messages"][0]["payload"]["reply_message_id"],
+            first.json["messages"][1]["id"],
+        )
+        self.assertEqual(
+            first.json["messages"][1]["payload"]["reply_to_message_id"],
+            payload["message_id"],
+        )
+        self.assertEqual(replay.json["messages"], first.json["messages"])
+        self.assertEqual(len(self.chat_client.calls), calls_after_first)
+        self.assertEqual(
+            db.session.scalar(
+                select(func.count(ConversationMessage.id)).where(
+                    ConversationMessage.workspace_id == workspace.id
+                )
+            ),
+            2,
+        )
+
+        conflict = client.post(
+            f"/api/workspaces/{workspace.id}/messages",
+            json={**payload, "content": "尝试复用消息 ID"},
+        )
+        self.assertEqual(conflict.status_code, 409)
+        self.assertEqual(conflict.json["code"], "conversation_message_id_conflict")
 
     def test_unhandled_api_error_is_logged_with_correlation_id(self):
         @self.app.get("/api/test-unhandled-runtime-error")

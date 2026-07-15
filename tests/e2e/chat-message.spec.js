@@ -1,43 +1,21 @@
 const { test, expect } = require("@playwright/test");
 
-test("an in-flight chat message is rendered once and submitted once", async ({ page }, testInfo) => {
-  let targetWorkspaceId = "";
-  let postCount = 0;
-  let releasePost;
-  const postRelease = new Promise((resolve) => {
-    releasePost = resolve;
-  });
-  const sentAt = new Date().toISOString();
+test("chat delivery uses stable IDs and retries the same message", async ({ page }) => {
   const content = "改成宫崎骏风格";
+  const sentAt = new Date().toISOString();
   const context = {
     compacted: false,
     estimated_context_tokens: 0,
     max_context_tokens: 32000,
   };
-  const userMessage = {
-    id: "e2e-user-message",
-    role: "user",
-    kind: "message",
-    content,
-    payload: {},
-    provider_id: "e2e-chat",
-    provider_label: "E2E 助手",
-    model: "e2e-model",
-    input_tokens: null,
-    output_tokens: null,
-    elapsed_seconds: null,
-    created_at: sentAt,
-    attachments: [],
-  };
-  const assistantMessage = {
-    ...userMessage,
-    id: "e2e-assistant-message",
-    role: "assistant",
-    content: "已按要求调整风格。",
-    input_tokens: 10,
-    output_tokens: 8,
-    elapsed_seconds: 0.5,
-  };
+  let workspaceId = "";
+  let accepted = false;
+  let releaseReply;
+  const replyReleased = new Promise((resolve) => {
+    releaseReply = resolve;
+  });
+  const requests = [];
+  const assistantId = "a".repeat(32);
 
   await page.route("**/api/chat-models", (route) => route.fulfill({
     json: {
@@ -54,25 +32,37 @@ test("an in-flight chat message is rendered once and submitted once", async ({ p
   }));
   await page.route("**/api/workspaces/*/messages*", async (route) => {
     const request = route.request();
-    const url = new URL(request.url());
-    const workspaceId = url.pathname.split("/")[3];
-    if (!targetWorkspaceId || workspaceId !== targetWorkspaceId) {
+    const targetWorkspaceId = new URL(request.url()).pathname.split("/")[3];
+    if (!workspaceId || targetWorkspaceId !== workspaceId) {
       await route.continue();
       return;
     }
     if (request.method() === "POST") {
-      postCount += 1;
-      await postRelease;
+      const body = request.postDataJSON();
+      requests.push(body);
+      if (requests.length === 1) {
+        await route.fulfill({
+          status: 503,
+          json: { error: "消息发送失败", code: "request_failed" },
+        });
+        return;
+      }
+      accepted = true;
+      await replyReleased;
       await route.fulfill({
         status: 201,
-        json: { messages: [userMessage, assistantMessage], context },
+        json: {
+          messages: [userMessage(body, true), assistantMessage(body)],
+          context,
+        },
       });
       return;
     }
-    if (postCount > 0) {
+    if (accepted) {
+      const body = requests.at(-1);
       await route.fulfill({
         json: {
-          messages: [userMessage],
+          messages: [userMessage(body)],
           total: 1,
           has_more: false,
           context,
@@ -93,42 +83,60 @@ test("an in-flight chat message is rendered once and submitted once", async ({ p
   await page.getByLabel("用户名").fill("e2e-admin");
   await page.getByLabel("密码").fill("E2eStrongPass123!");
   await page.getByRole("button", { name: "进入工作台" }).click();
-
-  const workspaceName = `E2E-Chat-${testInfo.project.name}-${Date.now()}`;
-  await page.locator("#newWorkspaceButton").click();
-  await page.locator("#workspaceNameInput").fill(workspaceName);
-  await page.locator('#workspaceForm button[type="submit"]').click();
-  await expect(page.locator("#workspaceTitle")).toHaveText(workspaceName);
-  targetWorkspaceId = await page.locator("#workspaceList .workspace-item.active")
+  workspaceId = await page.locator("#workspaceList .workspace-item.active")
     .getAttribute("data-workspace-id");
 
-  const chatInput = page.locator("#chatInput");
-  await expect(chatInput).toBeEditable();
   await expect(page.locator("#chatModelSelect")).toHaveValue("e2e-chat");
-  await chatInput.fill(content);
+  await page.locator("#chatInput").fill(content);
   await page.locator("#chatForm").evaluate((form) => {
     form.requestSubmit();
     form.requestSubmit();
   });
-  await expect(page.locator(".message-row.user", { hasText: content })).toHaveCount(1);
-  await expect.poll(() => postCount).toBe(1);
 
-  const otherWorkspace = page.locator("#workspaceList .workspace-item:not(.active)").first();
-  await otherWorkspace.locator("[data-select-workspace]").click();
-  await expect(page.locator("#workspaceTitle")).not.toHaveText(workspaceName);
-  await page.locator("#workspaceList .workspace-item", { hasText: workspaceName })
-    .locator("[data-select-workspace]").click();
-  await expect(page.locator("#workspaceTitle")).toHaveText(workspaceName);
+  await expect.poll(() => requests.length).toBe(1);
+  const userId = requests[0].message_id;
+  expect(userId).toMatch(/^[a-f0-9]{32}$/);
+  const userRow = page.locator('[data-message-id="' + userId + '"]');
+  await expect(userRow).toContainText("发送失败");
+  await expect(userRow.getByRole("button", { name: "重试发送" })).toBeVisible();
+
+  await userRow.getByRole("button", { name: "重试发送" }).click();
+  await expect.poll(() => requests.length).toBe(2);
+  expect(requests[1].message_id).toBe(userId);
+
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await expect(userRow).not.toContainText("发送中");
+  await expect(page.locator(".message-row.assistant.pending"))
+    .toContainText("正在等待 AI 回复");
   await expect(page.locator(".message-row.user", { hasText: content })).toHaveCount(1);
 
-  releasePost();
-  await expect(page.locator(".message-row.assistant", { hasText: assistantMessage.content }))
-    .toHaveCount(1);
+  releaseReply();
+  await expect(page.locator('[data-message-id="' + assistantId + '"]'))
+    .toContainText("已按要求调整风格");
   await expect(page.locator(".message-row.user", { hasText: content })).toHaveCount(1);
-  expect(postCount).toBe(1);
 
-  const workspace = page.locator("#workspaceList .workspace-item", { hasText: workspaceName });
-  await workspace.locator("[data-delete-workspace]").click();
-  await page.locator('#workspaceDeleteForm button[type="submit"]').click();
-  await expect(page.locator("#workspaceList")).not.toContainText(workspaceName);
+  function userMessage(body, complete = false) {
+    return {
+      id: body.message_id,
+      role: "user",
+      kind: "message",
+      content: body.content,
+      payload: complete ? { reply_message_id: assistantId } : {},
+      created_at: sentAt,
+      attachments: [],
+    };
+  }
+
+  function assistantMessage(body) {
+    return {
+      id: assistantId,
+      role: "assistant",
+      kind: "message",
+      content: "已按要求调整风格",
+      payload: { reply_to_message_id: body.message_id },
+      provider_label: "E2E 助手",
+      created_at: sentAt,
+      attachments: [],
+    };
+  }
 });

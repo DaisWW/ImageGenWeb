@@ -22,6 +22,7 @@ from ..models import (
     ConversationState,
     GenerationJob,
     Workspace,
+    new_public_id,
     utcnow,
 )
 from ..storage import ImageStorage
@@ -111,13 +112,16 @@ class ConversationService:
         model_id: str,
         content: str,
         attachment_ids: tuple[str, ...] = (),
+        message_id: str = "",
     ) -> tuple[ConversationMessage, ConversationMessage]:
+        message_id = self._message_id(message_id or new_public_id())
         with self._workspace_operation(workspace, "reply", "正在等待 AI 回复"):
             return self._send(
                 workspace,
                 model_id=model_id,
                 content=content,
                 attachment_ids=attachment_ids,
+                message_id=message_id,
             )
 
     def retry(
@@ -128,8 +132,6 @@ class ConversationService:
         model_id: str,
     ) -> ConversationMessage:
         with self._workspace_operation(workspace, "reply", "正在重新发送消息"):
-            self._ensure_workspace_unlocked(workspace)
-            model = self._model(model_id)
             error_payload = db.session.scalar(
                 select(ConversationMessage.payload).where(
                     ConversationMessage.id == error_message_id,
@@ -158,6 +160,11 @@ class ConversationService:
                     code="conversation_message_not_retryable",
                     status_code=404,
                 )
+            current_reply = self._linked_reply(workspace, user_message)
+            if current_reply is not None and current_reply.id != error_message_id:
+                return current_reply
+            self._ensure_workspace_unlocked(workspace)
+            model = self._model(model_id)
             return self._complete_reply(workspace, model, user_message)
 
     def _send(
@@ -167,13 +174,30 @@ class ConversationService:
         model_id: str,
         content: str,
         attachment_ids: tuple[str, ...],
+        message_id: str,
     ) -> tuple[ConversationMessage, ConversationMessage]:
         sent_at = utcnow()
+        content = self._validate_message(content, has_attachments=bool(attachment_ids))
+        existing = self._matching_user_message(
+            workspace,
+            message_id=message_id,
+            model_id=model_id,
+            content=content,
+            attachment_ids=attachment_ids,
+        )
+        if existing is not None:
+            reply = self._linked_reply(workspace, existing)
+            if reply is not None:
+                return existing, reply
+            self._ensure_workspace_unlocked(workspace)
+            model = self._model(model_id)
+            return existing, self._complete_reply(workspace, model, existing)
+
         self._ensure_workspace_unlocked(workspace)
         model = self._model(model_id)
         attachments = self._load_assets(workspace, attachment_ids)
-        content = self._validate_message(content, has_attachments=bool(attachments))
         user_message = ConversationMessage(
+            id=message_id,
             workspace_id=workspace.id,
             role="user",
             kind="message",
@@ -188,11 +212,7 @@ class ConversationService:
         db.session.add(user_message)
         workspace.updated_at = sent_at
         db.session.commit()
-        assistant_message = self._complete_reply(
-            workspace,
-            model,
-            user_message,
-        )
+        assistant_message = self._complete_reply(workspace, model, user_message)
         return user_message, assistant_message
 
     def _complete_reply(
@@ -232,9 +252,14 @@ class ConversationService:
             return self._error_reply(workspace, model, user_message, exc)
 
         assistant_message = self._assistant_message(
-            workspace, model, result, kind="message", payload={}
+            workspace,
+            model,
+            result,
+            kind="message",
+            payload={"reply_to_message_id": user_message.id},
         )
         db.session.add(assistant_message)
+        user_message.payload["reply_message_id"] = assistant_message.id
         self._record_chat_success(
             workspace,
             model,
@@ -506,6 +531,72 @@ class ConversationService:
         except ValueError as exc:
             raise ServiceError(str(exc)) from exc
 
+    @staticmethod
+    def _message_id(value: str) -> str:
+        message_id = str(value).strip().lower()
+        if len(message_id) != 32 or any(
+            character not in "0123456789abcdef" for character in message_id
+        ):
+            raise ServiceError("消息 ID 无效")
+        return message_id
+
+    def _matching_user_message(
+        self,
+        workspace: Workspace,
+        *,
+        message_id: str,
+        model_id: str,
+        content: str,
+        attachment_ids: tuple[str, ...],
+    ) -> ConversationMessage | None:
+        message = db.session.scalar(
+            select(ConversationMessage)
+            .options(
+                selectinload(ConversationMessage.attachments).selectinload(
+                    ConversationAttachment.asset
+                )
+            )
+            .where(ConversationMessage.id == message_id)
+        )
+        if message is None:
+            return None
+        if (
+            message.workspace_id != workspace.id
+            or message.role != "user"
+            or message.provider_id != model_id
+            or message.content != content
+            or tuple(attachment.asset_id for attachment in message.attachments)
+            != attachment_ids
+        ):
+            raise ServiceError(
+                "消息 ID 已被其他内容使用",
+                code="conversation_message_id_conflict",
+                status_code=409,
+            )
+        return message
+
+    @staticmethod
+    def _linked_reply(
+        workspace: Workspace,
+        user_message: ConversationMessage,
+    ) -> ConversationMessage | None:
+        reply_id = str((user_message.payload or {}).get("reply_message_id", ""))
+        if not reply_id:
+            return None
+        reply = db.session.get(ConversationMessage, reply_id)
+        if (
+            reply is None
+            or reply.workspace_id != workspace.id
+            or reply.role != "assistant"
+            or str((reply.payload or {}).get("reply_to_message_id", "")) != user_message.id
+        ):
+            raise ServiceError(
+                "AI 回复关联无效",
+                code="conversation_message_id_conflict",
+                status_code=409,
+            )
+        return reply
+
     def _load_assets(self, workspace: Workspace, asset_ids: tuple[str, ...]) -> list[Asset]:
         runtime = self.settings.runtime()
         if len(asset_ids) != len(set(asset_ids)):
@@ -578,6 +669,7 @@ class ConversationService:
         payload: dict[str, Any],
     ) -> ConversationMessage:
         return ConversationMessage(
+            id=new_public_id(),
             workspace_id=workspace.id,
             role="assistant",
             kind=kind,
@@ -702,6 +794,7 @@ class ConversationService:
         if error_id:
             content = f"{content}\n错误 ID：{error_id}"
         message = ConversationMessage(
+            id=new_public_id(),
             workspace_id=workspace.id,
             role="assistant",
             kind="error",
@@ -710,6 +803,7 @@ class ConversationService:
                 "code": error.code,
                 "error_id": error_id,
                 "retry_user_message_id": user_message.id,
+                "reply_to_message_id": user_message.id,
             },
             provider_id=model.identifier,
             provider_label=model.label,
@@ -720,6 +814,7 @@ class ConversationService:
             ),
         )
         db.session.add(message)
+        user_message.payload["reply_message_id"] = message.id
         workspace.updated_at = utcnow()
         db.session.commit()
         return message

@@ -1068,6 +1068,14 @@ select option {
   background: #14202a;
 }
 
+.message-row.user.failed .message-card {
+  border-color: #7f343b;
+}
+
+.message-row.user.failed .button {
+  margin-top: 9px;
+}
+
 .message-avatar {
   display: grid;
   width: 34px;
