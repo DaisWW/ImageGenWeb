@@ -2426,6 +2426,7 @@ img.media-reveal.is-loaded {
 
 .config-toolbar-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -2613,6 +2614,11 @@ tbody tr:hover td {
 .config-form {
   max-height: 88vh;
   overflow-y: auto;
+}
+
+.workspace-prompts-form textarea {
+  min-height: 180px;
+  line-height: 1.65;
 }
 
 .config-fieldset {

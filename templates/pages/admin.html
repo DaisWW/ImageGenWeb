@@ -52,6 +52,7 @@
       <div class="view-toolbar">
         <div><h2>对话模型</h2><p id="chatConfigVersion">配置版本</p></div>
         <div class="config-toolbar-actions">
+          <button class="button secondary" type="button" id="workspacePromptsButton"><i data-lucide="file-text"></i>工作站提示词</button>
           <button class="button secondary" type="button" id="contextSettingsButton"><i data-lucide="braces"></i>上下文</button>
           <button class="button primary" type="button" id="createChatModelButton"><i data-lucide="plus"></i>新增模型</button>
         </div>
@@ -162,6 +163,15 @@
       <label class="field"><span>最大输出 Tokens</span><input type="number" name="max_output_tokens" min="128" max="16000" required></label>
     </div>
     <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="chatModelDialog">取消</button><button class="button primary" type="submit"><i data-lucide="save"></i>保存模型</button></div>
+  </form>
+</dialog>
+
+<dialog class="modal config-modal" id="workspacePromptsDialog">
+  <form class="modal-form config-form workspace-prompts-form" id="workspacePromptsForm">
+    <div class="modal-header"><div><span class="eyebrow">System Prompts</span><h2>工作站提示词</h2></div><button class="icon-button" type="button" data-close-dialog="workspacePromptsDialog" aria-label="关闭"><i data-lucide="x"></i></button></div>
+    <label class="field"><span>图片工作站</span><textarea name="image" rows="9" maxlength="12000" required></textarea></label>
+    <label class="field"><span>帧动画工作站</span><textarea name="animation" rows="9" maxlength="12000" required></textarea></label>
+    <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="workspacePromptsDialog">取消</button><button class="button primary" type="submit"><i data-lucide="save"></i>保存提示词</button></div>
   </form>
 </dialog>
 

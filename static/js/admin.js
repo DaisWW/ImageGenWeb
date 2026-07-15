@@ -68,6 +68,9 @@
         chatModelTableBody: byId("chatModelTableBody"),
         chatConfigVersion: byId("chatConfigVersion"),
         chatConfigError: byId("chatConfigError"),
+        workspacePromptsButton: byId("workspacePromptsButton"),
+        workspacePromptsDialog: byId("workspacePromptsDialog"),
+        workspacePromptsForm: byId("workspacePromptsForm"),
         contextSettingsButton: byId("contextSettingsButton"),
         createChatModelButton: byId("createChatModelButton"),
         promptDraftModelForm: byId("promptDraftModelForm"),
@@ -102,6 +105,8 @@
         if (button) button.closest(".config-model-row").remove();
       });
       this.el.queueForm.addEventListener("submit", (event) => this.saveQueue(event));
+      this.el.workspacePromptsButton.addEventListener("click", () => this.openWorkspacePromptsDialog());
+      this.el.workspacePromptsForm.addEventListener("submit", (event) => this.saveWorkspacePrompts(event));
       this.el.contextSettingsButton.addEventListener("click", () => this.openContextDialog());
       this.el.createChatModelButton.addEventListener("click", () => this.openChatModelDialog());
       this.el.promptDraftModelForm.addEventListener("submit", (event) => this.savePromptDraftModel(event));
@@ -675,6 +680,33 @@
       }
     }
 
+    openWorkspacePromptsDialog() {
+      const prompts = this.chatConfig?.workspace_prompts;
+      if (!prompts) return;
+      this.el.workspacePromptsForm.elements.image.value = prompts.image;
+      this.el.workspacePromptsForm.elements.animation.value = prompts.animation;
+      UI.openDialog(this.el.workspacePromptsDialog);
+    }
+
+    async saveWorkspacePrompts(event) {
+      event.preventDefault();
+      const submit = this.el.workspacePromptsForm.querySelector('[type="submit"]');
+      submit.disabled = true;
+      try {
+        const next = copy(this.chatConfig);
+        next.workspace_prompts = {
+          image: this.el.workspacePromptsForm.elements.image.value.trim(),
+          animation: this.el.workspacePromptsForm.elements.animation.value.trim(),
+        };
+        await this.persistChatModels(next, "工作站提示词已更新");
+        UI.closeDialog(this.el.workspacePromptsDialog);
+      } catch (error) {
+        UI.toast(error.message, "error");
+      } finally {
+        submit.disabled = false;
+      }
+    }
+
     openContextDialog() {
       Object.entries(this.chatConfig.context).forEach(([name, value]) => {
         this.el.contextForm.elements[name].value = value;
@@ -721,6 +753,7 @@
         body: {
           revision: this.chatConfig.revision,
           prompt_draft_model_id: config.prompt_draft_model_id,
+          workspace_prompts: config.workspace_prompts,
           context: config.context,
           models: config.models,
         },
