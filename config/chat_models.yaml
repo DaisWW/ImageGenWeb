@@ -35,4 +35,4 @@ models:
     reasoning_effort: max
     reasoning_effort_env: GPT_CHAT_REASONING_EFFORT
     timeout_seconds: 180
-    max_output_tokens: 2000
+    max_output_tokens: 16000
