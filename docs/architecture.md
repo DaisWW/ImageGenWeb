@@ -1,54 +1,54 @@
-# Architecture
+# 架构说明
 
-Snow AI Studio is a small internal Flask application. It deliberately uses a layered monolith: one deployable application, one worker process, and clear module boundaries without a distributed-service framework.
+Snow AI Studio 是一个小型内部 Flask 应用。项目采用分层单体结构：一个可部署应用、一个 Worker 进程，以及清晰的模块边界，不引入分布式服务框架。
 
-## Source layout
+## 目录结构
 
 ```text
 imagegen/
-  app.py              Flask application factory and process-wide hooks
-  config/             validated, hot-reloadable channel and chat configuration
-  integrations/       OpenAI-compatible HTTP clients and image adapters
-  services/           business operations and transaction boundaries
-  web/                Flask routes, authorization, and HTTP serialization
-  models.py           SQLAlchemy persistence model
-  serializers.py      database model to public API payload conversion
-  storage.py          image validation and filesystem persistence
-  worker.py           queue claiming, provider execution, and settlement
-config/                compatibility defaults used before admin-managed config exists
-static/                browser assets grouped by css, js, assets, and vendor
-templates/             base template, pages, and shared partials
-tests/integration/     end-to-end service and HTTP contract tests
+  app.py              Flask 应用工厂和进程级钩子
+  config/             已校验、支持热刷新的渠道与聊天配置
+  integrations/       兼容 OpenAI 的 HTTP 客户端和图片适配器
+  services/           业务操作和事务边界
+  web/                Flask 路由、鉴权和 HTTP 序列化
+  models.py           SQLAlchemy 持久化模型
+  serializers.py      数据库模型到公开 API 载荷的转换
+  storage.py          图片校验和文件系统持久化
+  worker.py           队列认领、上游执行和结算
+config/                管理员配置保存前使用的兼容默认值
+static/                按 css、js、图片和第三方资源组织的浏览器文件
+templates/             基础模板、页面和共享局部模板
+tests/integration/     端到端业务与 HTTP 合同测试
 ```
 
-## Dependency rules
+## 依赖规则
 
 ```text
 web -> services -> models/storage
 web -> serializers
-services -> config and integrations
-worker -> services and integrations
+services -> config、integrations
+worker -> services、integrations
 config -> repository/models
-integrations -> config value objects
+integrations -> config 中的值对象
 ```
 
-- Services do not import Flask routes or request globals.
-- Integrations do not commit database transactions.
-- Routes validate HTTP shapes, then delegate business decisions to services.
-- API keys only exist in encrypted configuration storage and server-side config objects.
-- `imagegen.services` is the stable service import surface; individual modules are implementation details.
+- 服务层不导入 Flask 路由或请求全局对象。
+- 集成层不提交数据库事务。
+- 路由只校验 HTTP 结构，然后把业务决策交给服务层。
+- API Key 只存在于加密配置存储和服务端配置对象中。
+- `imagegen.services` 是稳定的服务导入入口；单个模块属于实现细节。
 
-## Transaction ownership
+## 事务归属
 
-- Account, billing, workspace, conversation, and generation services own their database commits.
-- The worker heartbeats owned claims, recovers orphaned claims, and locks the user, item, and job before settlement.
-- Image files are written before the matching database commit and removed on rollback.
-- Runtime configuration is saved as one versioned document using an atomic old-value revision check.
+- 账户、计费、工作站、会话和生成服务负责自己的数据库提交。
+- Worker 维护自己认领任务的心跳，恢复孤立认领，并在结算前锁定用户、条目和任务。
+- 图片文件先写入，再提交对应数据库记录；回滚时删除文件。
+- 运行配置作为带版本文档保存，并使用旧值做原子版本校验。
 
-## Extension guide
+## 扩展方式
 
-To add an image channel, prefer implementing an adapter in `imagegen/integrations/` and registering it in `ProviderFactory`. Channel capabilities, price, models, and concurrency belong to admin-managed configuration, not route code.
+新增图片渠道时，优先在 `imagegen/integrations/` 实现适配器，并在 `ProviderFactory` 中注册。渠道能力、价格、模型和并发属于管理员配置，不应写进路由。
 
-To add a user workflow, add the business operation to the relevant service first, expose a thin route in `imagegen/web/`, then cover the service and HTTP contract in `tests/integration/`.
+新增用户流程时，先把业务操作加入对应服务，再在 `imagegen/web/` 暴露薄路由，并在 `tests/integration/` 覆盖服务和 HTTP 合同。
 
-Do not add a repository abstraction around SQLAlchemy unless a second persistence implementation is actually required. The current services are the transaction boundary and keep this internal application easy to trace.
+除非确实需要第二种持久化实现，不要围绕 SQLAlchemy 增加仓储抽象。当前服务就是事务边界，内部应用应保持易于追踪。
