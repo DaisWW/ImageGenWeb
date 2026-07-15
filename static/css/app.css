@@ -1491,6 +1491,61 @@ select option {
   gap: 6px;
 }
 
+.animation-job .job-body {
+  grid-template-columns: minmax(240px, 1fr) 148px auto;
+}
+
+.animation-result {
+  display: grid;
+  width: 148px;
+  gap: 6px;
+}
+
+.animation-preview {
+  display: grid;
+  overflow: hidden;
+  aspect-ratio: 1;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background-color: #202427;
+  background-image:
+    linear-gradient(45deg, rgb(255 255 255 / 5%) 25%, transparent 25%),
+    linear-gradient(-45deg, rgb(255 255 255 / 5%) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgb(255 255 255 / 5%) 75%),
+    linear-gradient(-45deg, transparent 75%, rgb(255 255 255 / 5%) 75%);
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-size: 16px 16px;
+}
+
+.animation-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.animation-result-bar {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.animation-result-bar span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.animation-result-bar .icon-button {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+}
+
 .output-tile {
   position: relative;
   width: 64px;
@@ -1604,6 +1659,10 @@ select option {
   gap: 8px;
 }
 
+.animation-workflow .composer-controls {
+  grid-template-columns: auto minmax(190px, 1.25fr) minmax(150px, 1fr) repeat(4, minmax(88px, .6fr));
+}
+
 .generation-toggle {
   min-width: 0;
   align-self: end;
@@ -1658,6 +1717,10 @@ select option {
 }
 
 .mode-switch[data-mode="img2img"]::before {
+  transform: translateX(100%);
+}
+
+.workspace-kind-switch[data-kind="animation"]::before {
   transform: translateX(100%);
 }
 
@@ -1915,6 +1978,24 @@ select option {
   width: min(94vw, 440px);
 }
 
+.workspace-kind-field {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  margin: 0;
+}
+
+.workspace-kind-field legend {
+  margin-bottom: 7px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.workspace-kind-switch {
+  width: 100%;
+}
+
 .modal-form,
 .image-dialog-info {
   display: grid;
@@ -2146,6 +2227,7 @@ img.media-reveal.is-loaded {
   width: 108%;
   height: 108%;
   max-width: none;
+  object-fit: cover;
   overflow: visible;
   pointer-events: none;
   transform: scale(1.045) translate3d(-.7%, -.4%, 0);
@@ -2153,30 +2235,6 @@ img.media-reveal.is-loaded {
   animation: auth-background-drift 24s ease-in-out infinite alternate;
   will-change: transform;
 }
-
-.auth-flow-path {
-  fill: none;
-  opacity: 0;
-  stroke-dasharray: .085 .915;
-  stroke-dashoffset: 1;
-  stroke-linecap: round;
-  stroke-width: 3.4px;
-  animation: auth-path-flow 6.4s linear infinite both;
-}
-
-.auth-flow-path.warm {
-  stroke: url("#authWarmFlow");
-}
-
-.auth-flow-path.cool {
-  stroke: url("#authCoolFlow");
-  stroke-width: 2.5px;
-}
-
-.auth-flow-path.cool-1 { animation-delay: 360ms; }
-.auth-flow-path.cool-2 { animation-delay: 500ms; }
-.auth-flow-path.cool-3 { animation-delay: 640ms; }
-.auth-flow-path.cool-4 { animation-delay: 780ms; }
 
 .auth-brand-lockup {
   position: relative;
@@ -2796,13 +2854,6 @@ tbody tr:hover td {
   to { transform: scale(1.075) translate3d(.9%, .6%, 0); }
 }
 
-@keyframes auth-path-flow {
-  0%, 8% { opacity: 0; stroke-dashoffset: 1; }
-  18% { opacity: .9; }
-  72% { opacity: .74; }
-  94%, 100% { opacity: 0; stroke-dashoffset: 0; }
-}
-
 @keyframes skeleton-flow {
   from { background-position: 100% 0; }
   to { background-position: -100% 0; }
@@ -2853,8 +2904,11 @@ tbody tr:hover td {
   .composer-controls {
     grid-template-columns: auto minmax(170px, 1.2fr) minmax(135px, 1fr) repeat(3, minmax(88px, .65fr)) minmax(80px, .55fr) 65px;
   }
+  .animation-workflow .composer-controls { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .mode-button { min-width: 72px; padding-inline: 7px; }
-  .job-body { grid-template-columns: 1fr; }
+  .job-body,
+  .animation-job .job-body { grid-template-columns: 1fr; }
+  .animation-result { width: 160px; }
   .output-grid { grid-template-columns: repeat(10, 52px); }
   .output-tile { width: 52px; }
   .chat-toolbar { flex-wrap: wrap; }
@@ -2870,7 +2924,8 @@ tbody tr:hover td {
   .stage-title { grid-column: 1; grid-row: 1; }
   .stage-tools { grid-column: 2; grid-row: 1; }
   .stage-metrics { display: none; }
-  .composer-controls { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .composer-controls,
+  .animation-workflow .composer-controls { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .mode-switch { grid-column: span 2; }
   .channel-field { grid-column: span 1; }
   .model-field { grid-column: span 1; }
@@ -2930,9 +2985,11 @@ tbody tr:hover td {
   .job-actions > span { display: none; }
   .job-body { gap: 12px; }
   .output-grid { grid-template-columns: repeat(5, minmax(44px, 1fr)); }
+  .animation-result { width: min(180px, 100%); }
   .output-tile { width: 100%; }
   .composer { padding: 10px; }
-  .composer-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .composer-controls,
+  .animation-workflow .composer-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mode-switch { grid-column: 1 / -1; }
   .channel-field,
   .model-field { grid-column: span 1; }
@@ -2944,11 +3001,6 @@ tbody tr:hover td {
   .auth-shell { grid-template-columns: minmax(0, 1fr); }
   .auth-brand { min-height: 185px; padding: 24px; border-right: 0; border-bottom: 1px solid var(--line); }
   .auth-visual { top: 0; left: 0; width: 100%; height: 100%; transform: none; animation: none; }
-  .auth-flow-path { stroke-width: 4px; }
-  .auth-flow-path.cool { stroke-width: 3px; }
-  .auth-flow-path.cool-2,
-  .auth-flow-path.cool-3,
-  .auth-flow-path.cool-4 { display: none; }
   .auth-brand-lockup h1 { font-size: 19px; }
   .auth-panel { align-items: start; padding: 32px 22px; }
   .admin-shell { padding: 20px 12px 50px; }
@@ -3014,7 +3066,4 @@ tbody tr:hover td {
     animation: none;
   }
 
-  .auth-flow-lines {
-    display: none;
-  }
 }

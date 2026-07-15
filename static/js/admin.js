@@ -19,6 +19,7 @@
       this.users = [];
       this.spending = {};
       this.jobs = [];
+      this.jobsInitialized = false;
       this.channelConfig = null;
       this.chatConfig = null;
       this.reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -294,11 +295,13 @@
         this.el.refreshJobsButton.setAttribute("aria-busy", "true");
       }
       try {
+        const wasInitialized = this.jobsInitialized;
         const previous = new Map(this.jobs.map((job) => [String(job.id), this.jobMotionSignature(job)]));
         const data = await UI.api("/api/admin/generations?limit=100");
         this.jobs = data.jobs;
         this.el.queueOverview.textContent = `生成中 ${data.running_images} 张 · 排队 ${data.queued_images} 张 · 共 ${data.jobs.length} 条记录`;
-        this.renderJobs(previous);
+        this.renderJobs(previous, wasInitialized);
+        this.jobsInitialized = true;
         if (notify) UI.toast("记录已刷新", "success");
       } catch (error) {
         UI.toast(error.message, "error");
@@ -321,7 +324,7 @@
       ]);
     }
 
-    renderJobs(previous = new Map()) {
+    renderJobs(previous = new Map(), wasInitialized = false) {
       if (!this.jobs.length) {
         this.el.adminJobList.innerHTML = '<div class="admin-empty"><i data-lucide="activity"></i><span>暂无生成记录</span></div>';
         UI.icons(this.el.adminJobList);
@@ -330,7 +333,7 @@
       this.el.adminJobList.innerHTML = this.jobs.map((job) => {
         const identifier = String(job.id);
         const previousSignature = previous.get(identifier);
-        const motionClass = previous.size && previousSignature == null
+        const motionClass = wasInitialized && previousSignature == null
           ? " data-enter"
           : previousSignature && previousSignature !== this.jobMotionSignature(job) ? " data-updated" : "";
         const outputs = job.items.map((item) => item.thumbnail_url

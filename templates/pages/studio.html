@@ -85,7 +85,7 @@
         <form class="composer generation-composer" id="generationForm" hidden>
           <div class="generation-composer-heading">
             <button class="icon-button" type="button" id="generationBackButton" title="返回对话" aria-label="返回对话"><i data-lucide="arrow-left"></i></button>
-            <div><strong>确认生图参数</strong><span>提示词和参数会保存在当前工作站</span></div>
+            <div><strong id="generationHeadingTitle">确认生图参数</strong><span id="generationHeadingSubtitle">提示词和参数会保存在当前工作站</span></div>
           </div>
           <div class="composer-controls">
             <div class="mode-switch" id="modeSwitch" data-mode="text2img">
@@ -96,13 +96,21 @@
             <label class="compact-field model-field"><span>模型</span><select id="modelSelect" required></select></label>
             <label class="compact-field"><span>尺寸</span><input id="sizeInput" list="sizeOptions" maxlength="20" placeholder="1024x1024" autocomplete="off" required><datalist id="sizeOptions"></datalist></label>
             <label class="compact-field"><span>质量</span><select id="qualitySelect"></select></label>
-            <label class="compact-field"><span>格式</span><select id="formatSelect"></select></label>
+            <label class="compact-field"><span id="frameFormatLabel">格式</span><select id="formatSelect"></select></label>
             <label class="toggle-line generation-toggle" id="transparentBackgroundControl" title="生成包含 Alpha 通道的透明背景图片">
               <input type="checkbox" id="transparentBackground">
               <span class="toggle-track"><span></span></span>
               <span>透明背景</span>
             </label>
-            <label class="compact-field number-field"><span>张数</span><input id="batchCount" type="number" min="1" max="20" value="1"></label>
+            <label class="compact-field number-field" id="imageCountControl"><span>张数</span><input id="batchCount" type="number" min="1" max="20" value="1"></label>
+            <label class="compact-field number-field animation-control" hidden><span>帧数</span><input id="animationFrameCount" type="number" min="2" max="20" value="6"></label>
+            <label class="compact-field number-field animation-control" hidden><span>FPS</span><input id="animationFps" type="number" min="1" max="24" value="6"></label>
+            <label class="compact-field animation-control" hidden><span>导出</span><select id="animationFormat"><option value="webp">动态 WebP</option><option value="gif">GIF</option></select></label>
+            <label class="toggle-line generation-toggle animation-control" hidden>
+              <input type="checkbox" id="animationLoop" checked>
+              <span class="toggle-track"><span></span></span>
+              <span>循环</span>
+            </label>
           </div>
 
           <div class="reference-strip" id="referenceStrip" hidden>
@@ -123,7 +131,7 @@
                 <small id="saveState">参数已保存</small>
               </div>
               <button class="button primary generate-button" type="submit" id="generateButton">
-                <i data-lucide="sparkles"></i><span>开始生成</span>
+                <i data-lucide="sparkles"></i><span id="generateButtonLabel">开始生成</span>
               </button>
             </div>
           </div>
@@ -140,6 +148,13 @@
       <button class="icon-button" type="button" data-close-dialog="workspaceDialog" aria-label="关闭"><i data-lucide="x"></i></button>
     </div>
     <label class="field"><span>名称</span><input id="workspaceNameInput" maxlength="80" required></label>
+    <fieldset class="workspace-kind-field" id="workspaceKindControl">
+      <legend>类型</legend>
+      <div class="mode-switch workspace-kind-switch" id="workspaceKindSwitch" data-kind="image">
+        <button type="button" class="mode-button active" data-workspace-kind="image" aria-pressed="true"><i data-lucide="image"></i>图片</button>
+        <button type="button" class="mode-button" data-workspace-kind="animation" aria-pressed="false"><i data-lucide="film"></i>帧动画</button>
+      </div>
+    </fieldset>
     <div class="modal-actions">
       <button class="button secondary" type="button" data-close-dialog="workspaceDialog">取消</button>
       <button class="button primary" type="submit"><i data-lucide="check"></i>保存</button>

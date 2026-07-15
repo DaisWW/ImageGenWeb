@@ -4,32 +4,7 @@
 {% block body %}
 <main class="auth-shell">
   <section class="auth-brand">
-    <svg class="auth-visual" viewBox="0 0 1536 1024" preserveAspectRatio="xMidYMid slice" aria-hidden="true" focusable="false">
-      <defs>
-        <linearGradient id="authWarmFlow" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0" stop-color="#f2a65a" stop-opacity=".2"></stop>
-          <stop offset=".72" stop-color="#ffbd72"></stop>
-          <stop offset="1" stop-color="#fff2d9"></stop>
-        </linearGradient>
-        <linearGradient id="authCoolFlow" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0" stop-color="#fff7e8"></stop>
-          <stop offset=".45" stop-color="#b9e1f5"></stop>
-          <stop offset="1" stop-color="#75b6dc" stop-opacity=".15"></stop>
-        </linearGradient>
-        <filter id="authFlowGlow" x="-25%" y="-25%" width="150%" height="150%">
-          <feGaussianBlur stdDeviation="3" result="flowBlur"></feGaussianBlur>
-          <feMerge><feMergeNode in="flowBlur"></feMergeNode><feMergeNode in="SourceGraphic"></feMergeNode></feMerge>
-        </filter>
-      </defs>
-      <image href="{{ url_for('static', filename='assets/auth-hero.webp') }}" width="1536" height="1024"></image>
-      <g class="auth-flow-lines" filter="url(#authFlowGlow)">
-        <path class="auth-flow-path warm" pathLength="1" d="M -40 728 C 210 728 402 731 492 714 C 594 695 669 648 776 633"></path>
-        <path class="auth-flow-path cool cool-1" pathLength="1" d="M 773 633 C 865 600 956 558 1114 520"></path>
-        <path class="auth-flow-path cool cool-2" pathLength="1" d="M 774 635 C 884 615 1015 585 1220 555"></path>
-        <path class="auth-flow-path cool cool-3" pathLength="1" d="M 775 637 C 905 641 1060 626 1305 599"></path>
-        <path class="auth-flow-path cool cool-4" pathLength="1" d="M 775 640 C 912 674 1080 727 1395 749"></path>
-      </g>
-    </svg>
+    <img class="auth-visual" src="{{ url_for('static', filename='assets/auth-hero.webp') }}" alt="">
     <div class="auth-brand-lockup">
       <span class="brand-mark large" aria-hidden="true"><img src="{{ url_for('static', filename='assets/brand-mark-v2.png') }}" alt=""></span>
       <div>
