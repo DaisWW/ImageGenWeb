@@ -9,6 +9,7 @@
     succeeded: ["已完成", "succeeded"],
     partial: ["部分完成", "partial"],
     failed: ["失败", "failed"],
+    interrupted: ["已中断", "failed"],
     canceled: ["已取消", "canceled"],
   };
   const TERMINAL = new Set(["succeeded", "partial", "failed", "canceled"]);
@@ -25,6 +26,7 @@
     "[data-job-queue]",
     "[data-job-time]",
     "[data-job-eta]",
+    "[data-job-retry]",
     "[data-job-cancel]",
     "[data-job-progress]",
     "[data-job-prompt]",
@@ -1859,6 +1861,9 @@
           && (locked || referenceUploading);
         setDisabled(button, this.chatOperations.has(workspaceId) || activeLocked);
       });
+      this.el.messageList.querySelectorAll("[data-retry-job]").forEach((button) => {
+        setDisabled(button, locked);
+      });
       const placeholder = this.workspaceLoading
         ? "正在加载工作站..."
         : generationBusy
@@ -2492,6 +2497,7 @@
           </div>
           <div class="job-actions">
             <span data-job-eta hidden><i data-lucide="clock-3"></i><span></span></span>
+            <button class="button ghost small" type="button" data-job-retry hidden><i data-lucide="refresh-cw"></i>继续生成</button>
             <button class="button danger small" type="button" data-job-cancel hidden><i data-lucide="square"></i>取消</button>
           </div>
         </header>
@@ -2535,6 +2541,7 @@
         time: fields.jobTime,
         eta: fields.jobEta,
         etaLabel: fields.jobEta.querySelector("span"),
+        retry: fields.jobRetry,
         cancel: fields.jobCancel,
         progress: fields.jobProgress,
         prompt: fields.jobPrompt,
@@ -2578,6 +2585,14 @@
       setText(elements.etaLabel, job.estimated_end_at
         ? (job.is_over_estimate ? "仍在处理" : `预计 ${UI.timeOnly(job.estimated_end_at)}`)
         : "");
+      setHidden(elements.retry, !job.can_retry);
+      if (job.can_retry) {
+        if (elements.retry.dataset.retryJob !== String(job.id)) {
+          elements.retry.dataset.retryJob = job.id;
+        }
+      } else if ("retryJob" in elements.retry.dataset) {
+        delete elements.retry.dataset.retryJob;
+      }
       setHidden(elements.cancel, !job.can_cancel);
       if (job.can_cancel) {
         if (elements.cancel.dataset.cancelJob !== String(job.id)) {
@@ -2617,6 +2632,7 @@
       }
       this.reconcileOutputTiles(elements.outputGrid, job);
       if (!elements.eta.hidden) UI.icons(elements.eta);
+      if (!elements.retry.hidden) UI.icons(elements.retry);
       if (!elements.cancel.hidden) UI.icons(elements.cancel);
       if (!elements.animationResult.hidden) UI.icons(elements.animationDownload);
       return article;
@@ -2674,7 +2690,8 @@
       } else {
         const placeholder = document.createElement("span");
         placeholder.className = "output-placeholder";
-        const icon = item.status === "failed" ? "circle-alert" : item.status === "canceled" ? "ban" : "loader-circle";
+        const icon = ["failed", "interrupted"].includes(item.status)
+          ? "circle-alert" : item.status === "canceled" ? "ban" : "loader-circle";
         placeholder.innerHTML = `<i data-lucide="${icon}"></i><small>${STATUS[item.status]?.[0] || "等待"}</small>`;
         button.replaceChildren(placeholder);
         UI.icons(button);
@@ -2686,18 +2703,40 @@
       return button;
     }
 
+    applyJobUpdate(job) {
+      const index = this.jobs.findIndex((entry) => entry.id === job.id);
+      if (index >= 0) this.jobs[index] = job;
+      if (TERMINAL.has(job.status)) this.workspaceJobs.delete(job.workspace_id);
+      else this.workspaceJobs.set(job.workspace_id, job);
+      this.updateWorkspaceJobDisplays();
+      this.renderJobs();
+    }
+
     async handleJobClick(event) {
+      const retry = event.target.closest("[data-retry-job]");
+      if (retry) {
+        retry.disabled = true;
+        try {
+          const data = await UI.api(`/api/generations/${retry.dataset.retryJob}/retry`, {
+            method: "POST",
+          });
+          this.applyJobUpdate(data.job);
+          this.schedulePoll(ACTIVE_POLL_INTERVAL);
+          await this.refreshBalance();
+          const remaining = data.job.requested_count - data.job.succeeded_count;
+          UI.toast(`已保留 ${data.job.succeeded_count} 帧，继续生成剩余 ${remaining} 帧`, "success");
+        } catch (error) {
+          retry.disabled = false;
+          UI.toast(error.message, "error");
+        }
+        return;
+      }
       const cancel = event.target.closest("[data-cancel-job]");
       if (cancel) {
         cancel.disabled = true;
         try {
           const data = await UI.api(`/api/generations/${cancel.dataset.cancelJob}/cancel`, { method: "POST" });
-          const index = this.jobs.findIndex((job) => job.id === data.job.id);
-          if (index >= 0) this.jobs[index] = data.job;
-          if (TERMINAL.has(data.job.status)) this.workspaceJobs.delete(data.job.workspace_id);
-          else this.workspaceJobs.set(data.job.workspace_id, data.job);
-          this.updateWorkspaceJobDisplays();
-          this.renderJobs();
+          this.applyJobUpdate(data.job);
           await this.refreshBalance();
           UI.toast("取消请求已提交", "success");
         } catch (error) {
