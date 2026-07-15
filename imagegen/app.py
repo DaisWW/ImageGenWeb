@@ -18,7 +18,7 @@ from .config import (
 )
 from .container import ApplicationServices
 from .errors import ServiceError
-from .extensions import csrf, db, login_manager
+from .extensions import compress, csrf, db, login_manager
 from .models import User
 from .serializers import display_amount
 from .services import (
@@ -55,6 +55,7 @@ def create_app(config: dict | None = None) -> Flask:
             "DATABASE_URL", f"sqlite:///{(data_dir / 'imagegen.db').as_posix()}"
         ),
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
+        COMPRESS_STREAMS=True,
         MAX_CONTENT_LENGTH=45 * 1024 * 1024,
         CHANNEL_CONFIG_PATH=os.environ.get(
             "CHANNEL_CONFIG_PATH", str(BASE_DIR / "config" / "channels.yaml")
@@ -78,6 +79,7 @@ def create_app(config: dict | None = None) -> Flask:
         app.config.update(config)
 
     db.init_app(app)
+    compress.init_app(app)
     login_manager.init_app(app)
     csrf.init_app(app)
     login_manager.login_view = "web.login"

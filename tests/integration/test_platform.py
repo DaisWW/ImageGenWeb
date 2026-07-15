@@ -392,6 +392,17 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertEqual(display_amount("1.2340"), "1.234")
         self.assertEqual(display_amount("1.2345"), "1.2345")
 
+    def test_large_static_assets_are_compressed(self):
+        response = self.app.test_client().get(
+            "/static/js/studio.js",
+            headers={"Accept-Encoding": "br"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("Content-Encoding"), "br")
+        self.assertIn("Accept-Encoding", response.headers.get("Vary", ""))
+        self.assertLess(len(response.data), Path("static/js/studio.js").stat().st_size // 2)
+
     def submit(self, workspace, **overrides):
         values = {
             "channel_id": "test",

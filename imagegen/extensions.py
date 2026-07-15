@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
+from flask_compress import Compress
 from flask_login import LoginManager
 from flask_sqlalchemy import SQLAlchemy
 from flask_wtf.csrf import CSRFProtect
@@ -23,5 +24,6 @@ def _enable_sqlite_foreign_keys(connection, _record) -> None:
 
 
 db = SQLAlchemy(model_class=Base, session_options={"expire_on_commit": False})
+compress = Compress()
 login_manager = LoginManager()
 csrf = CSRFProtect()
