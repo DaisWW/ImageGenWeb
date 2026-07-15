@@ -6,10 +6,11 @@ from sqlalchemy import select
 
 from ..errors import ServiceError
 from ..extensions import db
-from ..models import WalletLedger
+from ..models import WalletLedger, WorkerState
 from ..serializers import ledger_dict, user_dict
 from ..services import AuthService
 from ..version import __version__
+from ..worker_health import worker_heartbeat_is_fresh
 from . import web
 from .shared import (
     admin_required,
@@ -32,17 +33,55 @@ def _public_chat_models() -> list[dict]:
 
 @web.get("/health")
 def health():
+    database = "ready"
     try:
         db.session.execute(select(1))
-        database = "ready"
     except Exception:
+        db.session.rollback()
         database = "unavailable"
+    storage_status = "ready"
+    try:
+        current_app.extensions["image_storage"].healthcheck()
+    except Exception:
+        storage_status = "unavailable"
+    worker = "unavailable"
+    title = ""
+    if database == "ready":
+        try:
+            runtime = services().settings.runtime()
+            title = services().settings.site_title()
+            state = db.session.get(WorkerState, 1)
+            if (
+                state is not None
+                and state.worker_id is not None
+                and worker_heartbeat_is_fresh(
+                    state.heartbeat_at,
+                    runtime.worker_heartbeat_seconds,
+                )
+            ):
+                worker = "ready"
+        except Exception:
+            db.session.rollback()
+            database = "unavailable"
+    ok = database == storage_status == worker == "ready"
     return jsonify(
-        ok=database == "ready",
+        ok=ok,
         database=database,
-        title=services().settings.site_title(),
+        storage=storage_status,
+        worker=worker,
+        title=title,
         version=__version__,
-    ), (200 if database == "ready" else 503)
+    ), (200 if ok else 503)
+
+
+@web.get("/health/live")
+def health_live():
+    try:
+        db.session.execute(select(1))
+    except Exception:
+        db.session.rollback()
+        return jsonify(ok=False, database="unavailable", version=__version__), 503
+    return jsonify(ok=True, database="ready", version=__version__)
 
 
 @web.route("/login", methods=["GET", "POST"])
@@ -50,16 +89,26 @@ def login():
     if current_user.is_authenticated:
         return redirect(url_for("web.studio"))
     error = ""
+    status_code = 200
     if request.method == "POST":
-        user = services().auth.authenticate(
-            request.form.get("username", ""),
-            request.form.get("password", ""),
-        )
+        try:
+            user = services().auth.authenticate(
+                request.form.get("username", ""),
+                request.form.get("password", ""),
+                client_id=request.remote_addr or "",
+            )
+        except ServiceError as exc:
+            if exc.code != "login_rate_limited":
+                raise
+            user = None
+            error = str(exc)
+            status_code = exc.status_code
         if user:
             login_user(user, remember=bool(request.form.get("remember")))
             return redirect(url_for("web.studio"))
-        error = "用户名或密码错误"
-    return render_template("pages/login.html", error=error)
+        if not error:
+            error = "用户名或密码错误"
+    return render_template("pages/login.html", error=error), status_code
 
 
 @web.post("/logout")

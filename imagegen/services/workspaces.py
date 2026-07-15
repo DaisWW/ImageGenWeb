@@ -19,6 +19,7 @@ from ..models import (
     GenerationItem,
     GenerationJob,
     GenerationReference,
+    User,
     Workspace,
     new_public_id,
     utcnow,
@@ -307,87 +308,95 @@ class WorkspaceService:
         db.session.commit()
 
     def delete(self, workspace: Workspace) -> None:
-        active = (
-            db.session.scalar(
-                select(func.count(GenerationItem.id))
-                .join(GenerationJob)
-                .where(
-                    GenerationJob.workspace_id == workspace.id,
-                    GenerationItem.status.in_(["running", "canceling"]),
-                )
-            )
-            or 0
-        )
-        if active:
+        user, locked_workspace, jobs, items = self._lock_workspace_records(workspace)
+        if any(item.status in {"running", "canceling"} for item in items):
             raise ServiceError(
                 "工作站仍有正在生成的任务，请先取消并等待结束",
                 status_code=409,
             )
-        user = self.billing.lock_user(workspace.user_id)
-        queued_jobs = list(
-            db.session.scalars(
-                select(GenerationJob)
-                .options(selectinload(GenerationJob.items))
-                .where(GenerationJob.workspace_id == workspace.id)
-            )
-        )
-        for job in queued_jobs:
+        for job in jobs:
             releasable = sum(
-                (money(job.price_per_image_rmb) for item in job.items if item.status == "queued"),
+                (
+                    money(job.price_per_image_rmb)
+                    for item in items
+                    if item.job_id == job.id and item.status == "queued"
+                ),
                 Decimal("0"),
             )
             self.billing.release(user, job, releasable)
-        user_id, workspace_id = workspace.user_id, workspace.id
-        db.session.delete(workspace)
+        self.storage.delete_workspace(locked_workspace.user_id, locked_workspace.id)
+        db.session.delete(locked_workspace)
         db.session.commit()
-        self.storage.delete_workspace(user_id, workspace_id)
 
     def clear(self, workspace: Workspace) -> Workspace:
-        active = (
-            db.session.scalar(
-                select(func.count(GenerationItem.id))
-                .join(GenerationJob)
-                .where(
-                    GenerationJob.workspace_id == workspace.id,
-                    GenerationItem.status.in_(["queued", "running", "canceling"]),
-                )
-            )
-            or 0
-        )
-        if active:
+        _, locked_workspace, jobs, items = self._lock_workspace_records(workspace)
+        if any(item.status in {"queued", "running", "canceling"} for item in items):
             raise ServiceError(
                 "当前帧动画尚未生成完成，请等待完成或先取消任务"
-                if workspace.kind == "animation"
+                if locked_workspace.kind == "animation"
                 else "当前图片尚未生成完成，请等待完成或先取消任务",
                 code="workspace_generation_active",
                 status_code=409,
             )
-        jobs = list(
-            db.session.scalars(
-                select(GenerationJob).where(GenerationJob.workspace_id == workspace.id)
-            )
-        )
         messages = list(
             db.session.scalars(
-                select(ConversationMessage).where(ConversationMessage.workspace_id == workspace.id)
+                select(ConversationMessage).where(
+                    ConversationMessage.workspace_id == locked_workspace.id
+                )
             )
         )
-        state = db.session.get(ConversationState, workspace.id)
+        state = db.session.get(ConversationState, locked_workspace.id)
+        assets = list(
+            db.session.scalars(select(Asset).where(Asset.workspace_id == locked_workspace.id))
+        )
+        self.storage.delete_workspace(locked_workspace.user_id, locked_workspace.id)
         for record in [*jobs, *messages]:
             db.session.delete(record)
         if state:
             db.session.delete(state)
         db.session.flush()
-        assets = list(db.session.scalars(select(Asset).where(Asset.workspace_id == workspace.id)))
         for asset in assets:
             db.session.delete(asset)
-        settings = dict(workspace.settings or {})
+        settings = dict(locked_workspace.settings or {})
         settings["prompt"] = ""
-        workspace.settings = sanitize_workspace_settings(settings, self.settings.runtime())
-        workspace.updated_at = utcnow()
+        locked_workspace.settings = sanitize_workspace_settings(settings, self.settings.runtime())
+        locked_workspace.updated_at = utcnow()
         db.session.commit()
-        self.storage.delete_workspace(workspace.user_id, workspace.id)
-        return workspace
+        return locked_workspace
+
+    def _lock_workspace_records(
+        self,
+        workspace: Workspace,
+    ) -> tuple[User, Workspace, list[GenerationJob], list[GenerationItem]]:
+        user = self.billing.lock_user(workspace.user_id)
+        locked_workspace = db.session.scalar(
+            select(Workspace)
+            .where(
+                Workspace.id == workspace.id,
+                Workspace.user_id == workspace.user_id,
+            )
+            .with_for_update()
+        )
+        if locked_workspace is None:
+            raise ServiceError("工作站不存在", status_code=404)
+        jobs = list(
+            db.session.scalars(
+                select(GenerationJob)
+                .where(GenerationJob.workspace_id == locked_workspace.id)
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
+        )
+        items = list(
+            db.session.scalars(
+                select(GenerationItem)
+                .join(GenerationJob)
+                .where(GenerationJob.workspace_id == locked_workspace.id)
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
+        )
+        return user, locked_workspace, jobs, items
 
     def _reference_asset(
         self,

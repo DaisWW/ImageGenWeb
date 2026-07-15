@@ -4,6 +4,7 @@ import base64
 import io
 import json
 import os
+import socket
 import tempfile
 import threading
 import unittest
@@ -14,9 +15,12 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import call, patch
 
+import requests
 from PIL import Image
 from sqlalchemy import event, func, select
+from sqlalchemy.exc import IntegrityError
 
 from imagegen import create_app
 from imagegen.config.channels import ChannelRegistry
@@ -26,30 +30,34 @@ from imagegen.integrations.diagnostics import response_summary
 from imagegen.integrations.images import (
     GenerationRequest,
     OpenAIImagesAdapter,
+    PinnedHostSSLAdapter,
+    ProviderError,
     ProviderResult,
     ReferencePayload,
 )
-from imagegen.integrations.openai_chat import ChatCompletion, OpenAIChatClient
+from imagegen.integrations.openai_chat import ChatCompletion, OpenAIChatClient, OpenAIChatError
 from imagegen.models import (
     AuditLog,
     ConversationMessage,
     GenerationItem,
     GenerationJob,
+    GenerationQueueState,
     RuntimeLog,
     SystemState,
     User,
     WalletLedger,
+    WorkerState,
     Workspace,
     utcnow,
 )
 from imagegen.serializers import display_amount
-from imagegen.services import ServiceError, SubmitGeneration, SystemSettingsService
+from imagegen.services import ServiceError, SubmitGeneration, SystemSettingsService, money
 from imagegen.services.conversation_prompts import CHAT_SYSTEM_PROMPT
 from imagegen.services.runtime_logs import sanitize_details
 from imagegen.services.settings import SYSTEM_SETTINGS_KEY
-from imagegen.storage import InvalidImageError
+from imagegen.storage import InvalidImageError, StorageError
 from imagegen.worker import GenerationWorker
-from scripts.backup import copy_private_file
+from scripts.backup import copy_private_file, create_backup
 
 
 def png_bytes(color=(35, 160, 110)) -> bytes:
@@ -224,6 +232,30 @@ class RejectingTransparencySession(RecordingImageSession):
         return FakeImageHTTPResponse(content=opaque_icon_png_bytes())
 
 
+class FakeDownloadResponse:
+    def __init__(self, *, body: bytes = b"image", status_code: int = 200, headers=None):
+        self.body = body
+        self.status_code = status_code
+        self.headers = headers or {}
+        self.closed = False
+
+    def iter_content(self, _chunk_size):
+        yield self.body
+
+    def close(self):
+        self.closed = True
+
+
+class RecordingDownloadSession:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.requests = []
+
+    def get(self, url, **kwargs):
+        self.requests.append({"url": url, **kwargs})
+        return self.responses.pop(0)
+
+
 class FakeChatClient:
     def __init__(self):
         self.calls = []
@@ -254,6 +286,25 @@ class FakeChatClient:
             output_tokens=12,
             elapsed_seconds=1.234,
         )
+
+
+class FailingOnceChatClient(FakeChatClient):
+    def complete(self, model, *, system, messages, max_output_tokens=None):
+        result = super().complete(
+            model,
+            system=system,
+            messages=messages,
+            max_output_tokens=max_output_tokens,
+        )
+        if len(self.calls) == 1:
+            raise OpenAIChatError(
+                "测试聊天模型暂时不可用",
+                code="chat_test_failure",
+                status_code=502,
+                request_id="chat-failure-test",
+                elapsed_seconds=0.25,
+            )
+        return result
 
 
 class BlockingFirstChatClient:
@@ -343,16 +394,19 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.chat_path.write_text(CHAT_CONFIG, encoding="utf-8")
         os.environ["TEST_IMAGE_KEY"] = "test-key-not-secret"
         os.environ["TEST_CHAT_KEY"] = "test-chat-key-not-secret"
+        database_url = os.environ.get("TEST_DATABASE_URL", "").strip()
         self.app = create_app(
             {
                 "TESTING": True,
                 "SECRET_KEY": "test-secret",
-                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{(root / 'test.db').as_posix()}",
+                "SQLALCHEMY_DATABASE_URI": database_url
+                or f"sqlite:///{(root / 'test.db').as_posix()}",
                 "CHANNEL_CONFIG_PATH": str(self.channel_path),
                 "CHAT_MODEL_CONFIG_PATH": str(self.chat_path),
                 "IMAGE_STORAGE_PATH": str(root / "files"),
                 "WTF_CSRF_ENABLED": False,
                 "AUTO_CREATE_DB": True,
+                "TRUST_PROXY_HEADERS": True,
             }
         )
         self.context = self.app.app_context()
@@ -386,11 +440,318 @@ class ImageGenPlatformTests(unittest.TestCase):
     def create_workspace(self, name="角色设计", kind="image"):
         return self.services.workspaces.create(self.user.id, name, kind)
 
+    def create_worker(self):
+        return GenerationWorker(
+            self.app,
+            self.app.extensions["channel_registry"],
+            self.app.extensions["image_storage"],
+        )
+
     def test_display_amount_trims_only_redundant_fraction_zeros(self):
         self.assertEqual(display_amount("100.0000"), "100.00")
         self.assertEqual(display_amount("1.2500"), "1.25")
         self.assertEqual(display_amount("1.2340"), "1.234")
         self.assertEqual(display_amount("1.2345"), "1.2345")
+
+    def test_money_and_channel_prices_reject_non_finite_values(self):
+        for value in ("NaN", "Infinity", "-Infinity"):
+            with self.subTest(value=value), self.assertRaisesRegex(ServiceError, "金额格式无效"):
+                money(value)
+
+            invalid_path = Path(self.temp.name) / f"channels-{value}.yaml"
+            invalid_path.write_text(
+                CHANNEL_CONFIG.replace("price_rmb: 1.2500", f"price_rmb: {value}"),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "price_rmb 无效"):
+                ChannelRegistry(invalid_path)
+
+    def test_internal_state_rows_are_bootstrapped(self):
+        self.assertIsNotNone(db.session.get(GenerationQueueState, 1))
+        self.assertIsNotNone(db.session.get(WorkerState, 1))
+
+    def test_database_rejects_case_insensitive_duplicate_usernames(self):
+        duplicate = User(
+            username="ARTIST",
+            display_name="重复用户",
+            password_hash="not-used",
+            role="user",
+            status="active",
+            balance_rmb=Decimal("0"),
+            reserved_rmb=Decimal("0"),
+            generation_concurrency=2,
+            password_version=1,
+        )
+        db.session.add(duplicate)
+
+        with self.assertRaises(IntegrityError):
+            db.session.commit()
+        db.session.rollback()
+
+    def test_postgresql_global_queue_admission_is_atomic(self):
+        if db.engine.dialect.name != "postgresql":
+            self.skipTest("PostgreSQL row-lock regression")
+        self.channel_path.write_text(
+            CHANNEL_CONFIG.replace("max_queued_per_user: 20", "max_queued_per_user: 1").replace(
+                "max_queued_global: 100", "max_queued_global: 1"
+            ),
+            encoding="utf-8",
+        )
+        self.assertTrue(self.app.extensions["channel_registry"].reload(force=True))
+        second_user = self.services.users.create(
+            username="second-artist",
+            password="StrongPass123!",
+            balance_rmb="20",
+            actor_user_id=self.admin.id,
+        )
+        first_workspace = self.services.workspaces.create(self.user.id, "并发队列 A")
+        second_workspace = self.services.workspaces.create(second_user.id, "并发队列 B")
+        submissions = (
+            (self.user.id, first_workspace.id),
+            (second_user.id, second_workspace.id),
+        )
+        barrier = threading.Barrier(2)
+        outcomes = []
+
+        def submit_in_thread(user_id, workspace_id):
+            with self.app.app_context():
+                workspace = db.session.get(Workspace, workspace_id)
+                request = SubmitGeneration(
+                    channel_id="test",
+                    model="model-b",
+                    mode="text2img",
+                    prompt="并发队列测试",
+                    size="1024x1024",
+                    quality="medium",
+                    output_format="png",
+                    compression=90,
+                    batch_count=1,
+                    reference_ids=(),
+                )
+                barrier.wait(timeout=10)
+                try:
+                    self.services.generations.submit(user_id, workspace, request)
+                    outcomes.append("accepted")
+                except ServiceError as exc:
+                    outcomes.append(exc.code)
+                finally:
+                    db.session.remove()
+
+        threads = [
+            threading.Thread(target=submit_in_thread, args=submission) for submission in submissions
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(15)
+
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertCountEqual(outcomes, ["accepted", "queue_full"])
+        self.assertEqual(
+            db.session.scalar(
+                select(func.count(GenerationItem.id)).where(GenerationItem.status == "queued")
+            ),
+            1,
+        )
+
+    def test_postgresql_workspace_delete_serializes_with_submission(self):
+        if db.engine.dialect.name != "postgresql":
+            self.skipTest("PostgreSQL row-lock regression")
+        workspace = self.create_workspace("删除与提交竞态")
+        workspace_id = workspace.id
+        user_id = self.user.id
+        generation_service = self.services.generations
+        original_capacity_check = generation_service._ensure_queue_capacity
+        submission_locked = threading.Event()
+        continue_submission = threading.Event()
+        delete_started = threading.Event()
+        errors = []
+
+        def blocking_capacity_check(locked_user_id, requested_count):
+            submission_locked.set()
+            if not continue_submission.wait(10):
+                raise RuntimeError("并发测试等待提交超时")
+            return original_capacity_check(locked_user_id, requested_count)
+
+        def submit_in_thread():
+            with self.app.app_context():
+                current_workspace = db.session.get(Workspace, workspace_id)
+                request = SubmitGeneration(
+                    channel_id="test",
+                    model="model-b",
+                    mode="text2img",
+                    prompt="删除竞态测试",
+                    size="1024x1024",
+                    quality="medium",
+                    output_format="png",
+                    compression=90,
+                    batch_count=1,
+                    reference_ids=(),
+                )
+                try:
+                    generation_service.submit(user_id, current_workspace, request)
+                except Exception as exc:
+                    errors.append(("submit", exc))
+                finally:
+                    db.session.remove()
+
+        def delete_in_thread():
+            with self.app.app_context():
+                current_workspace = db.session.get(Workspace, workspace_id)
+                delete_started.set()
+                try:
+                    self.services.workspaces.delete(current_workspace)
+                except Exception as exc:
+                    errors.append(("delete", exc))
+                finally:
+                    db.session.remove()
+
+        generation_service._ensure_queue_capacity = blocking_capacity_check
+        try:
+            submit_thread = threading.Thread(target=submit_in_thread)
+            submit_thread.start()
+            self.assertTrue(submission_locked.wait(5))
+            delete_thread = threading.Thread(target=delete_in_thread)
+            delete_thread.start()
+            self.assertTrue(delete_started.wait(5))
+            continue_submission.set()
+            submit_thread.join(15)
+            delete_thread.join(15)
+        finally:
+            generation_service._ensure_queue_capacity = original_capacity_check
+            continue_submission.set()
+
+        self.assertFalse(submit_thread.is_alive())
+        self.assertFalse(delete_thread.is_alive())
+        self.assertEqual(errors, [])
+        db.session.expire_all()
+        self.assertIsNone(db.session.get(Workspace, workspace_id))
+        self.assertEqual(db.session.get(User, user_id).reserved_rmb, Decimal("0.0000"))
+
+    def test_workspace_mutation_holds_conversation_exclusivity(self):
+        workspace = self.create_workspace("工作站变更互斥")
+        conversations = self.services.conversations
+
+        with conversations.workspace_mutation(workspace, "正在清空工作站"):
+            with self.assertRaises(ServiceError) as raised:
+                with conversations.generation_submission(workspace):
+                    pass
+
+        self.assertEqual(raised.exception.code, "conversation_busy")
+
+    def test_image_download_pins_validated_dns_and_limits_authorization_on_redirect(self):
+        channel = self.app.extensions["channel_registry"].get("test")
+        redirect = FakeDownloadResponse(
+            status_code=302,
+            headers={"Location": "https://cdn.example/final.png"},
+        )
+        final = FakeDownloadResponse(body=b"downloaded-image")
+        session = RecordingDownloadSession([redirect, final])
+        adapter = OpenAIImagesAdapter()
+        adapter._local.session = session
+        addresses = {"relay.example": "8.8.8.8", "cdn.example": "1.1.1.1"}
+
+        def resolve(hostname, port, *, type):
+            return [
+                (
+                    socket.AF_INET,
+                    type,
+                    socket.IPPROTO_TCP,
+                    "",
+                    (addresses[hostname], port),
+                )
+            ]
+
+        with patch("imagegen.integrations.images.socket.getaddrinfo", side_effect=resolve):
+            content = adapter._download(
+                "https://relay.example/generated.png",
+                channel,
+                "request-id",
+            )
+
+        self.assertEqual(content, b"downloaded-image")
+        self.assertEqual(
+            [request["url"] for request in session.requests],
+            ["https://8.8.8.8/generated.png", "https://1.1.1.1/final.png"],
+        )
+        self.assertEqual(session.requests[0]["headers"]["Host"], "relay.example")
+        self.assertIn("Authorization", session.requests[0]["headers"])
+        self.assertEqual(session.requests[1]["headers"], {"Host": "cdn.example"})
+        self.assertTrue(redirect.closed)
+        self.assertTrue(final.closed)
+
+    def test_image_download_rejects_credentials_and_non_public_dns(self):
+        channel = self.app.extensions["channel_registry"].get("test")
+        adapter = OpenAIImagesAdapter()
+        adapter._local.session = RecordingDownloadSession([])
+
+        with self.assertRaises(ProviderError) as credentials_error:
+            adapter._download(
+                "https://user:password@relay.example/image.png",
+                channel,
+                "request-id",
+            )
+        self.assertEqual(credentials_error.exception.code, "invalid_response")
+
+        private_result = [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("127.0.0.1", 443),
+            )
+        ]
+        with (
+            patch(
+                "imagegen.integrations.images.socket.getaddrinfo",
+                return_value=private_result,
+            ),
+            self.assertRaises(ProviderError) as private_error,
+        ):
+            adapter._download("https://relay.example/image.png", channel, "request-id")
+        self.assertEqual(private_error.exception.code, "invalid_response")
+
+    def test_image_download_closes_error_response(self):
+        channel = self.app.extensions["channel_registry"].get("test")
+        response = FakeDownloadResponse(status_code=502)
+        adapter = OpenAIImagesAdapter()
+        adapter._local.session = RecordingDownloadSession([response])
+        public_result = [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("8.8.8.8", 443),
+            )
+        ]
+
+        with (
+            patch(
+                "imagegen.integrations.images.socket.getaddrinfo",
+                return_value=public_result,
+            ),
+            self.assertRaises(ProviderError),
+        ):
+            adapter._download("https://relay.example/image.png", channel, "request-id")
+        self.assertTrue(response.closed)
+
+    def test_pinned_https_adapter_preserves_sni_and_certificate_hostname(self):
+        adapter = PinnedHostSSLAdapter()
+        prepared = requests.Request(
+            "GET",
+            "https://8.8.8.8:8443/image.png",
+            headers={"Host": "images.example:8443"},
+        ).prepare()
+
+        _host, pool_kwargs = adapter.build_connection_pool_key_attributes(
+            prepared,
+            True,
+        )
+
+        self.assertEqual(pool_kwargs["assert_hostname"], "images.example")
+        self.assertEqual(pool_kwargs["server_hostname"], "images.example")
 
     def test_large_static_assets_are_compressed(self):
         response = self.app.test_client().get(
@@ -512,12 +873,38 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertEqual(client.get("/").status_code, 200)
         self.assertNotEqual(client.get_cookie("remember_token").value, old_token)
 
-    def test_password_can_be_short_but_not_empty(self):
-        self.services.auth.set_password(self.user, "12345678")
-        self.assertTrue(self.services.auth.verify_password(self.user, "12345678"))
+    def test_password_requires_at_least_ten_characters(self):
+        self.services.auth.set_password(self.user, "1234567890")
+        self.assertTrue(self.services.auth.verify_password(self.user, "1234567890"))
 
         with self.assertRaisesRegex(ServiceError, "密码不能为空"):
             self.services.auth.set_password(self.user, "")
+        with self.assertRaisesRegex(ServiceError, "至少需要 10"):
+            self.services.auth.set_password(self.user, "123456789")
+
+    def test_login_rate_limit_uses_trusted_forwarded_client(self):
+        client = self.app.test_client()
+        request_options = {
+            "data": {"username": "artist", "password": "wrong-password"},
+            "headers": {"X-Forwarded-For": "198.51.100.20"},
+            "environ_base": {"REMOTE_ADDR": "192.0.2.10"},
+        }
+
+        for _attempt in range(5):
+            response = client.post("/login", **request_options)
+            self.assertEqual(response.status_code, 200)
+
+        blocked = client.post("/login", **request_options)
+        self.assertEqual(blocked.status_code, 429)
+        self.assertIn("登录失败次数过多", blocked.get_data(as_text=True))
+
+        allowed = client.post(
+            "/login",
+            data={"username": "artist", "password": "StrongPass123!"},
+            headers={"X-Forwarded-For": "198.51.100.21"},
+            environ_base={"REMOTE_ADDR": "192.0.2.10"},
+        )
+        self.assertEqual(allowed.status_code, 302)
 
     def test_chat_system_prompt_uses_a_natural_visual_partner_identity(self):
         self.assertIn("AI 视觉创作搭档", CHAT_SYSTEM_PROMPT)
@@ -874,6 +1261,48 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertFalse(thread.is_alive())
         self.assertEqual(errors, [])
         self.assertFalse(conversations.operation_state(workspace.id)["busy"])
+
+    def test_generation_api_holds_workspace_operation_while_submitting(self):
+        workspace = self.create_workspace("生成互斥工作站")
+        conversations = self.services.conversations
+        generation_service = self.services.generations
+        original_submit = generation_service.submit
+        observed_operations = []
+
+        def observed_submit(*args, **kwargs):
+            observed_operations.append(conversations.operation_state(workspace.id))
+            return original_submit(*args, **kwargs)
+
+        generation_service.submit = observed_submit
+        try:
+            response = self.user_client().post(
+                "/api/generations",
+                json={
+                    "workspace_id": workspace.id,
+                    "channel_id": "test",
+                    "model": "model-b",
+                    "prompt": "原子互斥测试",
+                    "quality": "medium",
+                },
+            )
+        finally:
+            generation_service.submit = original_submit
+
+        self.assertEqual(response.status_code, 202, response.get_data(as_text=True))
+        self.assertEqual(observed_operations[0]["kind"], "generation_submission")
+        self.assertFalse(conversations.operation_state(workspace.id)["busy"])
+
+    def test_generation_submission_rejects_an_active_conversation(self):
+        workspace = self.create_workspace("对话优先工作站")
+        conversations = self.services.conversations
+
+        with conversations._workspace_operation(workspace, "reply", "正在等待 AI 回复"):
+            with self.assertRaises(ServiceError) as raised:
+                with conversations.generation_submission(workspace):
+                    pass
+
+        self.assertEqual(raised.exception.code, "conversation_busy")
+        self.assertEqual(raised.exception.status_code, 409)
 
     def test_chat_operations_enforce_user_and_global_capacity(self):
         conversations = self.services.conversations
@@ -1598,9 +2027,18 @@ class ImageGenPlatformTests(unittest.TestCase):
             json={"model_id": "test-chat", "content": "分析这张图", "attachment_ids": []},
         )
 
-        self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.json["code"], "chat_provider_error")
-        error_id = response.json["error_id"]
+        self.assertEqual(response.status_code, 201)
+        user_message, error_message = response.json["messages"]
+        self.assertEqual(user_message["role"], "user")
+        self.assertEqual(error_message["role"], "assistant")
+        self.assertEqual(error_message["kind"], "error")
+        self.assertEqual(error_message["payload"]["code"], "chat_provider_error")
+        self.assertEqual(
+            error_message["payload"]["retry_user_message_id"],
+            user_message["id"],
+        )
+        error_id = error_message["payload"]["error_id"]
+        self.assertIn(error_id, error_message["content"])
         entry = db.session.get(RuntimeLog, error_id)
         self.assertEqual(entry.status, "error")
         self.assertEqual(entry.http_status, 200)
@@ -1615,6 +2053,8 @@ class ImageGenPlatformTests(unittest.TestCase):
             listed = admin.get(f"/api/admin/runtime-logs?status=error&search={error_id}")
             self.assertEqual(listed.status_code, 200)
             self.assertEqual([item["id"] for item in listed.json["logs"]], [error_id])
+            created_at = datetime.fromisoformat(listed.json["logs"][0]["created_at"])
+            self.assertEqual(created_at.utcoffset(), timedelta(0))
             detail = admin.get(f"/api/admin/runtime-logs/{error_id}")
             self.assertEqual(detail.status_code, 200)
             self.assertNotIn("must-not-be-logged", json.dumps(detail.json, ensure_ascii=False))
@@ -1624,6 +2064,67 @@ class ImageGenPlatformTests(unittest.TestCase):
             )
         finally:
             self.context.push()
+
+    def test_failed_chat_retry_keeps_user_message_and_excludes_error_from_context(self):
+        workspace = self.create_workspace()
+        chat = FailingOnceChatClient()
+        self.services.conversations.client = chat
+        client = self.user_client()
+
+        failed = client.post(
+            f"/api/workspaces/{workspace.id}/messages",
+            json={
+                "model_id": "test-chat",
+                "content": "请保留这条用户需求",
+                "attachment_ids": [],
+            },
+        )
+        self.assertEqual(failed.status_code, 201)
+        user_message, error_message = failed.json["messages"]
+
+        retried = client.post(
+            f"/api/workspaces/{workspace.id}/messages/{error_message['id']}/retry",
+            json={"model_id": "test-chat"},
+        )
+
+        self.assertEqual(retried.status_code, 201)
+        self.assertEqual(retried.json["message"]["kind"], "message")
+        retry_context = chat.calls[-1]["messages"]
+        self.assertEqual(retry_context, [{"role": "user", "content": user_message["content"]}])
+        self.assertNotIn(error_message["content"], json.dumps(retry_context, ensure_ascii=False))
+
+        continued = client.post(
+            f"/api/workspaces/{workspace.id}/messages",
+            json={
+                "model_id": "test-chat",
+                "content": "继续补充新的要求",
+                "attachment_ids": [],
+            },
+        )
+        self.assertEqual(continued.status_code, 201)
+        continued_context = chat.calls[-1]["messages"]
+        self.assertEqual(
+            [message["content"] for message in continued_context],
+            [
+                user_message["content"],
+                retried.json["message"]["content"],
+                "继续补充新的要求",
+            ],
+        )
+        self.assertNotIn(
+            error_message["content"], json.dumps(continued_context, ensure_ascii=False)
+        )
+        stored = client.get(f"/api/workspaces/{workspace.id}/messages").json["messages"]
+        self.assertEqual(
+            [(message["role"], message["kind"]) for message in stored],
+            [
+                ("user", "message"),
+                ("assistant", "error"),
+                ("assistant", "message"),
+                ("user", "message"),
+                ("assistant", "message"),
+            ],
+        )
 
     def test_unhandled_api_error_is_logged_with_correlation_id(self):
         @self.app.get("/api/test-unhandled-runtime-error")
@@ -1837,11 +2338,7 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertEqual(master_payload["reserved_rmb"], "1.2500")
 
         master_job = db.session.get(GenerationJob, master_payload["id"])
-        worker = GenerationWorker(
-            self.app,
-            self.app.extensions["channel_registry"],
-            self.app.extensions["image_storage"],
-        )
+        worker = self.create_worker()
         worker.providers = FakeProviderFactory()
         channel = self.app.extensions["channel_registry"].get("test")
         self.assertTrue(worker._claim(master_job.items[0].id, channel))
@@ -1905,11 +2402,7 @@ class ImageGenPlatformTests(unittest.TestCase):
             animation_format="webp",
         )
         item_ids = [item.id for item in job.items]
-        worker = GenerationWorker(
-            self.app,
-            self.app.extensions["channel_registry"],
-            self.app.extensions["image_storage"],
-        )
+        worker = self.create_worker()
         worker.providers = FakeProviderFactory(vary=True)
         channel = self.app.extensions["channel_registry"].get("test")
 
@@ -1963,11 +2456,7 @@ class ImageGenPlatformTests(unittest.TestCase):
         config = self.services.settings.editable_config()
         config["runtime"]["max_prompt_characters"] = 1000
         self.services.settings.save(config, self.admin.id)
-        worker = GenerationWorker(
-            self.app,
-            self.app.extensions["channel_registry"],
-            self.app.extensions["image_storage"],
-        )
+        worker = self.create_worker()
 
         request_prompt = worker._request_prompt(job.items[0])
 
@@ -1988,11 +2477,7 @@ class ImageGenPlatformTests(unittest.TestCase):
             frame_count=3,
         )
         first_item_id = job.items[0].id
-        worker = GenerationWorker(
-            self.app,
-            self.app.extensions["channel_registry"],
-            self.app.extensions["image_storage"],
-        )
+        worker = self.create_worker()
         worker.providers = FakeProviderFactory(fail=True)
         channel = self.app.extensions["channel_registry"].get("test")
         self.assertTrue(worker._claim(first_item_id, channel))
@@ -2022,22 +2507,14 @@ class ImageGenPlatformTests(unittest.TestCase):
             reference_ids=(master.id,),
             frame_count=3,
         )
-        worker = GenerationWorker(
-            self.app,
-            self.app.extensions["channel_registry"],
-            self.app.extensions["image_storage"],
-        )
+        worker = self.create_worker()
         worker.providers = FakeProviderFactory(vary=True)
         channel = self.app.extensions["channel_registry"].get("test")
 
         self.assertTrue(worker._claim(job.items[0].id, channel))
         worker._process_item(job.items[0].id)
         self.assertTrue(worker._claim(job.items[1].id, channel))
-        replacement = GenerationWorker(
-            self.app,
-            self.app.extensions["channel_registry"],
-            self.app.extensions["image_storage"],
-        )
+        replacement = self.create_worker()
         replacement._recover_orphaned_items(immediate=True)
 
         db.session.expire_all()
@@ -2160,11 +2637,7 @@ class ImageGenPlatformTests(unittest.TestCase):
     def test_canceling_running_item_discards_late_provider_result(self):
         workspace = self.create_workspace()
         job = self.submit(workspace)
-        worker = GenerationWorker(
-            self.app,
-            self.app.extensions["channel_registry"],
-            self.app.extensions["image_storage"],
-        )
+        worker = self.create_worker()
         providers = BlockingProviderFactory()
         worker.providers = providers
         channel = self.app.extensions["channel_registry"].get("test")
@@ -2198,11 +2671,7 @@ class ImageGenPlatformTests(unittest.TestCase):
     def test_worker_success_saves_image_and_charges_exactly_once(self):
         workspace = self.create_workspace()
         job = self.submit(workspace, transparent_background=True)
-        worker = GenerationWorker(
-            self.app,
-            self.app.extensions["channel_registry"],
-            self.app.extensions["image_storage"],
-        )
+        worker = self.create_worker()
         worker.providers = FakeProviderFactory()
         channel = self.app.extensions["channel_registry"].get("test")
         self.assertTrue(worker._claim(job.items[0].id, channel))
@@ -2232,11 +2701,7 @@ class ImageGenPlatformTests(unittest.TestCase):
     def test_worker_failure_releases_reservation_without_charge(self):
         workspace = self.create_workspace()
         job = self.submit(workspace)
-        worker = GenerationWorker(
-            self.app,
-            self.app.extensions["channel_registry"],
-            self.app.extensions["image_storage"],
-        )
+        worker = self.create_worker()
         worker.providers = FakeProviderFactory(fail=True)
         channel = self.app.extensions["channel_registry"].get("test")
         self.assertTrue(worker._claim(job.items[0].id, channel))
@@ -2256,11 +2721,7 @@ class ImageGenPlatformTests(unittest.TestCase):
         workspace = self.create_workspace()
         job = self.submit(workspace)
         item_id = job.items[0].id
-        old_worker = GenerationWorker(
-            self.app,
-            self.app.extensions["channel_registry"],
-            self.app.extensions["image_storage"],
-        )
+        old_worker = self.create_worker()
         old_worker.worker_id = "worker-before-restart"
         old_worker.providers = BlockingProviderFactory()
         channel = self.app.extensions["channel_registry"].get("test")
@@ -2270,11 +2731,7 @@ class ImageGenPlatformTests(unittest.TestCase):
         processing.start()
         self.assertTrue(old_worker.providers.adapter.started.wait(5))
         try:
-            replacement = GenerationWorker(
-                self.app,
-                self.app.extensions["channel_registry"],
-                self.app.extensions["image_storage"],
-            )
+            replacement = self.create_worker()
             replacement.worker_id = "worker-after-restart"
             replacement._recover_orphaned_items(immediate=True)
         finally:
@@ -2301,11 +2758,7 @@ class ImageGenPlatformTests(unittest.TestCase):
         workspace = self.create_workspace()
         job = self.submit(workspace)
         item_id = job.items[0].id
-        worker = GenerationWorker(
-            self.app,
-            self.app.extensions["channel_registry"],
-            self.app.extensions["image_storage"],
-        )
+        worker = self.create_worker()
         worker.worker_id = "heartbeat-worker"
         channel = self.app.extensions["channel_registry"].get("test")
         self.assertTrue(worker._claim(item_id, channel))
@@ -2321,27 +2774,88 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertNotEqual(heartbeat, stale_heartbeat)
 
     def test_worker_instances_have_unique_claim_identifiers(self):
-        first = GenerationWorker(
-            self.app,
-            self.app.extensions["channel_registry"],
-            self.app.extensions["image_storage"],
-        )
-        second = GenerationWorker(
-            self.app,
-            self.app.extensions["channel_registry"],
-            self.app.extensions["image_storage"],
-        )
+        first = self.create_worker()
+        second = self.create_worker()
         self.assertNotEqual(first.worker_id, second.worker_id)
+
+    def test_worker_startup_always_recovers_orphaned_claims_after_leasing(self):
+        worker = self.create_worker()
+
+        with (
+            patch.object(worker, "_recover_orphaned_items") as recover,
+            patch.object(worker, "_maintain_claims"),
+            patch.object(worker, "_schedule_available", side_effect=worker.stop),
+            patch.object(worker, "_run_periodic_cleanup"),
+        ):
+            worker.run_forever()
+
+        recover.assert_called_once_with(immediate=True)
+        self.assertIsNone(db.session.get(WorkerState, 1).worker_id)
+
+    def test_worker_lease_rejects_live_instance_and_allows_stale_takeover(self):
+        first = self.create_worker()
+        second = self.create_worker()
+        first._acquire_worker_lease()
+
+        with self.assertRaisesRegex(RuntimeError, "已有生成 Worker"):
+            second._acquire_worker_lease()
+
+        state = db.session.get(WorkerState, 1)
+        state.heartbeat_at = utcnow() - timedelta(minutes=10)
+        db.session.commit()
+        second._acquire_worker_lease()
+        self.assertEqual(db.session.get(WorkerState, 1).worker_id, second.worker_id)
+
+        first._release_worker_lease()
+        self.assertEqual(db.session.get(WorkerState, 1).worker_id, second.worker_id)
+        second._release_worker_lease()
+        self.assertIsNone(db.session.get(WorkerState, 1).worker_id)
+
+    def test_idle_worker_heartbeat_drives_comprehensive_health(self):
+        client = self.app.test_client()
+        self.assertEqual(client.get("/health/live").status_code, 200)
+        unavailable = client.get("/health")
+        self.assertEqual(unavailable.status_code, 503)
+        self.assertEqual(unavailable.json["worker"], "unavailable")
+
+        worker = self.create_worker()
+        worker._acquire_worker_lease()
+        state = db.session.get(WorkerState, 1)
+        old_heartbeat = utcnow() - timedelta(minutes=5)
+        state.heartbeat_at = old_heartbeat
+        db.session.commit()
+
+        worker._heartbeat_claims()
+        db.session.expire_all()
+        self.assertNotEqual(db.session.get(WorkerState, 1).heartbeat_at, old_heartbeat)
+        healthy = client.get("/health")
+        self.assertEqual(healthy.status_code, 200)
+        self.assertEqual(healthy.json["storage"], "ready")
+        self.assertEqual(healthy.json["worker"], "ready")
+
+        db.session.get(WorkerState, 1).heartbeat_at = utcnow() - timedelta(minutes=10)
+        db.session.commit()
+        self.assertEqual(client.get("/health").status_code, 503)
+        worker._release_worker_lease()
+
+    def test_comprehensive_health_detects_storage_failure(self):
+        state = db.session.get(WorkerState, 1)
+        state.worker_id = "health-storage-worker"
+        state.heartbeat_at = utcnow()
+        db.session.commit()
+        storage = self.app.extensions["image_storage"]
+
+        with patch.object(storage, "healthcheck", side_effect=StorageError("read-only")):
+            response = self.app.test_client().get("/health")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json["storage"], "unavailable")
 
     def test_worker_periodic_recovery_skips_live_future_and_recovers_abandoned_claim(self):
         workspace = self.create_workspace()
         job = self.submit(workspace)
         item_id = job.items[0].id
-        worker = GenerationWorker(
-            self.app,
-            self.app.extensions["channel_registry"],
-            self.app.extensions["image_storage"],
-        )
+        worker = self.create_worker()
         worker.worker_id = "periodic-recovery-worker"
         channel = self.app.extensions["channel_registry"].get("test")
         self.assertTrue(worker._claim(item_id, channel))
@@ -2362,11 +2876,7 @@ class ImageGenPlatformTests(unittest.TestCase):
     def test_worker_keeps_excess_images_queued_at_user_and_channel_limits(self):
         workspace = self.create_workspace()
         job = self.submit(workspace, batch_count=4)
-        worker = GenerationWorker(
-            self.app,
-            self.app.extensions["channel_registry"],
-            self.app.extensions["image_storage"],
-        )
+        worker = self.create_worker()
         self.assertIs(worker.billing, self.services.billing)
         self.assertIs(worker.generations, self.services.generations)
         worker._thread_pool = HoldingExecutor()
@@ -2389,11 +2899,7 @@ class ImageGenPlatformTests(unittest.TestCase):
         workspace = self.create_workspace()
         job = self.submit(workspace)
         job_id = job.id
-        worker = GenerationWorker(
-            self.app,
-            self.app.extensions["channel_registry"],
-            self.app.extensions["image_storage"],
-        )
+        worker = self.create_worker()
         worker._thread_pool = HoldingExecutor()
 
         self.context.pop()
@@ -2427,11 +2933,7 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertNotIn("items", active_by_id[first.id])
         self.assertNotIn("prompt", active_by_id[first.id])
 
-        worker = GenerationWorker(
-            self.app,
-            self.app.extensions["channel_registry"],
-            self.app.extensions["image_storage"],
-        )
+        worker = self.create_worker()
         channel = self.app.extensions["channel_registry"].get("test")
         self.assertTrue(worker._claim(first.items[0].id, channel))
         running = client.get(f"/api/generations/{first.id}").json["job"]
@@ -2491,11 +2993,7 @@ class ImageGenPlatformTests(unittest.TestCase):
     def test_generated_image_history_view_download_and_reuse(self):
         workspace = self.create_workspace()
         job = self.submit(workspace)
-        worker = GenerationWorker(
-            self.app,
-            self.app.extensions["channel_registry"],
-            self.app.extensions["image_storage"],
-        )
+        worker = self.create_worker()
         worker.providers = FakeProviderFactory()
         channel = self.app.extensions["channel_registry"].get("test")
         self.assertTrue(worker._claim(job.items[0].id, channel))
@@ -2643,6 +3141,10 @@ class ImageGenPlatformTests(unittest.TestCase):
             select(AuditLog).where(AuditLog.action == "system.settings.update")
         )
         self.assertIn("site_title", audit.details["changed"])
+        worker_state = db.session.get(WorkerState, 1)
+        worker_state.worker_id = "health-test-worker"
+        worker_state.heartbeat_at = utcnow()
+        db.session.commit()
         response = self.app.test_client().get("/health")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["title"], "设计图像中心")
@@ -2682,6 +3184,8 @@ class ImageGenPlatformTests(unittest.TestCase):
             self.assertEqual(listed.json["total"], 1)
             item = listed.json["logs"][0]
             self.assertEqual(item["action"], "system.settings.update")
+            created_at = datetime.fromisoformat(item["created_at"])
+            self.assertEqual(created_at.utcoffset(), timedelta(0))
             detail = client.get(f"/api/admin/audit-logs/{item['id']}")
             self.assertEqual(detail.status_code, 200)
             self.assertIn("site_title", detail.json["log"]["details"]["changed"])
@@ -2867,14 +3371,153 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertIn("至少需要一个渠道", registry.last_error)
         self.assertEqual(registry.get("test").label, "测试渠道")
 
+    def test_retention_keeps_metadata_when_file_deletion_fails_then_retries(self):
+        workspace = self.create_workspace("清理重试")
+        job = self.submit(workspace)
+        job = self.services.generations.cancel(job.id, user_id=self.user.id)
+        job.completed_at = utcnow() - timedelta(days=31)
+        db.session.commit()
+        storage = self.app.extensions["image_storage"]
+        worker = self.create_worker()
+
+        with patch.object(
+            storage,
+            "delete_job_directory",
+            side_effect=StorageError("volume unavailable"),
+        ):
+            failed = worker.retention.cleanup()
+
+        self.assertEqual(failed, {"jobs": 0, "assets": 0, "errors": 1})
+        self.assertIsNotNone(db.session.get(GenerationJob, job.id))
+        retried = worker.retention.cleanup()
+        self.assertEqual(retried["jobs"], 1)
+        self.assertIsNone(db.session.get(GenerationJob, job.id))
+
+    def test_retention_keeps_metadata_when_database_commit_fails(self):
+        workspace = self.create_workspace("数据库清理失败")
+        job = self.submit(workspace)
+        job = self.services.generations.cancel(job.id, user_id=self.user.id)
+        job.completed_at = utcnow() - timedelta(days=31)
+        db.session.commit()
+        worker = self.create_worker()
+        session = db.session()
+
+        with patch.object(session, "commit", side_effect=RuntimeError("database unavailable")):
+            result = worker.retention.cleanup()
+
+        self.assertEqual(result["errors"], 1)
+        db.session.expire_all()
+        self.assertIsNotNone(db.session.get(GenerationJob, job.id))
+
+    def test_worker_periodic_cleanup_failure_does_not_escape(self):
+        worker = self.create_worker()
+
+        with patch.object(worker.retention, "cleanup", side_effect=RuntimeError("cleanup failed")):
+            worker._run_periodic_cleanup()
+
+        entry = db.session.scalar(
+            select(RuntimeLog)
+            .where(RuntimeLog.event == "worker.retention_cleanup")
+            .order_by(RuntimeLog.created_at.desc())
+        )
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.status, "error")
+
+    def test_worker_periodic_cleanup_settings_failure_does_not_escape(self):
+        worker = self.create_worker()
+
+        with patch.object(worker.settings, "runtime", side_effect=RuntimeError("settings failed")):
+            worker._run_periodic_cleanup()
+
+        entry = db.session.scalar(
+            select(RuntimeLog)
+            .where(RuntimeLog.event == "worker.retention_cleanup")
+            .order_by(RuntimeLog.created_at.desc())
+        )
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.status, "error")
+
+    def test_storage_wraps_recursive_delete_errors(self):
+        storage = self.app.extensions["image_storage"]
+        directory = storage.root / "users" / str(self.user.id) / "workspaces" / "locked"
+        directory.mkdir(parents=True)
+
+        with (
+            patch("imagegen.storage.shutil.rmtree", side_effect=OSError("locked")),
+            self.assertRaisesRegex(StorageError, "删除存储目录失败"),
+        ):
+            storage.delete_workspace(self.user.id, "locked")
+
+    def test_backup_stops_writers_and_restores_only_previously_running_services(self):
+        root = Path(self.temp.name) / "backup-test"
+        env_file = Path(self.temp.name) / "backup.env"
+        env_file.write_text("SECRET_KEY=test", encoding="utf-8")
+
+        with (
+            patch("scripts.backup.restrict_private_path"),
+            patch("scripts.backup.copy_private_file"),
+            patch(
+                "scripts.backup.running_services",
+                return_value={"db", "web", "worker"},
+            ),
+            patch("scripts.backup.docker_output", side_effect=[b"database", b"files"]) as output,
+            patch("scripts.backup.docker_run") as run,
+        ):
+            target = create_backup(root, env_file)
+
+        self.assertEqual((target / "database.dump").read_bytes(), b"database")
+        self.assertEqual((target / "files.tar.gz").read_bytes(), b"files")
+        self.assertEqual(
+            run.call_args_list,
+            [
+                call("stop", "--timeout", "720", "worker", "web"),
+                call("start", "web", "worker"),
+            ],
+        )
+        self.assertEqual(output.call_count, 2)
+
+    def test_backup_checks_database_before_creating_output_directory(self):
+        root = Path(self.temp.name) / "database-offline-backup-test"
+        env_file = Path(self.temp.name) / "database-offline-backup.env"
+        env_file.write_text("SECRET_KEY=test", encoding="utf-8")
+
+        with (
+            patch("scripts.backup.running_services", return_value={"web"}),
+            self.assertRaisesRegex(RuntimeError, "数据库容器未运行"),
+        ):
+            create_backup(root, env_file)
+
+        self.assertFalse(root.exists())
+
+    def test_backup_restarts_services_after_snapshot_failure(self):
+        root = Path(self.temp.name) / "failed-backup-test"
+        env_file = Path(self.temp.name) / "failed-backup.env"
+        env_file.write_text("SECRET_KEY=test", encoding="utf-8")
+
+        with (
+            patch("scripts.backup.restrict_private_path"),
+            patch(
+                "scripts.backup.running_services",
+                return_value={"db", "web"},
+            ),
+            patch("scripts.backup.docker_output", side_effect=RuntimeError("pg_dump failed")),
+            patch("scripts.backup.docker_run") as run,
+            self.assertRaisesRegex(RuntimeError, "pg_dump failed"),
+        ):
+            create_backup(root, env_file)
+
+        self.assertEqual(
+            run.call_args_list,
+            [
+                call("stop", "--timeout", "720", "web"),
+                call("start", "web"),
+            ],
+        )
+
     def test_retention_removes_old_generation_but_keeps_wallet_ledger(self):
         workspace = self.create_workspace()
         job = self.submit(workspace)
-        worker = GenerationWorker(
-            self.app,
-            self.app.extensions["channel_registry"],
-            self.app.extensions["image_storage"],
-        )
+        worker = self.create_worker()
         worker.providers = FakeProviderFactory()
         channel = self.app.extensions["channel_registry"].get("test")
         worker._claim(job.items[0].id, channel)

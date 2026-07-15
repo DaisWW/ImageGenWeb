@@ -225,6 +225,11 @@ class ImageStorage:
     def read_bytes(self, relative_path: str) -> bytes:
         return self.read(relative_path).read_bytes()
 
+    def healthcheck(self) -> None:
+        relative = Path(f".healthcheck-{uuid.uuid4().hex}.tmp")
+        self._atomic_write(relative, b"ok")
+        self.delete(relative.as_posix())
+
     def delete(self, relative_path: str | None) -> None:
         if not relative_path:
             return
@@ -245,8 +250,11 @@ class ImageStorage:
 
     def _delete_tree(self, relative: Path) -> None:
         path = self._resolve(relative.as_posix())
-        if path.exists():
-            shutil.rmtree(path)
+        try:
+            if path.exists():
+                shutil.rmtree(path)
+        except OSError as exc:
+            raise StorageError(f"删除存储目录失败：{exc}") from exc
 
     def _resolve(self, relative_path: str) -> Path:
         relative = Path(relative_path)

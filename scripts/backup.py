@@ -14,9 +14,19 @@ def docker_output(*args: str) -> bytes:
     result = subprocess.run(
         ["docker", "compose", *args],
         check=True,
+        cwd=PROJECT_DIR,
         stdout=subprocess.PIPE,
     )
     return result.stdout
+
+
+def docker_run(*args: str) -> None:
+    subprocess.run(["docker", "compose", *args], check=True, cwd=PROJECT_DIR)
+
+
+def running_services() -> set[str]:
+    output = docker_output("ps", "--services", "--status", "running")
+    return {line.strip() for line in output.decode("utf-8").splitlines() if line.strip()}
 
 
 def copy_private_file(source: Path, destination: Path) -> None:
@@ -51,30 +61,55 @@ def restrict_private_path(path: Path) -> None:
     )
 
 
+def create_backup(output: Path, env_file: Path) -> Path:
+    if not env_file.is_file():
+        raise FileNotFoundError(f"找不到部署环境文件：{env_file}")
+    active_services = running_services()
+    if "db" not in active_services:
+        raise RuntimeError("数据库容器未运行，无法备份")
+    target = output / datetime.now().strftime("%Y%m%d-%H%M%S")
+    target.mkdir(parents=True, exist_ok=False, mode=0o700)
+    restrict_private_path(target)
+    application_services = [name for name in ("worker", "web") if name in active_services]
+    try:
+        if application_services:
+            docker_run("stop", "--timeout", "720", *application_services)
+        database = docker_output(
+            "exec",
+            "-T",
+            "db",
+            "sh",
+            "-c",
+            'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom',
+        )
+        files = docker_output(
+            "run",
+            "--rm",
+            "--no-deps",
+            "-T",
+            "web",
+            "tar",
+            "-C",
+            "/data",
+            "-czf",
+            "-",
+            "files",
+        )
+        (target / "database.dump").write_bytes(database)
+        (target / "files.tar.gz").write_bytes(files)
+        copy_private_file(env_file, target / "deployment.env")
+    finally:
+        if application_services:
+            docker_run("start", *reversed(application_services))
+    return target.resolve()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="备份 Docker 数据库和已保存的图片。")
     parser.add_argument("--output", type=Path, default=Path("backups"))
     parser.add_argument("--env-file", type=Path, default=PROJECT_DIR / ".env")
     args = parser.parse_args()
-
-    if not args.env_file.is_file():
-        raise FileNotFoundError(f"找不到部署环境文件：{args.env_file}")
-    target = args.output / datetime.now().strftime("%Y%m%d-%H%M%S")
-    target.mkdir(parents=True, exist_ok=False, mode=0o700)
-    restrict_private_path(target)
-    database = docker_output(
-        "exec",
-        "-T",
-        "db",
-        "sh",
-        "-c",
-        'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom',
-    )
-    files = docker_output("exec", "-T", "web", "tar", "-C", "/data", "-czf", "-", "files")
-    (target / "database.dump").write_bytes(database)
-    (target / "files.tar.gz").write_bytes(files)
-    copy_private_file(args.env_file, target / "deployment.env")
-    print(target.resolve())
+    print(create_backup(args.output, args.env_file))
 
 
 if __name__ == "__main__":

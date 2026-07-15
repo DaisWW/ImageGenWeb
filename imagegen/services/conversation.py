@@ -120,6 +120,46 @@ class ConversationService:
                 attachment_ids=attachment_ids,
             )
 
+    def retry(
+        self,
+        workspace: Workspace,
+        *,
+        error_message_id: str,
+        model_id: str,
+    ) -> ConversationMessage:
+        with self._workspace_operation(workspace, "reply", "正在重新发送消息"):
+            self._ensure_workspace_unlocked(workspace)
+            model = self._model(model_id)
+            error_payload = db.session.scalar(
+                select(ConversationMessage.payload).where(
+                    ConversationMessage.id == error_message_id,
+                    ConversationMessage.workspace_id == workspace.id,
+                    ConversationMessage.role == "assistant",
+                    ConversationMessage.kind == "error",
+                )
+            )
+            user_message_id = str((error_payload or {}).get("retry_user_message_id", ""))
+            user_message = db.session.scalar(
+                select(ConversationMessage)
+                .options(
+                    selectinload(ConversationMessage.attachments).selectinload(
+                        ConversationAttachment.asset
+                    )
+                )
+                .where(
+                    ConversationMessage.id == user_message_id,
+                    ConversationMessage.workspace_id == workspace.id,
+                    ConversationMessage.role == "user",
+                )
+            )
+            if user_message is None:
+                raise ServiceError(
+                    "这条 AI 错误回复无法重新发送",
+                    code="conversation_message_not_retryable",
+                    status_code=404,
+                )
+            return self._complete_reply(workspace, model, user_message)
+
     def _send(
         self,
         workspace: Workspace,
@@ -133,15 +173,43 @@ class ConversationService:
         model = self._model(model_id)
         attachments = self._load_assets(workspace, attachment_ids)
         content = self._validate_message(content, has_attachments=bool(attachments))
-        pending = self._user_model_message(content, attachments)
+        user_message = ConversationMessage(
+            workspace_id=workspace.id,
+            role="user",
+            kind="message",
+            content=content,
+            payload={},
+            provider_id=model.identifier,
+            provider_label=model.label,
+            model=model.model,
+            created_at=sent_at,
+        )
+        self._attach(user_message, attachments)
+        db.session.add(user_message)
+        workspace.updated_at = sent_at
+        db.session.commit()
+        assistant_message = self._complete_reply(
+            workspace,
+            model,
+            user_message,
+        )
+        return user_message, assistant_message
+
+    def _complete_reply(
+        self,
+        workspace: Workspace,
+        model: ChatModelConfig,
+        user_message: ConversationMessage,
+    ) -> ConversationMessage:
+        attachments = [attachment.asset for attachment in user_message.attachments]
+        pending = self._user_model_message(user_message.content, attachments)
         try:
             context = self.context.build(
                 workspace,
                 model,
                 client=self.client,
                 pending_message=pending,
-                pending_text=content,
-                pending_image_count=len(attachments),
+                pending_stored_message_id=user_message.id,
             )
             db.session.commit()
             result = self.client.complete(
@@ -159,24 +227,12 @@ class ConversationService:
                 messages=context,
             )
         except OpenAIChatError as exc:
-            self._raise_chat_error(workspace, model, "chat.reply", exc)
+            return self._error_reply(workspace, model, user_message, exc)
 
-        user_message = ConversationMessage(
-            workspace_id=workspace.id,
-            role="user",
-            kind="message",
-            content=content,
-            payload={},
-            provider_id=model.identifier,
-            provider_label=model.label,
-            model=model.model,
-            created_at=sent_at,
-        )
-        self._attach(user_message, attachments)
         assistant_message = self._assistant_message(
             workspace, model, result, kind="message", payload={}
         )
-        db.session.add_all([user_message, assistant_message])
+        db.session.add(assistant_message)
         self._record_chat_success(
             workspace,
             model,
@@ -187,7 +243,7 @@ class ConversationService:
         self._remember_preferences(workspace, model_id=model.identifier)
         workspace.updated_at = utcnow()
         db.session.commit()
-        return user_message, assistant_message
+        return assistant_message
 
     def create_prompt_draft(
         self,
@@ -257,8 +313,6 @@ class ConversationService:
                 model,
                 client=self.client,
                 pending_message=pending,
-                pending_text=request_text,
-                pending_image_count=len(attachments),
             )
             db.session.commit()
             result = self.client.complete(
@@ -358,15 +412,37 @@ class ConversationService:
             return {"busy": False, "kind": "", "label": "", "started_at": None}
         return operation.public_dict()
 
-    def ensure_idle(self, workspace_id: str) -> None:
-        with self._operation_lock:
-            operation = self._operations.get(workspace_id)
-        if operation is not None:
-            raise self._busy_error(operation)
+    @contextmanager
+    def generation_submission(self, workspace: Workspace) -> Iterator[None]:
+        with self._workspace_operation(
+            workspace,
+            "generation_submission",
+            "正在提交生成任务",
+            enforce_chat_capacity=False,
+        ):
+            yield
 
     @contextmanager
-    def _workspace_operation(self, workspace: Workspace, kind: str, label: str) -> Iterator[None]:
-        runtime = self.settings.runtime()
+    def workspace_mutation(self, workspace: Workspace, label: str) -> Iterator[None]:
+        with self._workspace_operation(
+            workspace,
+            "workspace_mutation",
+            label,
+            enforce_chat_capacity=False,
+        ):
+            yield
+
+    @contextmanager
+    def _workspace_operation(
+        self,
+        workspace: Workspace,
+        kind: str,
+        label: str,
+        *,
+        enforce_chat_capacity: bool = True,
+    ) -> Iterator[None]:
+        if enforce_chat_capacity:
+            runtime = self.settings.runtime()
         operation = ConversationOperation(
             user_id=workspace.user_id,
             kind=kind,
@@ -377,21 +453,27 @@ class ConversationService:
             active = self._operations.get(workspace.id)
             if active is not None:
                 raise self._busy_error(active)
-            user_operations = sum(
-                active.user_id == workspace.user_id for active in self._operations.values()
-            )
-            if user_operations >= runtime.max_concurrent_chats_per_user:
-                raise ServiceError(
-                    f"同一账户最多同时进行 {runtime.max_concurrent_chats_per_user} 个 AI 对话请求",
-                    code="conversation_user_limit",
-                    status_code=429,
+            if enforce_chat_capacity:
+                chat_operations = tuple(
+                    active
+                    for active in self._operations.values()
+                    if active.kind not in {"generation_submission", "workspace_mutation"}
                 )
-            if len(self._operations) >= runtime.max_concurrent_chats:
-                raise ServiceError(
-                    "当前 AI 对话请求较多，请稍后重试",
-                    code="conversation_capacity",
-                    status_code=503,
+                user_operations = sum(
+                    active.user_id == workspace.user_id for active in chat_operations
                 )
+                if user_operations >= runtime.max_concurrent_chats_per_user:
+                    raise ServiceError(
+                        f"同一账户最多同时进行 {runtime.max_concurrent_chats_per_user} 个 AI 对话请求",
+                        code="conversation_user_limit",
+                        status_code=429,
+                    )
+                if len(chat_operations) >= runtime.max_concurrent_chats:
+                    raise ServiceError(
+                        "当前 AI 对话请求较多，请稍后重试",
+                        code="conversation_capacity",
+                        status_code=503,
+                    )
             self._operations[workspace.id] = operation
         try:
             yield
@@ -590,6 +672,55 @@ class ConversationService:
         event: str,
         error: OpenAIChatError,
     ) -> None:
+        error_id = self._record_chat_error(workspace, model, event, error)
+        raise ServiceError(
+            str(error),
+            code=error.code,
+            status_code=error.status_code,
+            error_id=error_id,
+        ) from error
+
+    def _error_reply(
+        self,
+        workspace: Workspace,
+        model: ChatModelConfig,
+        user_message: ConversationMessage,
+        error: OpenAIChatError,
+    ) -> ConversationMessage:
+        error_id = self._record_chat_error(workspace, model, "chat.reply", error)
+        content = str(error)
+        if error_id:
+            content = f"{content}\n错误 ID：{error_id}"
+        message = ConversationMessage(
+            workspace_id=workspace.id,
+            role="assistant",
+            kind="error",
+            content=content,
+            payload={
+                "code": error.code,
+                "error_id": error_id,
+                "retry_user_message_id": user_message.id,
+            },
+            provider_id=model.identifier,
+            provider_label=model.label,
+            model=model.model,
+            upstream_request_id=error.request_id,
+            elapsed_seconds=(
+                None if error.elapsed_seconds is None else round(error.elapsed_seconds, 3)
+            ),
+        )
+        db.session.add(message)
+        workspace.updated_at = utcnow()
+        db.session.commit()
+        return message
+
+    def _record_chat_error(
+        self,
+        workspace: Workspace,
+        model: ChatModelConfig,
+        event: str,
+        error: OpenAIChatError,
+    ) -> str:
         db.session.rollback()
         entry = self.runtime_logs.commit_best_effort(
             category="chat",
@@ -610,9 +741,4 @@ class ConversationService:
             elapsed_seconds=error.elapsed_seconds,
             details={"diagnostics": error.details},
         )
-        raise ServiceError(
-            str(error),
-            code=error.code,
-            status_code=error.status_code,
-            error_id=entry.id if entry is not None else "",
-        ) from error
+        return entry.id if entry is not None else ""

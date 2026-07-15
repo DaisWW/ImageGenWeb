@@ -24,8 +24,7 @@ class ConversationContextManager:
         *,
         client: OpenAIChatClient,
         pending_message: dict[str, Any],
-        pending_text: str,
-        pending_image_count: int = 0,
+        pending_stored_message_id: str = "",
     ) -> list[dict[str, Any]]:
         stored = list(
             db.session.scalars(
@@ -38,9 +37,17 @@ class ConversationContextManager:
         if state is None:
             state = ConversationState(workspace_id=workspace.id, summary="")
             db.session.add(state)
-        active = self._after_summary(stored, state.summary_through_message_id)
+        active = [
+            message
+            for message in self._after_summary(stored, state.summary_through_message_id)
+            if message.kind != "error" and message.id != pending_stored_message_id
+        ]
         policy = self.registry.context
-        estimated = self._context_tokens(state.summary, active, pending_text, pending_image_count)
+        estimated = (
+            self._estimate_tokens(state.summary)
+            + sum(self._estimate_tokens(message.content) for message in active)
+            + self._message_tokens([pending_message])
+        )
         if estimated >= policy.compact_at_tokens and len(active) > policy.keep_recent_messages:
             older = active[: -policy.keep_recent_messages]
             summary_input = self._summary_input(state.summary, older)
@@ -61,12 +68,9 @@ class ConversationContextManager:
         if state.summary:
             messages.insert(0, {"role": "user", "content": f"较早会话摘要：\n{state.summary}"})
         messages.append(pending_message)
-        while (
-            len(messages) > 5
-            and self._message_tokens(messages, pending_image_count) > policy.max_context_tokens
-        ):
+        while len(messages) > 5 and self._message_tokens(messages) > policy.max_context_tokens:
             messages.pop(1 if state.summary else 0)
-        state.estimated_context_tokens = self._message_tokens(messages, pending_image_count)
+        state.estimated_context_tokens = self._message_tokens(messages)
         return messages
 
     @staticmethod
@@ -92,32 +96,20 @@ class ConversationContextManager:
         parts.append(f"需要合并的较早对话：\n{transcript}")
         return "\n\n".join(parts)
 
-    def _context_tokens(
-        self,
-        summary: str,
-        messages: list[ConversationMessage],
-        pending_text: str,
-        pending_image_count: int,
-    ) -> int:
-        return (
-            self._estimate_tokens(summary)
-            + sum(self._estimate_tokens(message.content) for message in messages)
-            + self._estimate_tokens(pending_text)
-            + pending_image_count * 1200
-        )
-
-    def _message_tokens(self, messages: list[dict[str, Any]], image_count: int) -> int:
-        total = image_count * 1200
+    def _message_tokens(self, messages: list[dict[str, Any]]) -> int:
+        total = 0
         for message in messages:
             content = message.get("content", "")
             if isinstance(content, str):
                 total += self._estimate_tokens(content) + 4
             elif isinstance(content, list):
-                total += sum(
-                    self._estimate_tokens(str(part.get("text", "")))
-                    for part in content
-                    if isinstance(part, dict) and part.get("type") == "text"
-                )
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    if part.get("type") == "text":
+                        total += self._estimate_tokens(str(part.get("text", "")))
+                    elif part.get("type") == "image_url":
+                        total += 1200
         return total
 
     @staticmethod

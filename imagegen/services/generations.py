@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
@@ -16,6 +16,7 @@ from ..models import (
     Asset,
     GenerationItem,
     GenerationJob,
+    GenerationQueueState,
     GenerationReference,
     User,
     Workspace,
@@ -64,7 +65,6 @@ class GenerationService:
         workspace: Workspace,
         request: SubmitGeneration,
     ) -> GenerationJob:
-        self._ensure_workspace_generation_idle(workspace.id, workspace.kind)
         channel = self.channels.get(request.channel_id)
         try:
             selected_model = channel.get_model(request.model)
@@ -94,6 +94,14 @@ class GenerationService:
         user = self.billing.lock_user(user_id)
         if not user.is_active:
             raise ServiceError("账户已被禁用", status_code=403)
+        locked_workspace_id = db.session.scalar(
+            select(Workspace.id)
+            .where(Workspace.id == workspace.id, Workspace.user_id == user_id)
+            .with_for_update()
+        )
+        if locked_workspace_id is None:
+            raise ServiceError("工作站不存在", status_code=404)
+        self._ensure_workspace_generation_idle(workspace.id, workspace.kind)
         self._ensure_queue_capacity(user_id, requested_count)
 
         reserved = money(channel.price_rmb * requested_count)
@@ -364,6 +372,13 @@ class GenerationService:
             raise self._workspace_active_error(workspace_kind)
 
     def _ensure_queue_capacity(self, user_id: int, requested_count: int) -> None:
+        lock_result = db.session.execute(
+            update(GenerationQueueState)
+            .where(GenerationQueueState.id == 1)
+            .values(updated_at=utcnow())
+        )
+        if lock_result.rowcount != 1:
+            raise RuntimeError("生成队列状态未初始化")
         user_queued = (
             db.session.scalar(
                 select(func.count(GenerationItem.id)).where(

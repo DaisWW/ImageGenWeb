@@ -8,6 +8,7 @@ from flask import Flask, jsonify, request
 from flask_login import current_user
 from flask_wtf.csrf import CSRFError
 from werkzeug.exceptions import HTTPException
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .config import (
     ChannelRegistry,
@@ -19,7 +20,7 @@ from .config import (
 from .container import ApplicationServices
 from .errors import ServiceError
 from .extensions import compress, csrf, db, login_manager
-from .models import User
+from .models import GenerationQueueState, User, WorkerState
 from .serializers import display_amount
 from .services import (
     AuthService,
@@ -74,9 +75,13 @@ def create_app(config: dict | None = None) -> Flask:
         WTF_CSRF_TIME_LIMIT=None,
         AUTO_CREATE_DB=os.environ.get("AUTO_CREATE_DB", "true").strip().lower()
         not in {"0", "false", "no", "off"},
+        TRUST_PROXY_HEADERS=os.environ.get("TRUST_PROXY_HEADERS", "").strip().lower()
+        in {"1", "true", "yes"},
     )
     if config:
         app.config.update(config)
+    if app.config["TRUST_PROXY_HEADERS"]:
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
     db.init_app(app)
     compress.init_app(app)
@@ -96,6 +101,7 @@ def create_app(config: dict | None = None) -> Flask:
     with app.app_context():
         if app.config.get("AUTO_CREATE_DB", True):
             db.create_all()
+            _bootstrap_internal_state()
         _bootstrap_admin(app, users)
         channels = ChannelRegistry(
             app.config["CHANNEL_CONFIG_PATH"],
@@ -258,6 +264,14 @@ def _bootstrap_admin(app: Flask, users: UserService) -> None:
         actor_user_id=None,
     )
     app.logger.info("已创建初始管理员：%s", username)
+
+
+def _bootstrap_internal_state() -> None:
+    if db.session.get(GenerationQueueState, 1) is None:
+        db.session.add(GenerationQueueState(id=1))
+    if db.session.get(WorkerState, 1) is None:
+        db.session.add(WorkerState(id=1))
+    db.session.commit()
 
 
 def _persistent_secret(data_dir: Path) -> str:

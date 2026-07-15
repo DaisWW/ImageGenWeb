@@ -22,9 +22,10 @@ from .integrations.images import (
     ProviderFactory,
     ReferencePayload,
 )
-from .models import GenerationItem, GenerationJob, User, utcnow
+from .models import GenerationItem, GenerationJob, User, WorkerState, utcnow
 from .services import RetentionService, money
 from .storage import ImageStorage, StorageError
+from .worker_health import worker_heartbeat_grace_seconds
 
 LOGGER = logging.getLogger(__name__)
 
@@ -56,21 +57,24 @@ class GenerationWorker:
         self._last_heartbeat = 0.0
         self._last_recovery = 0.0
         self._last_cleanup = 0.0
+        self._lease_acquired = False
 
     def run_forever(self) -> None:
-        LOGGER.info("生成 Worker 已启动：%s", self.worker_id)
         with self.app.app_context():
-            self.runtime_logs.commit_best_effort(
-                category="worker",
-                event="worker.started",
-                status="success",
-                message="生成 Worker 已启动",
-                source="worker",
-                details={"worker_id": self.worker_id},
-            )
-            self._recover_orphaned_items(immediate=True)
-            self._last_recovery = time.monotonic()
+            self._acquire_worker_lease()
+        LOGGER.info("生成 Worker 已启动：%s", self.worker_id)
         try:
+            with self.app.app_context():
+                self.runtime_logs.commit_best_effort(
+                    category="worker",
+                    event="worker.started",
+                    status="success",
+                    message="生成 Worker 已启动",
+                    source="worker",
+                    details={"worker_id": self.worker_id},
+                )
+                self._recover_orphaned_items(immediate=True)
+                self._last_recovery = time.monotonic()
             while not self._stopping.is_set():
                 self._collect_finished()
                 with self.app.app_context():
@@ -87,10 +91,7 @@ class GenerationWorker:
                 self._stopping.wait(wait_seconds)
         finally:
             self._stopping.set()
-            for future in self._futures.values():
-                future.cancel()
-            if hasattr(self, "_thread_pool"):
-                self._thread_pool.shutdown(wait=True, cancel_futures=True)
+            self._shutdown_executor()
             LOGGER.info("生成 Worker 已停止")
             with self.app.app_context():
                 self.runtime_logs.commit_best_effort(
@@ -101,6 +102,69 @@ class GenerationWorker:
                     source="worker",
                     details={"worker_id": self.worker_id},
                 )
+                self._release_worker_lease()
+
+    def _shutdown_executor(self) -> None:
+        if not hasattr(self, "_thread_pool"):
+            return
+        self._thread_pool.shutdown(wait=False, cancel_futures=False)
+        while any(not future.done() for future in self._futures.values()):
+            with self.app.app_context():
+                try:
+                    self._heartbeat_claims()
+                except Exception:
+                    LOGGER.exception("Worker 退出等待期间刷新租约失败")
+                    break
+            time.sleep(5)
+        self._thread_pool.shutdown(wait=True, cancel_futures=False)
+
+    def _acquire_worker_lease(self) -> None:
+        if db.session.get(WorkerState, 1) is None:
+            raise RuntimeError("Worker 状态未初始化")
+        heartbeat_seconds = self.settings.runtime().worker_heartbeat_seconds
+        cutoff = (
+            utcnow() - timedelta(seconds=worker_heartbeat_grace_seconds(heartbeat_seconds))
+        ).replace(tzinfo=None)
+        now = utcnow()
+        claimed = db.session.execute(
+            update(WorkerState)
+            .where(
+                WorkerState.id == 1,
+                or_(
+                    WorkerState.worker_id == self.worker_id,
+                    WorkerState.worker_id.is_(None),
+                    WorkerState.heartbeat_at.is_(None),
+                    WorkerState.heartbeat_at < cutoff,
+                ),
+            )
+            .values(
+                worker_id=self.worker_id,
+                heartbeat_at=now,
+            )
+            .execution_options(synchronize_session="fetch")
+        )
+        if claimed.rowcount != 1:
+            db.session.rollback()
+            active_worker_id = db.session.scalar(
+                select(WorkerState.worker_id).where(WorkerState.id == 1)
+            )
+            raise RuntimeError(f"已有生成 Worker 正在运行：{active_worker_id}")
+        db.session.commit()
+        self._lease_acquired = True
+
+    def _release_worker_lease(self) -> None:
+        if not self._lease_acquired:
+            return
+        db.session.execute(
+            update(WorkerState)
+            .where(
+                WorkerState.id == 1,
+                WorkerState.worker_id == self.worker_id,
+            )
+            .values(worker_id=None, heartbeat_at=None)
+        )
+        db.session.commit()
+        self._lease_acquired = False
 
     def stop(self) -> None:
         self._stopping.set()
@@ -690,18 +754,31 @@ Frame-by-frame animation instructions:
         db.session.remove()
 
     def _heartbeat_claims(self) -> None:
-        item_ids = tuple(self._futures)
-        if not item_ids:
-            return
-        db.session.execute(
-            update(GenerationItem)
-            .where(
-                GenerationItem.id.in_(item_ids),
-                GenerationItem.claimed_by == self.worker_id,
-                GenerationItem.status.in_(["running", "canceling"]),
+        now = utcnow()
+        if self._lease_acquired:
+            lease = db.session.execute(
+                update(WorkerState)
+                .where(
+                    WorkerState.id == 1,
+                    WorkerState.worker_id == self.worker_id,
+                )
+                .values(heartbeat_at=now)
             )
-            .values(heartbeat_at=utcnow())
-        )
+            if lease.rowcount != 1:
+                db.session.rollback()
+                self._stopping.set()
+                raise RuntimeError("生成 Worker 租约已丢失")
+        item_ids = tuple(self._futures)
+        if item_ids:
+            db.session.execute(
+                update(GenerationItem)
+                .where(
+                    GenerationItem.id.in_(item_ids),
+                    GenerationItem.claimed_by == self.worker_id,
+                    GenerationItem.status.in_(["running", "canceling"]),
+                )
+                .values(heartbeat_at=now)
+            )
         db.session.commit()
 
     def _recover_orphaned_items(self, *, immediate: bool) -> None:
@@ -804,24 +881,40 @@ Frame-by-frame animation instructions:
 
     def _run_periodic_cleanup(self) -> None:
         now = time.monotonic()
+        result: dict[str, int] = {}
         with self.app.app_context():
-            runtime = self.settings.runtime()
-            interval = runtime.cleanup_interval_minutes * 60
-            if now - self._last_cleanup < interval:
-                return
-            result = self.retention.cleanup()
-            result["runtime_logs"] = self.runtime_logs.purge(runtime.runtime_log_retention_days)
-            if any(result.values()):
-                self.runtime_logs.record(
+            try:
+                runtime = self.settings.runtime()
+                interval = runtime.cleanup_interval_minutes * 60
+                if now - self._last_cleanup < interval:
+                    return
+                result = self.retention.cleanup()
+                result["runtime_logs"] = self.runtime_logs.purge(runtime.runtime_log_retention_days)
+                if any(result.values()):
+                    self.runtime_logs.record(
+                        category="worker",
+                        event="worker.retention_cleanup",
+                        status="error" if result.get("errors") else "success",
+                        message="定时清理部分失败" if result.get("errors") else "定时清理已完成",
+                        source="worker",
+                        details=result,
+                    )
+                    db.session.commit()
+            except Exception as exc:
+                db.session.rollback()
+                result = {"errors": 1}
+                LOGGER.exception("定时清理发生未预期异常")
+                self.runtime_logs.commit_best_effort(
                     category="worker",
                     event="worker.retention_cleanup",
-                    status="success",
-                    message="定时清理已完成",
+                    status="error",
+                    message="定时清理发生未预期异常",
                     source="worker",
-                    details=result,
+                    error_code="retention_cleanup_error",
+                    details={"exception_type": exc.__class__.__name__},
                 )
-                db.session.commit()
-            db.session.remove()
+            finally:
+                db.session.remove()
         self._last_cleanup = now
         if any(result.values()):
             LOGGER.info("记录清理结果：%s", result)

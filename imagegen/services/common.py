@@ -14,7 +14,10 @@ IMAGE_DIMENSION_MAX = 8192
 
 def money(value: Decimal | str | int | float) -> Decimal:
     try:
-        return Decimal(str(value)).quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
+        amount = Decimal(str(value))
+        if not amount.is_finite():
+            raise InvalidOperation
+        return amount.quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
     except InvalidOperation as exc:
         raise ServiceError("金额格式无效") from exc
 

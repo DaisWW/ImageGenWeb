@@ -56,8 +56,9 @@ def reorder_workspaces():
 @login_required
 def clear_workspace(workspace_id: str):
     workspace = owned_workspace(workspace_id)
-    services().conversations.ensure_idle(workspace.id)
-    workspace = services().workspaces.clear(workspace)
+    application_services = services()
+    with application_services.conversations.workspace_mutation(workspace, "正在清空工作站"):
+        workspace = application_services.workspaces.clear(workspace)
     return jsonify(workspace=workspace_dict(workspace))
 
 
@@ -72,8 +73,9 @@ def update_workspace(workspace_id: str):
 @login_required
 def delete_workspace(workspace_id: str):
     workspace = owned_workspace(workspace_id)
-    services().conversations.ensure_idle(workspace.id)
-    services().workspaces.delete(workspace)
+    application_services = services()
+    with application_services.conversations.workspace_mutation(workspace, "正在删除工作站"):
+        application_services.workspaces.delete(workspace)
     return jsonify(ok=True)
 
 
@@ -120,8 +122,9 @@ def reorder_assets(workspace_id: str):
 @login_required
 def remove_asset(workspace_id: str, asset_id: str):
     workspace = owned_workspace(workspace_id)
-    services().conversations.ensure_idle(workspace.id)
-    services().workspaces.remove_asset(workspace, asset_id)
+    application_services = services()
+    with application_services.conversations.workspace_mutation(workspace, "正在删除垫图"):
+        application_services.workspaces.remove_asset(workspace, asset_id)
     return jsonify(ok=True)
 
 
@@ -162,6 +165,23 @@ def send_conversation_message(workspace_id: str):
         ],
         context=conversations.state_dict(workspace),
         workspace=workspace_dict(workspace),
+    ), 201
+
+
+@web.post("/api/workspaces/<workspace_id>/messages/<message_id>/retry")
+@login_required
+def retry_conversation_message(workspace_id: str, message_id: str):
+    workspace = owned_workspace(workspace_id)
+    data = json_body()
+    conversations = services().conversations
+    message = conversations.retry(
+        workspace,
+        error_message_id=message_id,
+        model_id=str(data.get("model_id", "")),
+    )
+    return jsonify(
+        message=conversation_message_dict(message),
+        context=conversations.state_dict(workspace),
     ), 201
 
 

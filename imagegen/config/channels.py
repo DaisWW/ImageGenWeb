@@ -254,6 +254,8 @@ class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
             price = Decimal(str(raw.get("price_rmb", "0"))).quantize(Decimal("0.0001"))
         except InvalidOperation as exc:
             raise ValueError(f"{label} 的 price_rmb 无效") from exc
+        if not price.is_finite():
+            raise ValueError(f"{label} 的 price_rmb 无效")
         if price < 0:
             raise ValueError(f"{label} 的 price_rmb 不能为负数")
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import delete, func, or_, select
@@ -315,7 +315,7 @@ def runtime_log_dict(entry: RuntimeLog, *, include_details: bool = False) -> dic
         "elapsed_seconds": (
             None if entry.elapsed_seconds is None else float(entry.elapsed_seconds)
         ),
-        "created_at": entry.created_at.isoformat(),
+        "created_at": _utc_isoformat(entry.created_at),
     }
     if include_details:
         payload["details"] = sanitize_details(entry.details)
@@ -334,8 +334,14 @@ def audit_log_dict(
         "action": entry.action,
         "target_type": entry.target_type,
         "target_id": entry.target_id,
-        "created_at": entry.created_at.isoformat(),
+        "created_at": _utc_isoformat(entry.created_at),
     }
     if include_details:
         payload["details"] = sanitize_details(entry.details)
     return payload
+
+
+def _utc_isoformat(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()

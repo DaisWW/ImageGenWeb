@@ -4,6 +4,7 @@ import re
 from decimal import Decimal
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from ..errors import ServiceError
 from ..extensions import db
@@ -53,7 +54,11 @@ class UserService:
         )
         self.auth.set_password(user, password)
         db.session.add(user)
-        db.session.flush()
+        try:
+            db.session.flush()
+        except IntegrityError as exc:
+            db.session.rollback()
+            raise ServiceError("用户名已存在", code="username_exists", status_code=409) from exc
         if user.balance_rmb > 0:
             db.session.add(
                 WalletLedger(

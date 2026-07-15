@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from flask_login import UserMixin
-from sqlalchemy import CheckConstraint, ForeignKey, Index, Numeric, UniqueConstraint, text
+from sqlalchemy import CheckConstraint, ForeignKey, Index, Numeric, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -32,11 +32,6 @@ class TimestampMixin:
 
 class User(UserMixin, TimestampMixin, db.Model):
     __tablename__ = "users"
-    __table_args__ = (
-        CheckConstraint("balance_rmb >= 0", name="ck_users_balance_non_negative"),
-        CheckConstraint("reserved_rmb >= 0", name="ck_users_reserved_non_negative"),
-        CheckConstraint("generation_concurrency BETWEEN 1 AND 16", name="ck_users_concurrency"),
-    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     username: Mapped[str] = mapped_column(db.String(64), unique=True, index=True)
@@ -49,6 +44,13 @@ class User(UserMixin, TimestampMixin, db.Model):
     generation_concurrency: Mapped[int] = mapped_column(default=2)
     password_version: Mapped[int] = mapped_column(default=1)
     last_login_at: Mapped[datetime | None]
+
+    __table_args__ = (
+        CheckConstraint("balance_rmb >= 0", name="ck_users_balance_non_negative"),
+        CheckConstraint("reserved_rmb >= 0", name="ck_users_reserved_non_negative"),
+        CheckConstraint("generation_concurrency BETWEEN 1 AND 16", name="ck_users_concurrency"),
+        Index("uq_users_username_lower", func.lower(username), unique=True),
+    )
 
     workspaces: Mapped[list[Workspace]] = relationship(back_populates="user")
 
@@ -360,7 +362,7 @@ class RuntimeLog(db.Model):
     status: Mapped[str] = mapped_column(db.String(20), index=True)
     source: Mapped[str] = mapped_column(db.String(30), default="web")
     message: Mapped[str] = mapped_column(db.String(1000), default="")
-    user_id: Mapped[int | None] = mapped_column(index=True)
+    user_id: Mapped[int | None]
     user_label: Mapped[str] = mapped_column(db.String(120), default="")
     workspace_id: Mapped[str] = mapped_column(db.String(32), default="")
     workspace_label: Mapped[str] = mapped_column(db.String(100), default="")
@@ -383,3 +385,18 @@ class SystemState(db.Model):
     key: Mapped[str] = mapped_column(db.String(100), primary_key=True)
     value: Mapped[str] = mapped_column(db.Text, default="")
     updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class GenerationQueueState(db.Model):
+    __tablename__ = "generation_queue_state"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class WorkerState(db.Model):
+    __tablename__ = "worker_state"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    worker_id: Mapped[str | None] = mapped_column(db.String(100))
+    heartbeat_at: Mapped[datetime | None]

@@ -14,6 +14,7 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 from PIL import Image, ImageFilter, UnidentifiedImageError
+from requests.adapters import HTTPAdapter
 
 from ..config.channels import Channel
 from .diagnostics import response_summary
@@ -25,6 +26,21 @@ TRANSPARENT_FALLBACK_SUFFIX = (
     "background (#FFFFFF) extending to every canvas edge. Do not add texture, gradients, "
     "shadows, borders, scenery, or extra objects to the background."
 )
+
+
+class PinnedHostSSLAdapter(HTTPAdapter):
+    def build_connection_pool_key_attributes(self, request, verify, cert=None):
+        host_params, pool_kwargs = super().build_connection_pool_key_attributes(
+            request,
+            verify,
+            cert,
+        )
+        host_header = request.headers.get("Host", "")
+        if host_header:
+            hostname = _host_header_hostname(host_header)
+            pool_kwargs["assert_hostname"] = hostname
+            pool_kwargs["server_hostname"] = hostname
+        return host_params, pool_kwargs
 
 
 class ProviderError(RuntimeError):
@@ -126,45 +142,48 @@ class OpenAIImagesAdapter:
                     details={"exception_type": exc.__class__.__name__},
                 ) from exc
 
-            request_id = _request_id(response)
-            if not 200 <= response.status_code < 300:
-                message = _upstream_error(response)
-                if (
-                    request.transparent_background
-                    and not fallback_attempted
-                    and "background" in payload
-                    and _transparent_background_unsupported(message)
-                ):
-                    response.close()
-                    payload = {
-                        **payload,
-                        "prompt": f"{request.prompt.rstrip()}{TRANSPARENT_FALLBACK_SUFFIX}",
-                    }
-                    payload.pop("background", None)
-                    fallback_attempted = True
-                    continue
-                raise ProviderError(
-                    message,
-                    code="upstream_error",
-                    status_code=response.status_code,
-                    request_id=request_id,
-                    details=response_summary(response),
-                )
             try:
-                response_payload = response.json()
-            except ValueError as exc:
-                raise ProviderError(
-                    "上游返回了无效 JSON",
-                    code="invalid_response",
-                    status_code=response.status_code,
-                    request_id=request_id,
-                    details=response_summary(response),
-                ) from exc
+                request_id = _request_id(response)
+                if not 200 <= response.status_code < 300:
+                    message = _upstream_error(response)
+                    if (
+                        request.transparent_background
+                        and not fallback_attempted
+                        and "background" in payload
+                        and _transparent_background_unsupported(message)
+                    ):
+                        payload = {
+                            **payload,
+                            "prompt": f"{request.prompt.rstrip()}{TRANSPARENT_FALLBACK_SUFFIX}",
+                        }
+                        payload.pop("background", None)
+                        fallback_attempted = True
+                        continue
+                    raise ProviderError(
+                        message,
+                        code="upstream_error",
+                        status_code=response.status_code,
+                        request_id=request_id,
+                        details=response_summary(response),
+                    )
+                try:
+                    response_payload = response.json()
+                except ValueError as exc:
+                    raise ProviderError(
+                        "上游返回了无效 JSON",
+                        code="invalid_response",
+                        status_code=response.status_code,
+                        request_id=request_id,
+                        details=response_summary(response),
+                    ) from exc
+                diagnostics = response_summary(response, response_payload)
+            finally:
+                response.close()
             content = self._extract(
                 response_payload,
                 channel,
                 request_id,
-                response_summary(response, response_payload),
+                diagnostics,
             )
             break
 
@@ -217,20 +236,16 @@ class OpenAIImagesAdapter:
         )
 
     def _download(self, image_url: str, channel: Channel, request_id: str) -> bytes:
-        response = None
         current_url = image_url
-        channel_host = urlparse(channel.base_url).hostname
+        channel_origin = _url_origin(channel.base_url)
         for _redirect in range(4):
-            parsed = urlparse(current_url)
-            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-                raise ProviderError("上游返回了无效图片地址", code="invalid_response")
-            _reject_private_host(parsed.hostname)
-            headers = {}
-            if parsed.hostname == channel_host:
+            parsed, pinned_url, host_header = _pinned_download_target(current_url)
+            headers = {"Host": host_header}
+            if _url_origin(parsed) == channel_origin:
                 headers["Authorization"] = f"Bearer {channel.api_key}"
             try:
                 response = self._session().get(
-                    current_url,
+                    pinned_url,
                     headers=headers,
                     timeout=(15, channel.limits.timeout_seconds),
                     stream=True,
@@ -239,7 +254,29 @@ class OpenAIImagesAdapter:
             except requests.RequestException as exc:
                 raise ProviderError("下载生成图片失败", code="download_error") from exc
             if response.status_code not in {301, 302, 303, 307, 308}:
-                break
+                try:
+                    if not 200 <= response.status_code < 300:
+                        raise ProviderError(
+                            f"下载生成图片失败（HTTP {response.status_code}）",
+                            code="download_error",
+                            status_code=response.status_code,
+                            request_id=request_id,
+                        )
+                    chunks: list[bytes] = []
+                    total = 0
+                    for chunk in response.iter_content(64 * 1024):
+                        if not chunk:
+                            continue
+                        total += len(chunk)
+                        if total > MAX_OUTPUT_BYTES:
+                            raise ProviderError(
+                                "生成图片超过 50 MiB 限制",
+                                code="output_too_large",
+                            )
+                        chunks.append(chunk)
+                    return b"".join(chunks)
+                finally:
+                    response.close()
             location = response.headers.get("Location", "")
             response.close()
             if not location:
@@ -247,28 +284,13 @@ class OpenAIImagesAdapter:
             current_url = urljoin(current_url, location)
         else:
             raise ProviderError("图片下载重定向次数过多", code="download_error")
-        assert response is not None
-        if not 200 <= response.status_code < 300:
-            raise ProviderError(
-                f"下载生成图片失败（HTTP {response.status_code}）",
-                code="download_error",
-                status_code=response.status_code,
-                request_id=request_id,
-            )
-        chunks: list[bytes] = []
-        total = 0
-        for chunk in response.iter_content(64 * 1024):
-            if not chunk:
-                continue
-            total += len(chunk)
-            if total > MAX_OUTPUT_BYTES:
-                raise ProviderError("生成图片超过 50 MiB 限制", code="output_too_large")
-            chunks.append(chunk)
-        return b"".join(chunks)
+        raise AssertionError("unreachable")
 
     def _session(self) -> requests.Session:
         if not hasattr(self._local, "session"):
-            self._local.session = requests.Session()
+            session = requests.Session()
+            session.mount("https://", PinnedHostSSLAdapter())
+            self._local.session = session
         return self._local.session
 
 
@@ -426,12 +448,76 @@ def _upstream_error(response: requests.Response) -> str:
     return f"渠道返回 HTTP {response.status_code}"
 
 
-def _reject_private_host(hostname: str) -> None:
+def _pinned_download_target(url: str):
     try:
-        addresses = {item[4][0] for item in socket.getaddrinfo(hostname, None)}
-    except socket.gaierror as exc:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        port = parsed.port
+        username = parsed.username
+        password = parsed.password
+    except (UnicodeError, ValueError) as exc:
+        raise ProviderError("上游返回了无效图片地址", code="invalid_response") from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not hostname
+        or username is not None
+        or password is not None
+    ):
+        raise ProviderError("上游返回了无效图片地址", code="invalid_response")
+    try:
+        hostname = hostname.encode("idna").decode("ascii")
+    except UnicodeError as exc:
+        raise ProviderError("上游返回了无效图片地址", code="invalid_response") from exc
+    address = _resolve_public_address(hostname, port or (443 if parsed.scheme == "https" else 80))
+    pinned_host = f"[{address}]" if ":" in address else address
+    pinned_netloc = f"{pinned_host}:{port}" if port is not None else pinned_host
+    host = f"[{hostname}]" if ":" in hostname else hostname
+    host_header = f"{host}:{port}" if port is not None else host
+    return parsed, parsed._replace(netloc=pinned_netloc, fragment="").geturl(), host_header
+
+
+def _url_origin(url) -> tuple[str, str, int] | None:
+    try:
+        parsed = urlparse(url) if isinstance(url, str) else url
+        hostname = parsed.hostname
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        normalized_hostname = hostname.encode("idna").decode("ascii").lower() if hostname else ""
+    except (UnicodeError, ValueError):
+        return None
+    if not normalized_hostname or parsed.scheme not in {"http", "https"}:
+        return None
+    return parsed.scheme, normalized_hostname, port
+
+
+def _host_header_hostname(host_header: str) -> str:
+    if host_header.startswith("["):
+        end = host_header.find("]")
+        return host_header[1:end] if end > 1 else host_header
+    hostname, separator, port = host_header.rpartition(":")
+    return hostname if separator and port.isdigit() else host_header
+
+
+def _resolve_public_address(hostname: str, port: int) -> str:
+    try:
+        addresses = list(
+            dict.fromkeys(
+                item[4][0]
+                for item in socket.getaddrinfo(
+                    hostname,
+                    port,
+                    type=socket.SOCK_STREAM,
+                )
+            )
+        )
+    except OSError as exc:
         raise ProviderError("无法解析图片下载地址", code="download_error") from exc
+    if not addresses:
+        raise ProviderError("无法解析图片下载地址", code="download_error")
     for address in addresses:
-        ip = ipaddress.ip_address(address)
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError as exc:
+            raise ProviderError("图片下载地址解析结果无效", code="download_error") from exc
         if not ip.is_global:
             raise ProviderError("图片下载地址指向了非公网地址", code="invalid_response")
+    return addresses[0]

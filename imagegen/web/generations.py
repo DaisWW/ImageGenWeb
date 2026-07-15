@@ -46,7 +46,6 @@ def _job_payload(generation_service, job):
 def submit_generation():
     data = json_body()
     workspace = owned_workspace(str(data.get("workspace_id", "")))
-    services().conversations.ensure_idle(workspace.id)
     reference_ids = data.get("reference_ids", [])
     if not isinstance(reference_ids, list):
         raise ServiceError("垫图参数无效")
@@ -57,29 +56,28 @@ def submit_generation():
         animation_fps = int(data.get("animation_fps", 8))
     except (TypeError, ValueError) as exc:
         raise ServiceError("生成数量、帧率或压缩质量无效") from exc
-    generation_service = services().generations
-    job = generation_service.submit(
-        current_user.id,
-        workspace,
-        SubmitGeneration(
-            channel_id=str(data.get("channel_id", "")),
-            model=str(data.get("model", "")),
-            mode=str(data.get("mode", "text2img")),
-            prompt=str(data.get("prompt", "")),
-            size=str(data.get("size", "1024x1024")),
-            quality=str(data.get("quality", "auto")),
-            output_format=str(data.get("output_format", "png")),
-            compression=compression,
-            batch_count=batch_count,
-            reference_ids=tuple(str(item) for item in reference_ids),
-            transparent_background=json_bool(data.get("transparent_background", False)),
-            frame_count=frame_count,
-            animation_fps=animation_fps,
-            animation_loop=json_bool(data.get("animation_loop", True)),
-            animation_format=str(data.get("animation_format", "webp")).lower(),
-            master_only=json_bool(data.get("master_only", False)),
-        ),
+    generation_request = SubmitGeneration(
+        channel_id=str(data.get("channel_id", "")),
+        model=str(data.get("model", "")),
+        mode=str(data.get("mode", "text2img")),
+        prompt=str(data.get("prompt", "")),
+        size=str(data.get("size", "1024x1024")),
+        quality=str(data.get("quality", "auto")),
+        output_format=str(data.get("output_format", "png")),
+        compression=compression,
+        batch_count=batch_count,
+        reference_ids=tuple(str(item) for item in reference_ids),
+        transparent_background=json_bool(data.get("transparent_background", False)),
+        frame_count=frame_count,
+        animation_fps=animation_fps,
+        animation_loop=json_bool(data.get("animation_loop", True)),
+        animation_format=str(data.get("animation_format", "webp")).lower(),
+        master_only=json_bool(data.get("master_only", False)),
     )
+    application_services = services()
+    generation_service = application_services.generations
+    with application_services.conversations.generation_submission(workspace):
+        job = generation_service.submit(current_user.id, workspace, generation_request)
     return jsonify(job=_job_payload(generation_service, job)), 202
 
 
@@ -154,8 +152,8 @@ def retry_animation_generation(job_id: str):
     generation_service = application_services.generations
     existing = generation_service.get_job(job_id, user_id=current_user.id)
     workspace = owned_workspace(existing.workspace_id)
-    application_services.conversations.ensure_idle(workspace.id)
-    job = generation_service.retry_animation(job_id, user_id=current_user.id)
+    with application_services.conversations.generation_submission(workspace):
+        job = generation_service.retry_animation(job_id, user_id=current_user.id)
     return jsonify(job=_job_payload(generation_service, job)), 202
 
 
