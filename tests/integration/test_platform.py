@@ -16,7 +16,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from PIL import Image
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 
 from imagegen import create_app
 from imagegen.config.channels import ChannelRegistry
@@ -43,7 +43,7 @@ from imagegen.models import (
     utcnow,
 )
 from imagegen.serializers import display_amount
-from imagegen.services import ServiceError, SubmitGeneration
+from imagegen.services import ServiceError, SubmitGeneration, SystemSettingsService
 from imagegen.services.conversation_prompts import CHAT_SYSTEM_PROMPT
 from imagegen.services.runtime_logs import sanitize_details
 from imagegen.services.settings import SYSTEM_SETTINGS_KEY
@@ -2562,6 +2562,25 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["title"], "设计图像中心")
         self.assertRegex(response.json["version"], r"^\d+\.\d+\.\d+")
+
+    def test_runtime_and_title_reads_share_one_cached_snapshot(self):
+        settings = SystemSettingsService()
+        statements = []
+
+        def capture_statement(_conn, _cursor, statement, _params, _context, _many):
+            statements.append(statement)
+
+        event.listen(db.engine, "before_cursor_execute", capture_statement)
+        try:
+            first = settings.runtime()
+            title = settings.site_title()
+            second = settings.runtime()
+        finally:
+            event.remove(db.engine, "before_cursor_execute", capture_statement)
+
+        self.assertIs(first, second)
+        self.assertEqual(title, SystemSettingsService.DEFAULT_SITE_TITLE)
+        self.assertEqual(len(statements), 1)
 
     def test_admin_can_filter_and_inspect_audit_logs(self):
         config = self.services.settings.editable_config()

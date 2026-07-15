@@ -24,6 +24,12 @@ from .shared import (
 )
 
 
+def _queue_positions_for(generation_service, jobs) -> dict[str, int]:
+    return (
+        generation_service.queue_positions() if any(job.status == "queued" for job in jobs) else {}
+    )
+
+
 @web.post("/api/generations")
 @login_required
 def submit_generation():
@@ -87,7 +93,7 @@ def list_generations():
         workspace_id=workspace_id or None,
         limit=query_limit(),
     )
-    positions = generation_service.queue_positions()
+    positions = _queue_positions_for(generation_service, jobs)
     return jsonify(
         jobs=[
             job_dict(
@@ -108,7 +114,7 @@ def list_generations():
 def list_active_generations():
     generation_service = services().generations
     jobs = generation_service.list_active_jobs(current_user.id)
-    positions = generation_service.queue_positions()
+    positions = _queue_positions_for(generation_service, jobs)
     return jsonify(
         jobs=[
             job_status_dict(
@@ -128,7 +134,7 @@ def list_active_generations():
 def get_generation(job_id: str):
     generation_service = services().generations
     job = generation_service.get_job(job_id, user_id=current_user.id)
-    positions = generation_service.queue_positions()
+    positions = _queue_positions_for(generation_service, (job,))
     return jsonify(
         job=job_dict(
             job,
@@ -145,7 +151,7 @@ def get_generation(job_id: str):
 def cancel_generation(job_id: str):
     generation_service = services().generations
     job = generation_service.cancel(job_id, user_id=current_user.id)
-    positions = generation_service.queue_positions()
+    positions = _queue_positions_for(generation_service, (job,))
     return jsonify(
         job=job_dict(
             job,

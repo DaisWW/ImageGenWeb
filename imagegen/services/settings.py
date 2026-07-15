@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
+import time
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from ..errors import ServiceError
@@ -66,36 +68,39 @@ class RuntimeSettings:
         return {key: value for key, value in self.as_dict().items() if key in keys}
 
 
+@dataclass(frozen=True, slots=True)
+class _SettingsSnapshot:
+    runtime_value: str | None
+    title_value: str | None
+    runtime: RuntimeSettings
+    site_title: str
+
+
 class SystemSettingsService:
     SITE_TITLE_KEY = "site_title"
     DEFAULT_SITE_TITLE = "西郊比克王 AI Studio"
+    REFRESH_INTERVAL_SECONDS = 1.0
+
+    def __init__(self):
+        self._snapshot_lock = threading.RLock()
+        self._snapshot: _SettingsSnapshot | None = None
+        self._next_refresh = 0.0
 
     def site_title(self) -> str:
-        state = db.session.get(SystemState, self.SITE_TITLE_KEY)
-        return state.value if state and state.value.strip() else self.DEFAULT_SITE_TITLE
+        return self._settings_snapshot().site_title
 
     def runtime(self) -> RuntimeSettings:
-        state = db.session.get(SystemState, SYSTEM_SETTINGS_KEY)
-        if state is None or not state.value:
-            return RuntimeSettings()
-        try:
-            payload = json.loads(state.value)
-            if payload.get("schema") != 1 or not isinstance(payload.get("settings"), dict):
-                raise ValueError("系统配置文档格式无效")
-            return _parse_runtime_settings(payload["settings"])
-        except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            raise RuntimeError(f"数据库系统配置损坏：{exc}") from exc
+        return self._settings_snapshot().runtime
 
     def editable_config(self) -> dict[str, Any]:
-        state = db.session.get(SystemState, SYSTEM_SETTINGS_KEY)
-        title_state = db.session.get(SystemState, self.SITE_TITLE_KEY)
-        runtime_value = state.value if state is not None else None
-        title_value = title_state.value if title_state is not None else None
+        return self._config_dict(self._settings_snapshot(force=True))
+
+    def _config_dict(self, snapshot: _SettingsSnapshot) -> dict[str, Any]:
         return {
-            "site_title": self._title_from_value(title_value),
-            "runtime": self.runtime().as_dict(),
-            "revision": self._revision(runtime_value, title_value),
-            "managed": bool(state and state.value),
+            "site_title": snapshot.site_title,
+            "runtime": snapshot.runtime.as_dict(),
+            "revision": self._revision(snapshot.runtime_value, snapshot.title_value),
+            "managed": bool(snapshot.runtime_value),
         }
 
     def save(self, payload: Any, actor_user_id: int) -> dict[str, Any]:
@@ -154,7 +159,42 @@ class SystemSettingsService:
             )
         )
         db.session.commit()
-        return self.editable_config()
+        snapshot = self._publish_snapshot(serialized, title, runtime)
+        return self._config_dict(snapshot)
+
+    def _settings_snapshot(self, *, force: bool = False) -> _SettingsSnapshot:
+        now = time.monotonic()
+        with self._snapshot_lock:
+            if not force and self._snapshot is not None and now < self._next_refresh:
+                return self._snapshot
+            values = dict(
+                db.session.execute(
+                    select(SystemState.key, SystemState.value).where(
+                        SystemState.key.in_((SYSTEM_SETTINGS_KEY, self.SITE_TITLE_KEY))
+                    )
+                ).all()
+            )
+            return self._publish_snapshot(
+                values.get(SYSTEM_SETTINGS_KEY),
+                values.get(self.SITE_TITLE_KEY),
+            )
+
+    def _publish_snapshot(
+        self,
+        runtime_value: str | None,
+        title_value: str | None,
+        runtime: RuntimeSettings | None = None,
+    ) -> _SettingsSnapshot:
+        snapshot = _SettingsSnapshot(
+            runtime_value=runtime_value,
+            title_value=title_value,
+            runtime=runtime or self._parse_runtime_value(runtime_value),
+            site_title=self._title_from_value(title_value),
+        )
+        with self._snapshot_lock:
+            self._snapshot = snapshot
+            self._next_refresh = time.monotonic() + self.REFRESH_INTERVAL_SECONDS
+        return snapshot
 
     @staticmethod
     def _validate_title(title: str) -> str:
@@ -207,13 +247,26 @@ class SystemSettingsService:
 
     @staticmethod
     def _runtime_from_value(serialized: str | None) -> RuntimeSettings:
+        try:
+            return SystemSettingsService._parse_runtime_value(serialized)
+        except RuntimeError:
+            return RuntimeSettings()
+
+    @staticmethod
+    def _parse_runtime_value(serialized: str | None) -> RuntimeSettings:
         if not serialized:
             return RuntimeSettings()
         try:
-            raw = json.loads(serialized).get("settings", {})
-            return _parse_runtime_settings(raw)
-        except (json.JSONDecodeError, TypeError, ValueError):
-            return RuntimeSettings()
+            payload = json.loads(serialized)
+            if (
+                not isinstance(payload, dict)
+                or payload.get("schema") != 1
+                or not isinstance(payload.get("settings"), dict)
+            ):
+                raise ValueError("系统配置文档格式无效")
+            return _parse_runtime_settings(payload["settings"])
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise RuntimeError(f"数据库系统配置损坏：{exc}") from exc
 
     @staticmethod
     def _conflict_error() -> ServiceError:
@@ -225,6 +278,8 @@ class SystemSettingsService:
 
     def _raise_conflict(self) -> None:
         db.session.rollback()
+        with self._snapshot_lock:
+            self._next_refresh = 0.0
         raise self._conflict_error()
 
 
