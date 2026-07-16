@@ -2824,6 +2824,68 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertEqual(runtime_log.provider_id, "test")
         self.assertNotIn(job.prompt, json.dumps(runtime_log.details, ensure_ascii=False))
 
+    def test_worker_serializes_concurrent_batch_settlement(self):
+        workspace = self.create_workspace()
+        job = self.submit(workspace, batch_count=2)
+        worker = self.create_worker()
+        worker.providers = FakeProviderFactory()
+        channel = self.app.extensions["channel_registry"].get("test")
+        for item in job.items:
+            self.assertTrue(worker._claim(item.id, channel))
+
+        provider_barrier = threading.Barrier(2)
+
+        def generate(_channel, _request):
+            provider_barrier.wait(5)
+            return ProviderResult(content=png_bytes(), request_id="concurrent-settlement")
+
+        worker.providers.adapter.generate = generate
+        active_settlements = 0
+        peak_settlements = 0
+        settlement_state_lock = threading.Lock()
+        original_settle_success = worker._settle_success
+
+        def settle_success(*args):
+            nonlocal active_settlements, peak_settlements
+            with settlement_state_lock:
+                active_settlements += 1
+                peak_settlements = max(peak_settlements, active_settlements)
+            threading.Event().wait(0.1)
+            try:
+                original_settle_success(*args)
+            finally:
+                with settlement_state_lock:
+                    active_settlements -= 1
+
+        worker._settle_success = settle_success
+        threads = [
+            threading.Thread(target=worker._process_item, args=(item.id,)) for item in job.items
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(10)
+            self.assertFalse(thread.is_alive())
+
+        db.session.expire_all()
+        saved_job = db.session.get(GenerationJob, job.id)
+        user = db.session.get(User, self.user.id)
+        balances = list(
+            db.session.scalars(
+                select(WalletLedger.balance_after_rmb)
+                .where(WalletLedger.generation_item_id.in_([item.id for item in job.items]))
+                .order_by(WalletLedger.id)
+            )
+        )
+        self.assertEqual(peak_settlements, 1)
+        self.assertEqual(saved_job.status, "succeeded")
+        self.assertEqual(saved_job.charged_rmb, Decimal("2.5000"))
+        self.assertEqual(saved_job.reserved_rmb, Decimal("0.0000"))
+        self.assertTrue(all(item.status == "succeeded" for item in saved_job.items))
+        self.assertEqual(user.balance_rmb, Decimal("17.5000"))
+        self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
+        self.assertEqual(balances, [Decimal("18.7500"), Decimal("17.5000")])
+
     def test_worker_failure_releases_reservation_without_charge(self):
         workspace = self.create_workspace()
         job = self.submit(workspace)

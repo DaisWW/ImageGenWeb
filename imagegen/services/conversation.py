@@ -565,8 +565,7 @@ class ConversationService:
             or message.role != "user"
             or message.provider_id != model_id
             or message.content != content
-            or tuple(attachment.asset_id for attachment in message.attachments)
-            != attachment_ids
+            or tuple(attachment.asset_id for attachment in message.attachments) != attachment_ids
         ):
             raise ServiceError(
                 "消息 ID 已被其他内容使用",

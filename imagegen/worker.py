@@ -53,6 +53,7 @@ class GenerationWorker:
         hostname = socket.gethostname()[:60]
         self.worker_id = f"{hostname}:{os.getpid()}:{uuid.uuid4().hex[:12]}"
         self._stopping = threading.Event()
+        self._settlement_lock = threading.Lock()
         self._futures: dict[str, Future] = {}
         self._last_heartbeat = 0.0
         self._last_recovery = 0.0
@@ -334,7 +335,8 @@ class GenerationWorker:
             if item is None or not self._owns_claim(item):
                 return
             if item.cancel_requested_at or item.job.cancel_requested_at:
-                self._settle_canceled(item_id, started)
+                with self._settlement_lock:
+                    self._settle_canceled(item_id, started)
                 return
             try:
                 channel = self.channels.get(item.channel_id)
@@ -353,38 +355,42 @@ class GenerationWorker:
                         references=references,
                     ),
                 )
-                self._settle_success(item_id, result.content, result.request_id, started)
+                with self._settlement_lock:
+                    self._settle_success(item_id, result.content, result.request_id, started)
             except ProviderError as exc:
-                self._settle_failure(
-                    item_id,
-                    code=exc.code,
-                    message=str(exc),
-                    upstream_status=exc.status_code,
-                    upstream_request_id=exc.request_id,
-                    started=started,
-                    details=exc.details,
-                )
+                with self._settlement_lock:
+                    self._settle_failure(
+                        item_id,
+                        code=exc.code,
+                        message=str(exc),
+                        upstream_status=exc.status_code,
+                        upstream_request_id=exc.request_id,
+                        started=started,
+                        details=exc.details,
+                    )
             except (StorageError, OSError) as exc:
-                self._settle_failure(
-                    item_id,
-                    code="storage_error",
-                    message=str(exc),
-                    upstream_status=None,
-                    upstream_request_id="",
-                    started=started,
-                    details={"exception_type": exc.__class__.__name__},
-                )
+                with self._settlement_lock:
+                    self._settle_failure(
+                        item_id,
+                        code="storage_error",
+                        message=str(exc),
+                        upstream_status=None,
+                        upstream_request_id="",
+                        started=started,
+                        details={"exception_type": exc.__class__.__name__},
+                    )
             except Exception as exc:
                 LOGGER.exception("生成任务发生未预期异常：%s", item_id)
-                self._settle_failure(
-                    item_id,
-                    code="internal_error",
-                    message=f"内部错误：{exc.__class__.__name__}",
-                    upstream_status=None,
-                    upstream_request_id="",
-                    started=started,
-                    details={"exception_type": exc.__class__.__name__},
-                )
+                with self._settlement_lock:
+                    self._settle_failure(
+                        item_id,
+                        code="internal_error",
+                        message=f"内部错误：{exc.__class__.__name__}",
+                        upstream_status=None,
+                        upstream_request_id="",
+                        started=started,
+                        details={"exception_type": exc.__class__.__name__},
+                    )
             finally:
                 db.session.remove()
 
