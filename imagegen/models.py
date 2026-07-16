@@ -195,9 +195,10 @@ class LibraryImage(TimestampMixin, db.Model):
     )
 
     id: Mapped[str] = mapped_column(db.String(32), primary_key=True, default=new_public_id)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     original_name: Mapped[str] = mapped_column(db.String(255))
     storage_path: Mapped[str] = mapped_column(db.String(500), unique=True)
+    thumbnail_path: Mapped[str | None] = mapped_column(db.String(500))
     mime_type: Mapped[str] = mapped_column(db.String(50))
     byte_count: Mapped[int]
     width: Mapped[int]

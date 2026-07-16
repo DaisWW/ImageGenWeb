@@ -63,6 +63,13 @@ class ImageStorage:
         self.root.mkdir(parents=True, exist_ok=True)
 
     def inspect(self, content: bytes) -> StoredImage:
+        return self._inspect(content, static=False)
+
+    def inspect_static(self, content: bytes) -> StoredImage:
+        return self._inspect(content, static=True)
+
+    @staticmethod
+    def _inspect(content: bytes, *, static: bool) -> StoredImage:
         if not content:
             raise InvalidImageError("图片内容为空")
         try:
@@ -77,6 +84,8 @@ class ImageStorage:
                         raise InvalidImageError(f"图片单边不能超过 {MAX_IMAGE_DIMENSION} 像素")
                     if width * height > MAX_IMAGE_PIXELS:
                         raise InvalidImageError(f"图片总像素不能超过 {MAX_IMAGE_PIXELS:,}")
+                    if static and getattr(image, "n_frames", 1) > 1:
+                        raise InvalidImageError("图库仅支持静态图片")
                     image.load()
         except InvalidImageError:
             raise
@@ -94,13 +103,6 @@ class ImageStorage:
             height=height,
             sha256=hashlib.sha256(content).hexdigest(),
         )
-
-    def inspect_static(self, content: bytes) -> StoredImage:
-        inspected = self.inspect(content)
-        with Image.open(io.BytesIO(content)) as image:
-            if getattr(image, "n_frames", 1) > 1:
-                raise InvalidImageError("图库仅支持静态图片")
-        return inspected
 
     def save_reference(
         self,
@@ -130,19 +132,28 @@ class ImageStorage:
         user_id: int,
         image_id: str,
         content: bytes,
-    ) -> StoredImage:
-        inspected = self.inspect_static(content)
+        inspected: StoredImage,
+    ) -> StoredOutput:
         relative = Path("users") / str(user_id) / "library"
         relative /= f"{image_id}.{inspected.extension}"
+        thumbnail = relative.with_name(f"{image_id}.thumb.webp")
         self._atomic_write(relative, content)
-        return StoredImage(
-            relative_path=relative.as_posix(),
-            mime_type=inspected.mime_type,
-            extension=inspected.extension,
-            byte_count=inspected.byte_count,
-            width=inspected.width,
-            height=inspected.height,
-            sha256=inspected.sha256,
+        try:
+            self._atomic_write(thumbnail, self._thumbnail(content))
+        except Exception:
+            self.delete(relative.as_posix())
+            raise
+        return StoredOutput(
+            image=StoredImage(
+                relative_path=relative.as_posix(),
+                mime_type=inspected.mime_type,
+                extension=inspected.extension,
+                byte_count=inspected.byte_count,
+                width=inspected.width,
+                height=inspected.height,
+                sha256=inspected.sha256,
+            ),
+            thumbnail_path=thumbnail.as_posix(),
         )
 
     def save_output(

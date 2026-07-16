@@ -8,6 +8,7 @@ from ..errors import ServiceError
 from ..extensions import db
 from ..models import Asset, GenerationItem, Workspace
 from ..serializers import library_image_dict, workspace_dict
+from ..services.image_library import LIBRARY_PAGE_SIZE, MAX_LIBRARY_BYTES, MAX_LIBRARY_IMAGES
 from . import web
 from .shared import image_extension, json_body, owned_workspace, services, storage
 
@@ -15,8 +16,20 @@ from .shared import image_extension, json_body, owned_workspace, services, stora
 @web.get("/api/library-images")
 @login_required
 def list_library_images():
-    images = services().image_library.list(current_user.id)
-    return jsonify(images=[library_image_dict(image) for image in images])
+    offset = _query_offset()
+    limit = _query_limit()
+    images, total = services().image_library.page(
+        current_user.id,
+        offset=offset,
+        limit=limit,
+    )
+    return jsonify(
+        images=[library_image_dict(image) for image in images],
+        total=total,
+        has_more=offset + len(images) < total,
+        max_count=MAX_LIBRARY_IMAGES,
+        max_bytes=MAX_LIBRARY_BYTES,
+    )
 
 
 @web.post("/api/library-images")
@@ -46,6 +59,23 @@ def delete_library_image(image_id: str):
 def library_image_file(image_id: str):
     image = services().image_library.get(current_user.id, image_id)
     return send_file(storage().read(image.storage_path), mimetype=image.mime_type, conditional=True)
+
+
+@web.get("/media/library-images/<image_id>/thumbnail")
+@login_required
+def library_image_thumbnail(image_id: str):
+    image = services().image_library.get(current_user.id, image_id)
+    if not image.thumbnail_path:
+        return send_file(
+            storage().read(image.storage_path),
+            mimetype=image.mime_type,
+            conditional=True,
+        )
+    return send_file(
+        storage().read(image.thumbnail_path),
+        mimetype="image/webp",
+        conditional=True,
+    )
 
 
 @web.post("/api/workspaces/<workspace_id>/assets/from-library/<image_id>")
@@ -122,3 +152,23 @@ def _source_upload(data: dict) -> tuple[str, bytes]:
         raise ServiceError("生成结果不存在", status_code=404)
     name = f"result_{item.id}.{image_extension(item.output_mime_type)}"
     return name, storage().read_bytes(item.output_path)
+
+
+def _query_offset() -> int:
+    try:
+        offset = int(request.args.get("offset", 0))
+    except (TypeError, ValueError) as exc:
+        raise ServiceError("图库分页参数无效") from exc
+    if offset < 0:
+        raise ServiceError("图库分页参数无效")
+    return offset
+
+
+def _query_limit() -> int:
+    try:
+        limit = int(request.args.get("limit", LIBRARY_PAGE_SIZE))
+    except (TypeError, ValueError) as exc:
+        raise ServiceError("图库分页参数无效") from exc
+    if limit < 1:
+        raise ServiceError("图库分页参数无效")
+    return min(limit, LIBRARY_PAGE_SIZE)

@@ -83,6 +83,7 @@ def library_image_dict(image: LibraryImage) -> dict[str, Any]:
         "height": image.height,
         "created_at": _iso(image.created_at),
         "url": url_for("web.library_image_file", image_id=image.id),
+        "thumbnail_url": url_for("web.library_image_thumbnail", image_id=image.id),
     }
 
 
