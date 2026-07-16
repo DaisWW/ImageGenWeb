@@ -62,7 +62,6 @@ def submit_generation():
         mode=str(data.get("mode", "text2img")),
         prompt=str(data.get("prompt", "")),
         size=str(data.get("size", "1024x1024")),
-        quality=str(data.get("quality", "auto")),
         output_format=str(data.get("output_format", "png")),
         compression=compression,
         batch_count=batch_count,

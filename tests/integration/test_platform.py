@@ -42,6 +42,7 @@ from imagegen.models import (
     GenerationItem,
     GenerationJob,
     GenerationQueueState,
+    LibraryImage,
     RuntimeLog,
     SystemState,
     User,
@@ -109,7 +110,6 @@ channels:
       max_reference_image_mb: 10
       max_reference_total_mb: 40
       sizes: [1024x1024]
-      qualities: [auto, medium]
       formats: [png, jpeg, webp]
     limits:
       max_concurrency: 3
@@ -536,7 +536,6 @@ class ImageGenPlatformTests(unittest.TestCase):
                     mode="text2img",
                     prompt="并发队列测试",
                     size="1024x1024",
-                    quality="medium",
                     output_format="png",
                     compression=90,
                     batch_count=1,
@@ -596,7 +595,6 @@ class ImageGenPlatformTests(unittest.TestCase):
                     mode="text2img",
                     prompt="删除竞态测试",
                     size="1024x1024",
-                    quality="medium",
                     output_format="png",
                     compression=90,
                     batch_count=1,
@@ -785,7 +783,6 @@ class ImageGenPlatformTests(unittest.TestCase):
             "mode": "text2img",
             "prompt": "电影感人物肖像",
             "size": "1024x1024",
-            "quality": "medium",
             "output_format": "png",
             "compression": 90,
             "batch_count": 1,
@@ -1303,7 +1300,6 @@ class ImageGenPlatformTests(unittest.TestCase):
                     "channel_id": "test",
                     "model": "model-b",
                     "prompt": "原子互斥测试",
-                    "quality": "medium",
                 },
             )
         finally:
@@ -1501,6 +1497,94 @@ class ImageGenPlatformTests(unittest.TestCase):
             [asset["id"] for asset in messages[0]["attachments"]],
             [asset["id"] for asset in assets],
         )
+
+    def test_image_library_deduplicates_and_copies_across_workspaces(self):
+        source = self.create_workspace("图库来源")
+        target = self.create_workspace("图库目标")
+        content = png_bytes((220, 35, 45))
+        source_asset = self.services.workspaces.add_assets(
+            source,
+            [("source.png", content)],
+        )[0]
+        client = self.user_client()
+
+        saved = client.post("/api/library-images", json={"asset_id": source_asset.id})
+        self.assertEqual(saved.status_code, 201, saved.get_data(as_text=True))
+        image = saved.json["images"][0]
+        self.assertEqual(saved.json["added_count"], 1)
+        self.assertEqual(client.get(image["url"]).data, content)
+
+        duplicate = client.post(
+            "/api/library-images",
+            data={"images": (io.BytesIO(content), "duplicate.png")},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(duplicate.status_code, 200)
+        self.assertEqual(duplicate.json["added_count"], 0)
+        self.assertEqual(duplicate.json["images"][0]["id"], image["id"])
+
+        imported = client.post(
+            f"/api/workspaces/{target.id}/assets/from-library/{image['id']}"
+        )
+        self.assertEqual(imported.status_code, 201, imported.get_data(as_text=True))
+        imported_asset = imported.json["asset"]
+        self.assertNotEqual(imported_asset["id"], source_asset.id)
+        self.assertEqual(client.get(imported_asset["url"]).data, content)
+        imported_again = client.post(
+            f"/api/workspaces/{target.id}/assets/from-library/{image['id']}"
+        )
+        self.assertEqual(imported_again.status_code, 200)
+        self.assertEqual(imported_again.json["asset"]["id"], imported_asset["id"])
+
+        self.assertEqual(client.delete(f"/api/workspaces/{source.id}").status_code, 200)
+        self.assertEqual(client.get(image["url"]).data, content)
+        self.assertEqual(client.delete(f"/api/library-images/{image['id']}").status_code, 200)
+        self.assertEqual(client.get(imported_asset["url"]).data, content)
+        self.assertEqual(client.get("/api/library-images").json["images"], [])
+        self.assertEqual(db.session.scalar(select(func.count(LibraryImage.id))), 0)
+
+    def test_image_library_rejects_animations_and_is_account_private(self):
+        output = io.BytesIO()
+        frames = [Image.new("RGB", (2, 2), color) for color in ("red", "blue")]
+        frames[0].save(
+            output,
+            format="WEBP",
+            save_all=True,
+            append_images=frames[1:],
+            duration=100,
+        )
+        client = self.user_client()
+        rejected = client.post(
+            "/api/library-images",
+            data={"images": (io.BytesIO(output.getvalue()), "animation.webp")},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(rejected.status_code, 400)
+        self.assertIn("仅支持静态图片", rejected.json["error"])
+
+        stored = client.post(
+            "/api/library-images",
+            data={"images": (io.BytesIO(png_bytes()), "private.png")},
+            content_type="multipart/form-data",
+        ).json["images"][0]
+        stored_url = stored["url"]
+        outsider = self.services.users.create(
+            username="library-outsider",
+            password="StrongPass123!",
+            actor_user_id=self.admin.id,
+        )
+        self.context.pop()
+        try:
+            outsider_client = self.app.test_client()
+            login = outsider_client.post(
+                "/login",
+                data={"username": outsider.username, "password": "StrongPass123!"},
+            )
+            self.assertEqual(login.status_code, 302)
+            self.assertEqual(outsider_client.get(stored_url).status_code, 404)
+            self.assertEqual(outsider_client.get("/api/library-images").json["images"], [])
+        finally:
+            self.context.push()
 
     def test_prompt_translation_defaults_off_and_records_draft_duration(self):
         workspace = self.create_workspace()
@@ -1973,7 +2057,7 @@ class ImageGenPlatformTests(unittest.TestCase):
             prompt="电影感肖像",
             model="model-a",
             size="1024x1024",
-            quality="medium",
+            quality="high",
             output_format="png",
             compression=90,
         )
@@ -2032,7 +2116,7 @@ class ImageGenPlatformTests(unittest.TestCase):
                 prompt="极简上传图标",
                 model="model-a",
                 size="1024x1024",
-                quality="medium",
+                quality="high",
                 output_format="png",
                 compression=90,
                 transparent_background=True,
@@ -2317,7 +2401,7 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertEqual(user.reserved_rmb, Decimal("3.7500"))
         self.assertEqual(len(job.items), 3)
 
-    def test_generation_api_defaults_quality_to_auto(self):
+    def test_generation_api_always_uses_high_quality(self):
         workspace = self.create_workspace()
         response = self.user_client().post(
             "/api/generations",
@@ -2326,22 +2410,22 @@ class ImageGenPlatformTests(unittest.TestCase):
                 "channel_id": "test",
                 "model": "model-b",
                 "prompt": "默认质量测试",
+                "quality": "low",
             },
         )
 
         self.assertEqual(response.status_code, 202, response.get_data(as_text=True))
-        self.assertEqual(response.json["job"]["quality"], "auto")
+        self.assertEqual(response.json["job"]["quality"], "high")
         db.session.refresh(workspace)
-        self.assertEqual(workspace.settings["quality"], "auto")
+        self.assertNotIn("quality", workspace.settings)
 
-    def test_bundled_channels_support_two_references_and_default_to_auto(self):
+    def test_bundled_channels_support_two_references(self):
         config_path = Path(__file__).resolve().parents[2] / "config" / "channels.yaml"
         registry = ChannelRegistry(config_path)
 
         for channel_id in ("current", "lucen"):
             channel = registry.get(channel_id, require_available=False)
             self.assertEqual(channel.capabilities.max_reference_images, 2)
-            self.assertEqual(channel.capabilities.qualities[0], "auto")
 
     def test_transparent_background_is_validated_persisted_and_serialized(self):
         workspace = self.create_workspace()
@@ -2362,7 +2446,6 @@ class ImageGenPlatformTests(unittest.TestCase):
                 "mode": "text2img",
                 "prompt": "极简云朵图标",
                 "size": "1024x1024",
-                "quality": "medium",
                 "output_format": "png",
                 "compression": 90,
                 "batch_count": 1,
@@ -2388,7 +2471,7 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertEqual(response.json["workspace"]["kind"], "animation")
         self.assertEqual(response.json["workspace"]["settings"]["mode"], "img2img")
         self.assertTrue(response.json["workspace"]["settings"]["transparent_background"])
-        self.assertEqual(response.json["workspace"]["settings"]["quality"], "auto")
+        self.assertNotIn("quality", response.json["workspace"]["settings"])
         self.assertEqual(response.json["workspace"]["settings"]["animation_frame_count"], 8)
         self.assertEqual(response.json["workspace"]["settings"]["animation_fps"], 8)
 
@@ -2443,7 +2526,7 @@ class ImageGenPlatformTests(unittest.TestCase):
         self.assertEqual(job["requested_count"], 8)
         self.assertEqual(job["animation_fps"], 8)
         self.assertEqual(job["animation_duration_seconds"], 1.0)
-        self.assertEqual(job["quality"], "auto")
+        self.assertEqual(job["quality"], "high")
         db.session.refresh(workspace)
         self.assertEqual(workspace.settings["animation_frame_count"], 8)
         self.assertEqual(workspace.settings["animation_fps"], 8)
@@ -3220,6 +3303,14 @@ class ImageGenPlatformTests(unittest.TestCase):
             self.assertTrue(item["thumbnail_url"])
             self.assertTrue(item["download_url"].endswith("?download=1"))
 
+            saved_to_library = client.post(
+                "/api/library-images",
+                json={"generation_item_id": item["id"]},
+            )
+            self.assertEqual(saved_to_library.status_code, 201)
+            library_image = saved_to_library.json["images"][0]
+            self.assertEqual(client.get(library_image["url"]).data, png_bytes())
+
             original = client.get(item["image_url"])
             self.assertEqual(original.status_code, 200)
             self.assertEqual(original.mimetype, "image/png")
@@ -3294,7 +3385,6 @@ class ImageGenPlatformTests(unittest.TestCase):
                 mode="text2img",
                 prompt="其他用户的生成记录",
                 size="1024x1024",
-                quality="medium",
                 output_format="png",
                 compression=90,
                 batch_count=1,
@@ -3617,6 +3707,7 @@ class ImageGenPlatformTests(unittest.TestCase):
 
     def test_worker_periodic_cleanup_failure_does_not_escape(self):
         worker = self.create_worker()
+        worker._last_cleanup = float("-inf")
 
         with patch.object(worker.retention, "cleanup", side_effect=RuntimeError("cleanup failed")):
             worker._run_periodic_cleanup()

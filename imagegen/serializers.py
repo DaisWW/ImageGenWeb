@@ -13,6 +13,7 @@ from .models import (
     ConversationMessage,
     GenerationItem,
     GenerationJob,
+    LibraryImage,
     User,
     WalletLedger,
     Workspace,
@@ -69,6 +70,19 @@ def asset_dict(asset: Asset) -> dict[str, Any]:
         "height": asset.height,
         "position": asset.position,
         "url": url_for("web.asset_file", asset_id=asset.id),
+    }
+
+
+def library_image_dict(image: LibraryImage) -> dict[str, Any]:
+    return {
+        "id": image.id,
+        "name": image.original_name,
+        "mime_type": image.mime_type,
+        "bytes": image.byte_count,
+        "width": image.width,
+        "height": image.height,
+        "created_at": _iso(image.created_at),
+        "url": url_for("web.library_image_file", image_id=image.id),
     }
 
 

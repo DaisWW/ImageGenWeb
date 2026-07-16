@@ -15,7 +15,6 @@ ALLOWED_WORKSPACE_SETTING_KEYS = {
     "channel_id",
     "model",
     "size",
-    "quality",
     "output_format",
     "compression",
     "transparent_background",
@@ -36,7 +35,6 @@ def default_workspace_settings(workspace_kind: str = "image") -> dict[str, Any]:
         "channel_id": "",
         "model": "",
         "size": "1024x1024",
-        "quality": "auto",
         "output_format": "png",
         "compression": 90,
         "transparent_background": workspace_kind == "animation",
@@ -63,7 +61,6 @@ def sanitize_workspace_settings(raw: Any, runtime: RuntimeSettings | None = None
     settings["channel_id"] = str(settings["channel_id"])[:64]
     settings["model"] = str(settings["model"])[:100]
     settings["size"] = normalize_image_size(settings["size"])
-    settings["quality"] = str(settings["quality"])[:20]
     settings["output_format"] = str(settings["output_format"])[:20]
     settings["transparent_background"] = as_bool(settings["transparent_background"])
     settings["animation_loop"] = as_bool(settings["animation_loop"])

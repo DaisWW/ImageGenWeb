@@ -1924,6 +1924,16 @@ select option {
   font-size: 9px;
 }
 
+@media (min-width: 640px) {
+  .generation-back-button { display: none; }
+}
+
+.generation-composer-backdrop {
+  position: fixed;
+  z-index: 29;
+  inset: 0;
+}
+
 .composer-controls {
   display: grid;
   max-width: 1380px;
@@ -2155,6 +2165,11 @@ select option {
   font-size: 8px;
 }
 
+.reference-library-add {
+  width: 68px;
+  min-width: 68px;
+}
+
 .reference-list {
   display: flex;
   gap: 7px;
@@ -2236,6 +2251,55 @@ select option {
 .reference-remove svg {
   width: 12px;
   height: 12px;
+}
+
+.reference-library-save {
+  position: absolute;
+  z-index: 2;
+  top: -5px;
+  left: -5px;
+  display: grid;
+  width: 19px;
+  height: 19px;
+  padding: 0;
+  place-items: center;
+  color: var(--text-soft);
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface-4);
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+
+.reference-card:hover .reference-library-save,
+.reference-library-save:focus-visible {
+  color: var(--accent);
+  border-color: var(--accent);
+  opacity: 1;
+}
+
+.reference-library-save svg {
+  width: 11px;
+  height: 11px;
+}
+
+.chat-reference-item .reference-library-save {
+  top: 3px;
+  left: 3px;
+  width: 21px;
+  height: 21px;
+  color: #fff;
+  border-color: rgb(255 255 255 / 38%);
+  background: rgb(8 10 12 / 92%);
+  box-shadow: 0 2px 7px rgb(0 0 0 / 55%);
+  opacity: .94;
+}
+
+.chat-reference-item:hover .reference-library-save,
+.chat-reference-item .reference-library-save:focus-visible {
+  color: var(--accent);
+  border-color: var(--accent);
+  opacity: 1;
 }
 
 .reference-upload-preview {
@@ -2430,7 +2494,7 @@ select option {
 
 .detail-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -2498,6 +2562,170 @@ select option {
   align-content: start;
   overflow: auto;
   border-left: 1px solid var(--line);
+}
+
+.library-modal {
+  width: min(94vw, 780px);
+  max-width: min(94vw, 780px);
+}
+
+.library-dialog {
+  display: grid;
+  max-height: 84vh;
+  grid-template-rows: auto auto minmax(260px, 1fr);
+  gap: 14px;
+  padding: 21px;
+}
+
+.library-heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.library-heading > span {
+  padding: 2px 7px;
+  color: var(--accent);
+  border: 1px solid rgb(242 166 90 / 32%);
+  border-radius: 4px;
+  background: var(--accent-muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.library-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.library-toolbar > span {
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.library-content {
+  position: relative;
+  min-height: 340px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+  scrollbar-gutter: stable;
+}
+
+.library-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 9px;
+  padding-top: 14px;
+}
+
+.library-card {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.library-use {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  color: var(--text);
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.library-use:hover:not(:disabled),
+.library-use:focus-visible {
+  background: var(--surface-3);
+}
+
+.library-thumbnail {
+  width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  background: #090b0f;
+}
+
+.library-thumbnail img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.library-card-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  padding: 8px 9px 9px;
+}
+
+.library-card-copy strong {
+  overflow: hidden;
+  font-size: 10px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-card-copy small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.library-delete {
+  position: absolute;
+  z-index: 2;
+  top: 6px;
+  right: 6px;
+  width: 28px;
+  height: 28px;
+  color: #fff;
+  border-color: rgb(255 255 255 / 32%);
+  background: rgb(8 10 12 / 88%);
+}
+
+.library-delete:hover:not(:disabled) {
+  color: #fff;
+  border-color: var(--danger);
+  background: var(--danger-muted);
+}
+
+.library-loading,
+.library-empty,
+.library-drop-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 9px;
+  color: var(--muted);
+}
+
+.library-loading svg {
+  animation: spin 850ms linear infinite;
+}
+
+.library-empty strong,
+.library-drop-overlay strong {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.library-drop-overlay {
+  z-index: 4;
+  margin-top: 10px;
+  color: var(--accent);
+  border: 1px dashed var(--accent);
+  border-radius: 6px;
+  background: rgb(16 19 25 / 94%);
 }
 
 .detail-list {

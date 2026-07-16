@@ -35,6 +35,7 @@
         <div class="metric wide eta-metric"><span>预计结束</span><strong id="etaMetric">--:--</strong><small id="etaRemainingMetric">--</small></div>
       </div>
       <div class="stage-tools">
+        <button class="icon-button" type="button" id="libraryButton" title="图片库" aria-label="图片库"><i data-lucide="library"></i></button>
         <button class="icon-button danger clear-workspace-button" type="button" id="clearWorkspaceButton" title="清空当前工作站" aria-label="清空当前工作站"><i data-lucide="eraser"></i></button>
       </div>
     </header>
@@ -83,9 +84,10 @@
           </div>
         </form>
 
+        <div class="generation-composer-backdrop" id="generationBackdrop" aria-hidden="true" hidden></div>
         <form class="composer generation-composer" id="generationForm" hidden>
           <div class="generation-composer-heading">
-            <button class="icon-button" type="button" id="generationBackButton" title="返回对话" aria-label="返回对话"><i data-lucide="arrow-left"></i></button>
+            <button class="icon-button generation-back-button" type="button" id="generationBackButton" title="返回对话" aria-label="返回对话"><i data-lucide="arrow-left"></i></button>
             <div><strong id="generationHeadingTitle">确认生图参数</strong><span id="generationHeadingSubtitle">提示词和参数会保存在当前工作站</span></div>
           </div>
           <div class="composer-controls">
@@ -102,7 +104,6 @@
             <label class="compact-field channel-field"><span>渠道</span><select id="channelSelect" required></select></label>
             <label class="compact-field model-field"><span>模型</span><select id="modelSelect" required></select></label>
             <label class="compact-field"><span>尺寸</span><input id="sizeInput" list="sizeOptions" maxlength="20" placeholder="1024x1024" autocomplete="off" required><datalist id="sizeOptions"></datalist></label>
-            <label class="compact-field"><span>质量</span><select id="qualitySelect"></select></label>
             <label class="compact-field"><span id="frameFormatLabel">格式</span><select id="formatSelect"></select></label>
             <label class="compact-field number-field" id="imageCountControl"><span>张数</span><input id="batchCount" type="number" min="1" max="{{ runtime_settings.max_batch_images }}" value="1"></label>
             <label class="compact-field number-field animation-control" hidden><span>帧数</span><input id="animationFrameCount" type="number" min="2" max="{{ runtime_settings.max_animation_frames }}" value="8"></label>
@@ -117,6 +118,7 @@
 
           <div class="reference-strip" id="referenceStrip" hidden>
             <button class="reference-add" type="button" id="referenceAdd"><i data-lucide="image-plus"></i><span id="referenceAddLabel">添加垫图</span><small id="referenceLimit">0 / {{ runtime_settings.max_assets_per_workspace }}</small></button>
+            <button class="reference-add reference-library-add" type="button" id="referenceLibrary"><i data-lucide="library"></i><span>图片库</span></button>
             <div class="reference-list" id="referenceList"></div>
           </div>
 
@@ -204,9 +206,33 @@
       <div class="detail-prompt"><span>提示词</span><p id="detailPrompt"></p></div>
       <div class="detail-references" id="detailReferences"></div>
       <div class="detail-actions">
+        <button class="button secondary" type="button" id="detailSaveLibrary"><i data-lucide="bookmark-plus"></i>存入图库</button>
         <button class="button secondary" type="button" id="detailReuse"><i data-lucide="image-plus"></i><span id="detailReuseLabel">基于此图继续</span></button>
         <a class="button primary" id="detailDownload" download><i data-lucide="download"></i>下载原图</a>
       </div>
+    </div>
+  </div>
+</dialog>
+
+<dialog class="modal library-modal" id="libraryDialog">
+  <div class="library-dialog">
+    <div class="modal-header">
+      <div>
+        <span class="eyebrow">Image Library</span>
+        <div class="library-heading"><h2>图片库</h2><span id="libraryTargetLabel">随消息发送</span></div>
+      </div>
+      <button class="icon-button" type="button" data-close-dialog="libraryDialog" aria-label="关闭"><i data-lucide="x"></i></button>
+    </div>
+    <div class="library-toolbar">
+      <button class="button secondary small" type="button" id="libraryUploadButton"><i data-lucide="image-plus"></i>导入图片</button>
+      <span id="libraryCount">0 张</span>
+      <input id="libraryInput" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+    </div>
+    <div class="library-content" id="libraryDropArea">
+      <div class="library-loading" id="libraryLoading" hidden><i data-lucide="loader-circle"></i></div>
+      <div class="library-empty" id="libraryEmpty" hidden><i data-lucide="images"></i><strong>图库为空</strong></div>
+      <div class="library-grid" id="libraryGrid"></div>
+      <div class="library-drop-overlay" id="libraryDropOverlay" hidden><i data-lucide="image-plus"></i><strong>添加到图库</strong></div>
     </div>
   </div>
 </dialog>

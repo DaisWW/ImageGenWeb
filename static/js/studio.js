@@ -113,6 +113,10 @@
       this.uploadTarget = "generation";
       this.chatReferencePickerOpen = false;
       this.detailItemId = null;
+      this.libraryImages = null;
+      this.libraryTarget = "chat";
+      this.libraryLoading = false;
+      this.libraryUploading = false;
       this.channelVersion = "";
       this.chatModelVersion = "";
       this.runtimeRevision = "";
@@ -168,6 +172,7 @@
         etaMetric: byId("etaMetric"),
         etaRemainingMetric: byId("etaRemainingMetric"),
         newWorkspaceButton: byId("newWorkspaceButton"),
+        libraryButton: byId("libraryButton"),
         clearWorkspaceButton: byId("clearWorkspaceButton"),
         workspaceDialog: byId("workspaceDialog"),
         workspaceForm: byId("workspaceForm"),
@@ -199,6 +204,7 @@
         chatReferenceCount: byId("chatReferenceCount"),
         chatInput: byId("chatInput"),
         chatSendButton: byId("chatSendButton"),
+        generationBackdrop: byId("generationBackdrop"),
         generationForm: byId("generationForm"),
         generationBackButton: byId("generationBackButton"),
         generationHeadingTitle: byId("generationHeadingTitle"),
@@ -208,7 +214,6 @@
         modelSelect: byId("modelSelect"),
         sizeInput: byId("sizeInput"),
         sizeOptions: byId("sizeOptions"),
-        qualitySelect: byId("qualitySelect"),
         formatSelect: byId("formatSelect"),
         transparentBackground: byId("transparentBackground"),
         transparentBackgroundControl: byId("transparentBackgroundControl"),
@@ -223,6 +228,7 @@
         referenceStrip: byId("referenceStrip"),
         referenceInput: byId("referenceInput"),
         referenceAdd: byId("referenceAdd"),
+        referenceLibrary: byId("referenceLibrary"),
         referenceAddLabel: byId("referenceAddLabel"),
         referenceList: byId("referenceList"),
         referenceLimit: byId("referenceLimit"),
@@ -238,9 +244,20 @@
         detailList: byId("detailList"),
         detailPrompt: byId("detailPrompt"),
         detailReferences: byId("detailReferences"),
+        detailSaveLibrary: byId("detailSaveLibrary"),
         detailReuse: byId("detailReuse"),
         detailReuseLabel: byId("detailReuseLabel"),
         detailDownload: byId("detailDownload"),
+        libraryDialog: byId("libraryDialog"),
+        libraryTargetLabel: byId("libraryTargetLabel"),
+        libraryUploadButton: byId("libraryUploadButton"),
+        libraryInput: byId("libraryInput"),
+        libraryCount: byId("libraryCount"),
+        libraryDropArea: byId("libraryDropArea"),
+        libraryDropOverlay: byId("libraryDropOverlay"),
+        libraryLoading: byId("libraryLoading"),
+        libraryEmpty: byId("libraryEmpty"),
+        libraryGrid: byId("libraryGrid"),
       };
     }
 
@@ -281,6 +298,7 @@
 
     bindEvents() {
       this.el.newWorkspaceButton.addEventListener("click", () => this.showWorkspaceDialog("create"));
+      this.el.libraryButton.addEventListener("click", () => this.openLibrary());
       this.el.clearWorkspaceButton.addEventListener("click", () => this.requestClearWorkspace());
       this.el.workspaceForm.addEventListener("submit", (event) => this.saveWorkspaceName(event));
       this.el.workspaceClearForm.addEventListener("submit", (event) => this.clearWorkspace(event));
@@ -299,6 +317,10 @@
       this.el.workspaceList.addEventListener("drop", (event) => this.handleWorkspaceDrop(event));
       this.el.workspaceList.addEventListener("dragend", () => this.clearWorkspaceDragState());
       document.addEventListener("keydown", (event) => this.handleWorkspaceShortcut(event));
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !this.el.generationForm.hidden
+          && !document.querySelector("dialog[open]")) this.setComposerMode("chat");
+      });
       this.el.chatForm.addEventListener("submit", (event) => this.sendChatMessage(event));
       this.el.chatInput.addEventListener("keydown", (event) => {
         if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
@@ -335,6 +357,7 @@
         }
         this.handleJobClick(event);
       });
+      this.el.generationBackdrop.addEventListener("click", () => this.setComposerMode("chat"));
       this.el.generationBackButton.addEventListener("click", () => this.setComposerMode("chat"));
       this.el.modeSwitch.addEventListener("click", (event) => {
         const button = event.target.closest("[data-mode]");
@@ -343,9 +366,7 @@
       this.el.channelSelect.addEventListener("change", () => {
         this.applyChannel(null, true);
       });
-      [this.el.modelSelect, this.el.qualitySelect].forEach((field) => {
-        field.addEventListener("change", () => this.settingChanged());
-      });
+      this.el.modelSelect.addEventListener("change", () => this.settingChanged());
       this.el.formatSelect.addEventListener("change", () => {
         this.updateTransparentBackgroundState();
         this.settingChanged();
@@ -376,12 +397,23 @@
         this.settingChanged();
       });
       this.el.referenceAdd.addEventListener("click", () => this.openReferencePicker("generation"));
+      this.el.referenceLibrary.addEventListener("click", () => this.openLibrary("generation"));
       this.el.referenceInput.addEventListener("change", () => {
         this.uploadReferences([...this.el.referenceInput.files], this.uploadTarget);
       });
       this.el.referenceList.addEventListener("click", (event) => this.handleReferenceClick(event));
       this.el.generationForm.addEventListener("submit", (event) => this.submitGeneration(event));
+      this.el.detailSaveLibrary.addEventListener("click", () => this.saveDetailToLibrary());
       this.el.detailReuse.addEventListener("click", () => this.reuseDetailImage());
+      this.el.libraryUploadButton.addEventListener("click", () => this.el.libraryInput.click());
+      this.el.libraryInput.addEventListener("change", () => {
+        this.uploadLibraryImages([...this.el.libraryInput.files]);
+      });
+      this.el.libraryGrid.addEventListener("click", (event) => this.handleLibraryClick(event));
+      this.el.libraryDropArea.addEventListener("dragenter", (event) => this.handleLibraryDrag(event));
+      this.el.libraryDropArea.addEventListener("dragover", (event) => this.handleLibraryDrag(event));
+      this.el.libraryDropArea.addEventListener("dragleave", (event) => this.handleLibraryDragLeave(event));
+      this.el.libraryDropArea.addEventListener("drop", (event) => this.handleLibraryDrop(event));
       document.addEventListener("visibilitychange", () => {
         if (document.hidden) return;
         this.updateWorkspaceJobDisplays();
@@ -863,6 +895,7 @@
     setComposerMode(mode) {
       const generation = mode === "generation";
       this.el.chatForm.hidden = generation;
+      this.el.generationBackdrop.hidden = !generation;
       this.el.generationForm.hidden = !generation;
       this.updateInteractionState();
     }
@@ -967,7 +1000,7 @@
     applyChannel(saved = null, shouldSave = false) {
       const channel = this.currentChannel();
       if (!channel) {
-        [this.el.modelSelect, this.el.qualitySelect, this.el.formatSelect].forEach((field) => {
+        [this.el.modelSelect, this.el.formatSelect].forEach((field) => {
           field.replaceChildren();
           field.disabled = true;
         });
@@ -983,9 +1016,6 @@
       const settings = saved || this.collectSettings();
       this.fillSelect(this.el.modelSelect, channel.models, settings.model, "id", "label");
       this.fillSizeSuggestions(channel.capabilities.sizes, settings.size);
-      this.fillSelect(this.el.qualitySelect, channel.capabilities.qualities, settings.quality, null, null, {
-        auto: "自动", low: "低", medium: "中", high: "高",
-      });
       this.fillSelect(this.el.formatSelect, channel.capabilities.formats, settings.output_format, null, null, {
         png: "PNG", jpeg: "JPEG", webp: "WebP",
       });
@@ -1086,7 +1116,6 @@
         size: this.normalizeSize(this.el.sizeInput.value)
           || this.activeWorkspace?.settings?.size
           || "1024x1024",
-        quality: this.el.qualitySelect.value,
         output_format: this.el.formatSelect.value,
         compression: 90,
         transparent_background: this.el.transparentBackground.checked,
@@ -1865,13 +1894,19 @@
       }
     }
 
-    openGenerationComposer() {
+    openGenerationComposer(referenceIds = null) {
       if (this.workspaceLoading || !this.activeWorkspace
         || this.workspaceChatBusy() || this.workspaceHasActiveJob()
         || this.referenceUploadPending) return;
       const draft = this.el.chatInput.value.trim();
       const prompt = draft.slice(0, this.limits.max_prompt_characters);
-      const requested = [...this.currentChatSelection()];
+      const requested = referenceIds === null
+        ? [...this.currentChatSelection()]
+        : [...new Set(referenceIds)];
+      if (this.isAnimationWorkspace() && !requested.length
+        && !this.currentSelection().size && this.activeWorkspace.assets.length === 1) {
+        requested.push(this.activeWorkspace.assets[0].id);
+      }
       if (prompt.length < draft.length) UI.toast("描述过长，已按提示词长度上限截取", "info");
       this.showGenerationComposer(prompt, requested.length ? requested : null);
     }
@@ -1997,6 +2032,7 @@
         this.workspaceLoading || referenceUploading
           || (this.activeWorkspace?.assets.length || 0) >= this.limits.max_assets_per_workspace,
       );
+      setDisabled(this.el.referenceLibrary, this.workspaceLoading || referenceUploading);
       setDisabled(this.el.clearWorkspaceButton, locked || referenceUploading);
       this.el.workspaceList.querySelectorAll("[data-delete-workspace]").forEach((button) => {
         const workspaceId = button.dataset.deleteWorkspace;
@@ -2104,6 +2140,236 @@
       this.uploadReferences(files, "chat");
     }
 
+    async openLibrary(target = "") {
+      if (!this.activeWorkspace || this.workspaceLoading) return;
+      this.libraryTarget = target || (
+        this.isAnimationWorkspace() || !this.el.generationForm.hidden ? "generation" : "chat"
+      );
+      this.el.libraryTargetLabel.textContent = this.libraryTarget === "chat"
+        ? "随消息发送"
+        : this.isAnimationWorkspace() ? "设为母图" : "设为垫图";
+      if (this.libraryImages === null) this.libraryLoading = true;
+      this.renderLibrary();
+      UI.openDialog(this.el.libraryDialog);
+      if (this.libraryImages === null) await this.loadLibraryImages();
+    }
+
+    async loadLibraryImages() {
+      this.libraryLoading = true;
+      this.renderLibrary();
+      try {
+        const data = await UI.api("/api/library-images");
+        this.libraryImages = data.images || [];
+      } catch (error) {
+        UI.toast(error.message, "error");
+      } finally {
+        this.libraryLoading = false;
+        this.renderLibrary();
+      }
+    }
+
+    renderLibrary() {
+      const images = this.libraryImages || [];
+      setText(this.el.libraryCount, `${images.length} 张`);
+      setHidden(this.el.libraryLoading, !this.libraryLoading);
+      setHidden(this.el.libraryEmpty, this.libraryLoading || images.length > 0);
+      setHidden(this.el.libraryGrid, this.libraryLoading || images.length === 0);
+      setDisabled(this.el.libraryUploadButton, this.libraryLoading || this.libraryUploading);
+      const action = this.libraryTarget === "chat"
+        ? "随消息发送"
+        : this.isAnimationWorkspace() ? "设为母图" : "设为垫图";
+      this.el.libraryGrid.replaceChildren(...images.map((entry) => {
+        const card = document.createElement("article");
+        card.className = "library-card";
+        const use = document.createElement("button");
+        use.type = "button";
+        use.className = "library-use";
+        use.dataset.useLibraryImage = entry.id;
+        use.title = `${action}：${entry.name}`;
+        const thumbnail = document.createElement("span");
+        thumbnail.className = "library-thumbnail";
+        const image = document.createElement("img");
+        image.src = entry.url;
+        image.alt = entry.name;
+        image.loading = "lazy";
+        image.decoding = "async";
+        this.prepareImageReveal(image);
+        thumbnail.append(image);
+        const copy = document.createElement("span");
+        copy.className = "library-card-copy";
+        const name = document.createElement("strong");
+        name.textContent = entry.name;
+        const meta = document.createElement("small");
+        meta.textContent = `${entry.width} × ${entry.height} · ${UI.formatBytes(entry.bytes)}`;
+        copy.append(name, meta);
+        use.append(thumbnail, copy);
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "icon-button library-delete";
+        remove.dataset.deleteLibraryImage = entry.id;
+        remove.title = `从图库删除 ${entry.name}`;
+        remove.setAttribute("aria-label", remove.title);
+        remove.innerHTML = '<i data-lucide="trash-2"></i>';
+        card.append(use, remove);
+        return card;
+      }));
+      UI.icons(this.el.libraryGrid);
+    }
+
+    mergeLibraryImages(images) {
+      if (this.libraryImages === null) return;
+      const merged = new Map(
+        [...images, ...this.libraryImages].map((image) => [image.id, image]),
+      );
+      this.libraryImages = [...merged.values()];
+      this.renderLibrary();
+    }
+
+    async uploadLibraryImages(files) {
+      this.el.libraryInput.value = "";
+      if (!files.length || this.libraryLoading || this.libraryUploading) return;
+      const images = files.filter((file) => (
+        REFERENCE_IMAGE_TYPES.has(file.type.toLowerCase())
+        || REFERENCE_IMAGE_EXTENSION.test(file.name)
+      ));
+      if (!images.length) {
+        UI.toast("仅支持 PNG、JPEG 和 WebP 静态图片", "error");
+        return;
+      }
+      const data = new FormData();
+      images.forEach((file) => data.append("images", file, file.name));
+      this.libraryUploading = true;
+      this.renderLibrary();
+      try {
+        const payload = await UI.api("/api/library-images", { method: "POST", body: data });
+        this.mergeLibraryImages(payload.images || []);
+        UI.toast(
+          payload.added_count ? `已将 ${payload.added_count} 张图片存入图库` : "图库中已有这些图片",
+          "success",
+        );
+        if (files.length > images.length) {
+          UI.toast(`已忽略 ${files.length - images.length} 个不支持的文件`, "info");
+        }
+      } catch (error) {
+        UI.toast(error.message, "error");
+      } finally {
+        this.libraryUploading = false;
+        this.renderLibrary();
+      }
+    }
+
+    handleLibraryDrag(event) {
+      if (![...(event.dataTransfer?.types || [])].includes("Files")) return;
+      event.preventDefault();
+      const blocked = this.libraryLoading || this.libraryUploading;
+      event.dataTransfer.dropEffect = blocked ? "none" : "copy";
+      setHidden(this.el.libraryDropOverlay, blocked);
+    }
+
+    handleLibraryDragLeave(event) {
+      if (this.el.libraryDropArea.contains(event.relatedTarget)) return;
+      setHidden(this.el.libraryDropOverlay, true);
+    }
+
+    handleLibraryDrop(event) {
+      if (![...(event.dataTransfer?.types || [])].includes("Files")) return;
+      event.preventDefault();
+      setHidden(this.el.libraryDropOverlay, true);
+      this.uploadLibraryImages([...event.dataTransfer.files]);
+    }
+
+    async handleLibraryClick(event) {
+      const remove = event.target.closest("[data-delete-library-image]");
+      if (remove) {
+        const image = this.libraryImages?.find((entry) => entry.id === remove.dataset.deleteLibraryImage);
+        if (!image || !window.confirm(`从图库删除“${image.name}”？已复制到工作站的图片不会受影响。`)) return;
+        remove.disabled = true;
+        try {
+          await UI.api(`/api/library-images/${image.id}`, { method: "DELETE" });
+          this.libraryImages = this.libraryImages.filter((entry) => entry.id !== image.id);
+          this.renderLibrary();
+          UI.toast("已从图库删除", "success");
+        } catch (error) {
+          remove.disabled = false;
+          UI.toast(error.message, "error");
+        }
+        return;
+      }
+      const use = event.target.closest("[data-use-library-image]");
+      if (use) await this.useLibraryImage(use.dataset.useLibraryImage, use);
+    }
+
+    async useLibraryImage(imageId, button) {
+      if (!this.activeWorkspace || this.workspaceLoading || this.referenceUploadPending
+        || this.workspaceChatBusy() || this.workspaceHasActiveJob()) {
+        UI.toast("当前工作站忙碌，请稍后选择图片", "error");
+        return;
+      }
+      const workspace = this.activeWorkspace;
+      const target = this.libraryTarget;
+      const selection = target === "chat" ? this.currentChatSelection() : this.currentSelection();
+      const limit = this.referenceSelectionLimit(target, workspace);
+      const replacesAnimationMaster = workspace.kind === "animation" && target === "generation";
+      if (!replacesAnimationMaster && selection.size >= limit) {
+        UI.toast(target === "chat" ? `每条消息最多发送 ${limit} 张图片` : `当前渠道最多选择 ${limit} 张垫图`, "error");
+        return;
+      }
+      button.disabled = true;
+      try {
+        const data = await UI.api(
+          `/api/workspaces/${workspace.id}/assets/from-library/${imageId}`,
+          { method: "POST" },
+        );
+        if (!workspace.assets.some((asset) => asset.id === data.asset.id)) {
+          workspace.assets.push(data.asset);
+        }
+        if (replacesAnimationMaster) selection.clear();
+        selection.add(data.asset.id);
+        this.renderWorkspaceList();
+        this.renderReferences();
+        this.renderChatReferences();
+        UI.closeDialog(this.el.libraryDialog);
+        if (target === "chat") {
+          this.chatReferencePickerOpen = true;
+          this.setComposerMode("chat");
+          this.renderChatReferences();
+          this.el.chatInput.focus();
+          UI.toast("已加入待发送图片", "success");
+        } else {
+          this.setMode("img2img", true);
+          this.renderReferences();
+          if (this.el.generationForm.hidden) this.openGenerationComposer([data.asset.id]);
+          else this.el.promptInput.focus();
+          UI.toast(workspace.kind === "animation" ? "已设为母图" : "已选择垫图", "success");
+        }
+      } catch (error) {
+        button.disabled = false;
+        UI.toast(error.message, "error");
+      }
+    }
+
+    async saveLibrarySource(source, button) {
+      if (button.disabled) return;
+      button.disabled = true;
+      try {
+        const data = await UI.api("/api/library-images", { method: "POST", body: source });
+        this.mergeLibraryImages(data.images || []);
+        UI.toast(data.added_count ? "已存入图库" : "图库中已有这张图片", "success");
+      } catch (error) {
+        UI.toast(error.message, "error");
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    saveDetailToLibrary() {
+      if (!this.detailItemId) return;
+      return this.saveLibrarySource(
+        { generation_item_id: this.detailItemId },
+        this.el.detailSaveLibrary,
+      );
+    }
+
     renderChatReferences() {
       const assets = this.activeWorkspace?.assets || [];
       const uploads = this.pendingReferenceUploads();
@@ -2134,6 +2400,14 @@
         : "上传参考图";
       upload.innerHTML = '<i data-lucide="image-plus"></i>';
 
+      const library = document.createElement("button");
+      library.type = "button";
+      library.className = "chat-reference-add";
+      library.dataset.openLibrary = "chat";
+      library.title = "从图片库选择";
+      library.setAttribute("aria-label", library.title);
+      library.innerHTML = '<i data-lucide="library"></i>';
+
       const cards = visibleAssets.map((asset) => {
         const card = document.createElement("span");
         card.className = "chat-reference-item";
@@ -2156,7 +2430,14 @@
         remove.title = `删除 ${asset.name}`;
         remove.setAttribute("aria-label", `删除 ${asset.name}`);
         remove.innerHTML = '<i data-lucide="x"></i>';
-        card.append(toggle, remove);
+        const save = document.createElement("button");
+        save.type = "button";
+        save.className = "reference-library-save";
+        save.dataset.saveLibraryAsset = asset.id;
+        save.title = `将 ${asset.name} 存入图库`;
+        save.setAttribute("aria-label", save.title);
+        save.innerHTML = '<i data-lucide="bookmark-plus"></i>';
+        card.append(toggle, save, remove);
         return card;
       });
       const uploadCards = uploads.map((pending) => {
@@ -2185,7 +2466,7 @@
         return card;
       });
       this.el.chatReferenceList.replaceChildren(
-        ...(pickerOpen ? [upload] : []),
+        ...(pickerOpen ? [upload, library] : []),
         ...cards,
         ...uploadCards,
       );
@@ -2198,8 +2479,18 @@
         this.cancelReferenceUpload(cancelUpload.dataset.cancelReferenceUpload);
         return;
       }
+      const save = event.target.closest("[data-save-library-asset]");
+      if (save) {
+        await this.saveLibrarySource({ asset_id: save.dataset.saveLibraryAsset }, save);
+        return;
+      }
       if (this.workspaceLoading || this.workspaceChatBusy()
         || this.workspaceHasActiveJob() || this.referenceUploadPending) return;
+      const library = event.target.closest("[data-open-library]");
+      if (library) {
+        this.openLibrary("chat");
+        return;
+      }
       const remove = event.target.closest("[data-reference-remove]");
       if (remove) {
         await this.removeReference(remove.dataset.referenceRemove);
@@ -2253,7 +2544,14 @@
           remove.title = this.isAnimationWorkspace() ? "删除母图" : "删除垫图";
           remove.setAttribute("aria-label", remove.title);
           remove.innerHTML = '<i data-lucide="x"></i>';
-          card.append(toggle, remove);
+          const save = document.createElement("button");
+          save.type = "button";
+          save.className = "reference-library-save";
+          save.dataset.saveLibraryAsset = asset.id;
+          save.title = `将 ${asset.name} 存入图库`;
+          save.setAttribute("aria-label", save.title);
+          save.innerHTML = '<i data-lucide="bookmark-plus"></i>';
+          card.append(toggle, save, remove);
           return card;
         }),
         ...uploads.map((pending) => {
@@ -2435,6 +2733,11 @@
       const cancelUpload = event.target.closest("[data-cancel-reference-upload]");
       if (cancelUpload) {
         this.cancelReferenceUpload(cancelUpload.dataset.cancelReferenceUpload);
+        return;
+      }
+      const save = event.target.closest("[data-save-library-asset]");
+      if (save) {
+        await this.saveLibrarySource({ asset_id: save.dataset.saveLibraryAsset }, save);
         return;
       }
       if (this.workspaceLoading || this.referenceUploadPending) return;

@@ -4,6 +4,7 @@ from .billing import BillingService, SpendingSummary
 from .common import money
 from .conversation import ConversationService
 from .generations import GenerationService, SubmitGeneration
+from .image_library import ImageLibraryService
 from .retention import RetentionService
 from .runtime_logs import RuntimeLogService
 from .settings import RuntimeSettings, SystemSettingsService
@@ -19,6 +20,7 @@ __all__ = [
     "BillingService",
     "ConversationService",
     "GenerationService",
+    "ImageLibraryService",
     "RetentionService",
     "RuntimeLogService",
     "RuntimeSettings",

@@ -110,7 +110,6 @@ class RuntimeConfigService:
                             raw, "capabilities", "max_reference_total_mb"
                         ),
                         "sizes": _strings(raw.get("capabilities"), "sizes"),
-                        "qualities": _strings(raw.get("capabilities"), "qualities"),
                         "formats": _strings(raw.get("capabilities"), "formats"),
                     },
                     "limits": {

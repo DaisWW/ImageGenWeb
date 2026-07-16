@@ -1,6 +1,14 @@
 const path = require("node:path");
 const { test, expect } = require("@playwright/test");
 
+async function closeGenerationComposer(page) {
+  if (page.viewportSize().width >= 640) {
+    await page.locator("#generationBackdrop").click({ position: { x: 10, y: 10 } });
+  } else {
+    await page.locator("#generationBackButton").click();
+  }
+}
+
 test("workspace lifecycle remains usable", async ({ page }, testInfo) => {
   await page.goto("/login");
   await page.getByLabel("用户名").fill("e2e-admin");
@@ -19,6 +27,20 @@ test("workspace lifecycle remains usable", async ({ page }, testInfo) => {
   await page.locator('#workspaceForm button[type="submit"]').click();
   await expect(page.locator("#workspaceTitle")).toHaveText(createdName);
 
+  await page.locator("#libraryButton").click();
+  await expect(page.locator("#libraryDialog")).toBeVisible();
+  await expect(page.locator("#libraryTargetLabel")).toHaveText("随消息发送");
+  await page.locator("#libraryInput").setInputFiles(
+    path.resolve("static/assets/starter-ocean-sky-reference.png"),
+  );
+  const libraryImage = page.locator("#libraryGrid .library-card", {
+    hasText: "starter-ocean-sky-reference.png",
+  }).first();
+  await expect(libraryImage).toBeVisible();
+  await libraryImage.locator("[data-use-library-image]").click();
+  await expect(page.locator("#libraryDialog")).toBeHidden();
+  await expect(page.locator("#chatReferenceCount")).toHaveText("1");
+
   const chatInput = page.locator("#chatInput");
   await expect(chatInput).toBeEditable();
   await chatInput.fill("新工作站无需刷新即可输入");
@@ -32,8 +54,20 @@ test("workspace lifecycle remains usable", async ({ page }, testInfo) => {
   await page.locator("#directGenerationButton").click();
   await expect(page.locator("#generationForm")).toBeVisible();
   await expect(page.locator("#promptInput")).toHaveValue("新工作站无需刷新即可输入");
+  await expect(page.locator("#qualitySelect")).toHaveCount(0);
   expect(promptDraftRequests).toBe(0);
-  await page.locator("#generationBackButton").click();
+  if (page.viewportSize().width >= 640) {
+    await expect(page.locator("#generationBackButton")).toBeHidden();
+    await closeGenerationComposer(page);
+    await expect(page.locator("#generationForm")).toBeHidden();
+    await page.locator("#directGenerationButton").click();
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#generationForm")).toBeHidden();
+    await page.locator("#directGenerationButton").click();
+  } else {
+    await expect(page.locator("#generationBackButton")).toBeVisible();
+  }
+  await closeGenerationComposer(page);
   await expect(chatInput).toHaveValue("新工作站无需刷新即可输入");
 
   await chatInput.blur();
@@ -74,9 +108,13 @@ test("animation workstation only generates frames from a user-selected master", 
   await expect(page.locator("#generateButton")).toHaveAttribute("title", "请先添加并选择一张母图");
   await expect(page.locator("body")).not.toContainText("生成母图");
 
-  await page.locator("#referenceInput").setInputFiles(
+  await page.locator("#referenceLibrary").click();
+  await expect(page.locator("#libraryTargetLabel")).toHaveText("设为母图");
+  await page.locator("#libraryInput").setInputFiles(
     path.resolve("static/assets/starter-ocean-sky-reference.png"),
   );
+  await page.locator("#libraryGrid [data-use-library-image]").first().click();
+  await expect(page.locator("#libraryDialog")).toBeHidden();
   await expect(page.locator("#referenceList .reference-card.selected")).toHaveCount(1);
   await expect(page.locator("#referenceLimit")).toHaveText("1 / 1");
   await expect(page.locator("#modeSwitch")).toHaveAttribute("data-mode", "img2img");
@@ -87,7 +125,56 @@ test("animation workstation only generates frames from a user-selected master", 
   await master.click();
   await expect(page.locator("#generateButton")).toHaveAttribute("title", "");
 
-  await page.locator("#generationBackButton").click();
+  await master.click();
+  await closeGenerationComposer(page);
+  await page.locator("#directGenerationButton").click();
+  await expect(page.locator("#referenceList .reference-card.selected")).toHaveCount(1);
+  await expect(page.locator("#generateButton")).toHaveAttribute("title", "");
+
+  await closeGenerationComposer(page);
+  const workspace = page.locator("#workspaceList .workspace-item", { hasText: workspaceName });
+  await workspace.locator("[data-delete-workspace]").click();
+  await page.locator('#workspaceDeleteForm button[type="submit"]').click();
+});
+
+test("image library keeps the selected animation master when chat has an attachment", async ({ page }, testInfo) => {
+  await page.goto("/login");
+  await page.getByLabel("用户名").fill("e2e-admin");
+  await page.getByLabel("密码").fill("E2eStrongPass123!");
+  await page.getByRole("button", { name: "进入工作台" }).click();
+
+  const workspaceName = `E2E-Library-${testInfo.project.name}-${Date.now()}`;
+  await page.locator("#newWorkspaceButton").click();
+  await page.locator("#workspaceNameInput").fill(workspaceName);
+  await page.locator('#workspaceKindSwitch [data-workspace-kind="animation"]').click();
+  await page.locator('#workspaceForm button[type="submit"]').click();
+
+  await page.locator("#chatReferenceButton").click();
+  await page.locator('[data-open-library="chat"]').click();
+  await expect(page.locator("#libraryTargetLabel")).toHaveText("随消息发送");
+  await page.locator("#libraryInput").setInputFiles(
+    path.resolve("static/assets/brand-mark-v2.png"),
+  );
+  const chatImage = page.locator("#libraryGrid .library-card", { hasText: "brand-mark-v2.png" });
+  await expect(chatImage).toHaveCount(1);
+  await chatImage.locator(".library-use").click();
+  await expect(page.locator("#chatReferenceCount")).toHaveText("1");
+
+  await page.locator("#libraryButton").click();
+  await expect(page.locator("#libraryTargetLabel")).toHaveText("设为母图");
+  await page.locator("#libraryInput").setInputFiles(
+    path.resolve("static/assets/starter-ocean-sky-reference.png"),
+  );
+  const master = page.locator("#libraryGrid .library-card", { hasText: "starter-ocean" });
+  await master.locator(".library-use").click();
+
+  await expect(page.locator("#generationForm")).toBeVisible();
+  await expect(page.locator("#referenceList .reference-card.selected img"))
+    .toHaveAttribute("alt", "starter-ocean-sky-reference.png");
+  await expect(page.locator("#referenceLimit")).toHaveText("1 / 1");
+  await expect(page.locator("#generateButton")).toHaveAttribute("title", "");
+
+  await closeGenerationComposer(page);
   const workspace = page.locator("#workspaceList .workspace-item", { hasText: workspaceName });
   await workspace.locator("[data-delete-workspace]").click();
   await page.locator('#workspaceDeleteForm button[type="submit"]').click();
@@ -119,7 +206,7 @@ test("active generation locks prompt reuse without trapping the composer", async
     prompt: "正在生成的提示词",
     model: "e2e-model",
     size: "1024x1024",
-    quality: "auto",
+    quality: "high",
     output_format: "png",
     compression: null,
     transparent_background: false,
@@ -193,7 +280,11 @@ test("active generation locks prompt reuse without trapping the composer", async
     button.click();
   });
   await expect(page.locator("#generationForm")).toBeVisible();
-  await expect(page.locator("#generationBackButton")).toBeEnabled();
-  await page.locator("#generationBackButton").click();
+  if (page.viewportSize().width >= 640) {
+    await expect(page.locator("#generationBackButton")).toBeHidden();
+  } else {
+    await expect(page.locator("#generationBackButton")).toBeEnabled();
+  }
+  await closeGenerationComposer(page);
   await expect(page.locator("#chatForm")).toBeVisible();
 });

@@ -187,6 +187,24 @@ class Asset(TimestampMixin, db.Model):
     workspace: Mapped[Workspace] = relationship(back_populates="assets")
 
 
+class LibraryImage(TimestampMixin, db.Model):
+    __tablename__ = "library_images"
+    __table_args__ = (
+        UniqueConstraint("user_id", "sha256", name="uq_library_images_user_sha256"),
+        Index("ix_library_images_user_created", "user_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(db.String(32), primary_key=True, default=new_public_id)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    original_name: Mapped[str] = mapped_column(db.String(255))
+    storage_path: Mapped[str] = mapped_column(db.String(500), unique=True)
+    mime_type: Mapped[str] = mapped_column(db.String(50))
+    byte_count: Mapped[int]
+    width: Mapped[int]
+    height: Mapped[int]
+    sha256: Mapped[str] = mapped_column(db.String(64))
+
+
 class GenerationJob(TimestampMixin, db.Model):
     __tablename__ = "generation_jobs"
     __table_args__ = (

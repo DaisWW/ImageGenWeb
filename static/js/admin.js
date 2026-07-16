@@ -742,7 +742,6 @@
 
       const capabilities = channel?.capabilities || {};
       this.setChecks(form, "mode", capabilities.modes || ["text2img", "img2img"], ["text2img", "img2img"]);
-      this.setChecks(form, "quality", capabilities.qualities || ["auto"], ["auto", "low", "medium", "high"]);
       this.setChecks(form, "format", capabilities.formats || ["png"], ["png", "jpeg", "webp"]);
       form.elements.sizes.value = (capabilities.sizes || ["1024x1024"]).join(", ");
       form.elements.max_reference_images.value = capabilities.max_reference_images ?? 1;
@@ -832,7 +831,6 @@
         models,
         capabilities: {
           modes: this.readChecks(form, "mode", ["text2img", "img2img"]),
-          qualities: this.readChecks(form, "quality", ["auto", "low", "medium", "high"]),
           formats: this.readChecks(form, "format", ["png", "jpeg", "webp"]),
           sizes: form.elements.sizes.value.split(",").map((value) => value.trim()).filter(Boolean),
           max_reference_images: Number(form.elements.max_reference_images.value),

@@ -27,6 +27,7 @@ from .services import (
     BillingService,
     ConversationService,
     GenerationService,
+    ImageLibraryService,
     RuntimeLogService,
     SystemSettingsService,
     UserService,
@@ -125,6 +126,7 @@ def create_app(config: dict | None = None) -> Flask:
             BASE_DIR / "static" / "assets" / "starter-ocean-sky-reference.png",
             settings,
         ),
+        image_library=ImageLibraryService(storage),
         generations=GenerationService(channels, billing, settings),
         conversations=ConversationService(
             chat_models,

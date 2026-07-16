@@ -33,6 +33,7 @@ from .workspace_settings import sanitize_workspace_settings
 _DURATION_SAMPLE_LIMIT = 50
 _DURATION_SAMPLE_TARGET = 8
 _DURATION_TRIM_RATIO = 0.1
+_GENERATION_QUALITY = "high"
 
 
 def _duration_values(values: Iterable[Decimal | float | int | None]) -> list[float]:
@@ -68,7 +69,6 @@ class SubmitGeneration:
     mode: str
     prompt: str
     size: str
-    quality: str
     output_format: str
     compression: int
     batch_count: int
@@ -144,7 +144,7 @@ class GenerationService:
             prompt=request.prompt.strip(),
             model=selected_model.identifier,
             size=normalized_size,
-            quality=request.quality,
+            quality=_GENERATION_QUALITY,
             output_format=request.output_format,
             compression=request.compression,
             transparent_background=request.transparent_background,
@@ -190,7 +190,6 @@ class GenerationService:
                 "channel_id": request.channel_id,
                 "model": selected_model.identifier,
                 "size": normalized_size,
-                "quality": request.quality,
                 "output_format": request.output_format,
                 "compression": request.compression,
                 "transparent_background": request.transparent_background,
@@ -580,8 +579,6 @@ class GenerationService:
         if not prompt or len(prompt) > runtime.max_prompt_characters:
             raise ServiceError(f"提示词长度必须在 1 到 {runtime.max_prompt_characters} 个字符之间")
         normalized_size = normalize_image_size(request.size)
-        if request.quality not in channel.capabilities.qualities:
-            raise ServiceError(f"{channel.label} 不支持质量 {request.quality}")
         if request.output_format not in channel.capabilities.formats:
             raise ServiceError(f"{channel.label} 不支持格式 {request.output_format}")
         if request.transparent_background and request.output_format not in {"png", "webp"}:

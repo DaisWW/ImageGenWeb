@@ -15,7 +15,6 @@ from .base import ReloadableConfigRegistry
 SUPPORTED_ADAPTERS = {"openai_images"}
 SUPPORTED_MODES = {"text2img", "img2img"}
 SUPPORTED_FORMATS = {"png", "jpeg", "webp"}
-SUPPORTED_QUALITIES = {"auto", "low", "medium", "high"}
 
 
 @dataclass(frozen=True)
@@ -25,7 +24,6 @@ class ChannelCapabilities:
     max_reference_image_mb: int
     max_reference_total_mb: int
     sizes: tuple[str, ...]
-    qualities: tuple[str, ...]
     formats: tuple[str, ...]
 
 
@@ -89,7 +87,6 @@ class Channel:
                 "max_reference_image_mb": self.capabilities.max_reference_image_mb,
                 "max_reference_total_mb": self.capabilities.max_reference_total_mb,
                 "sizes": list(self.capabilities.sizes),
-                "qualities": list(self.capabilities.qualities),
                 "formats": list(self.capabilities.formats),
             },
             "limits": {"max_concurrency": self.limits.max_concurrency},
@@ -119,7 +116,6 @@ class Channel:
                 "max_reference_image_mb": self.capabilities.max_reference_image_mb,
                 "max_reference_total_mb": self.capabilities.max_reference_total_mb,
                 "sizes": list(self.capabilities.sizes),
-                "qualities": list(self.capabilities.qualities),
                 "formats": list(self.capabilities.formats),
             },
             "limits": {
@@ -266,12 +262,9 @@ class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
         if not modes or not set(modes) <= SUPPORTED_MODES:
             raise ValueError(f"{label} 的 modes 仅支持 text2img/img2img")
         formats = _string_tuple(capabilities_raw.get("formats", ["png"]), f"{label}.formats")
-        qualities = _string_tuple(capabilities_raw.get("qualities", ["auto"]), f"{label}.qualities")
         sizes = _string_tuple(capabilities_raw.get("sizes", ["1024x1024"]), f"{label}.sizes")
         if not set(formats) <= SUPPORTED_FORMATS:
             raise ValueError(f"{label} 包含不支持的输出格式")
-        if not set(qualities) <= SUPPORTED_QUALITIES:
-            raise ValueError(f"{label} 包含不支持的质量参数")
 
         capabilities = ChannelCapabilities(
             modes=modes,
@@ -283,7 +276,6 @@ class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
                 capabilities_raw, "max_reference_total_mb", 40, 1, 100
             ),
             sizes=sizes,
-            qualities=qualities,
             formats=formats,
         )
         if "img2img" in modes and capabilities.max_reference_images < 1:

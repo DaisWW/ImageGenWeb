@@ -95,6 +95,13 @@ class ImageStorage:
             sha256=hashlib.sha256(content).hexdigest(),
         )
 
+    def inspect_static(self, content: bytes) -> StoredImage:
+        inspected = self.inspect(content)
+        with Image.open(io.BytesIO(content)) as image:
+            if getattr(image, "n_frames", 1) > 1:
+                raise InvalidImageError("图库仅支持静态图片")
+        return inspected
+
     def save_reference(
         self,
         *,
@@ -106,6 +113,27 @@ class ImageStorage:
         inspected = self.inspect(content)
         relative = Path("users") / str(user_id) / "workspaces" / workspace_id / "references"
         relative /= f"{asset_id}.{inspected.extension}"
+        self._atomic_write(relative, content)
+        return StoredImage(
+            relative_path=relative.as_posix(),
+            mime_type=inspected.mime_type,
+            extension=inspected.extension,
+            byte_count=inspected.byte_count,
+            width=inspected.width,
+            height=inspected.height,
+            sha256=inspected.sha256,
+        )
+
+    def save_library_image(
+        self,
+        *,
+        user_id: int,
+        image_id: str,
+        content: bytes,
+    ) -> StoredImage:
+        inspected = self.inspect_static(content)
+        relative = Path("users") / str(user_id) / "library"
+        relative /= f"{image_id}.{inspected.extension}"
         self._atomic_write(relative, content)
         return StoredImage(
             relative_path=relative.as_posix(),

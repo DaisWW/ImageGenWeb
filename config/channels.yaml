@@ -28,7 +28,6 @@ channels:
       max_reference_image_mb: 10
       max_reference_total_mb: 40
       sizes: [1024x1024, 1536x1024, 1024x1536]
-      qualities: [auto, low, medium, high]
       formats: [png, jpeg, webp]
     limits:
       # 上游余额或频控问题解决并复测前，暂采用此值。
@@ -55,7 +54,6 @@ channels:
       max_reference_image_mb: 10
       max_reference_total_mb: 40
       sizes: [1024x1024, 1536x1024, 1024x1536]
-      qualities: [auto, low, medium, high]
       formats: [png, jpeg, webp]
     limits:
       # 2026-07-14：8 路/16 张图片测试通过；4 路可保留稳定延迟余量。
