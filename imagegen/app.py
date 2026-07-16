@@ -97,13 +97,19 @@ def create_app(config: dict | None = None) -> Flask:
     users = UserService(auth)
     settings = SystemSettingsService()
     runtime_logs = RuntimeLogService()
+    workspaces = WorkspaceService(
+        storage,
+        billing,
+        BASE_DIR / "static" / "assets" / "starter-ocean-sky-reference.png",
+        settings,
+    )
     repository = RuntimeConfigRepository(SecretCipher(app.config["CONFIG_ENCRYPTION_KEY"]))
 
     with app.app_context():
         if app.config.get("AUTO_CREATE_DB", True):
             db.create_all()
             _bootstrap_internal_state()
-        _bootstrap_admin(app, users)
+        _bootstrap_admin(app, users, workspaces)
         channels = ChannelRegistry(
             app.config["CHANNEL_CONFIG_PATH"],
             repository.load_channels,
@@ -120,12 +126,7 @@ def create_app(config: dict | None = None) -> Flask:
         auth=auth,
         billing=billing,
         users=users,
-        workspaces=WorkspaceService(
-            storage,
-            billing,
-            BASE_DIR / "static" / "assets" / "starter-ocean-sky-reference.png",
-            settings,
-        ),
+        workspaces=workspaces,
         image_library=ImageLibraryService(storage),
         generations=GenerationService(channels, billing, settings),
         conversations=ConversationService(
@@ -250,7 +251,7 @@ def _register_handlers(app: Flask) -> None:
         return f"{message}{f'（错误 ID：{error_id}）' if error_id else ''}", 500
 
 
-def _bootstrap_admin(app: Flask, users: UserService) -> None:
+def _bootstrap_admin(app: Flask, users: UserService, workspaces: WorkspaceService) -> None:
     if db.session.query(User.id).first() is not None:
         return
     username = os.environ.get("ADMIN_USERNAME", "").strip()
@@ -258,13 +259,20 @@ def _bootstrap_admin(app: Flask, users: UserService) -> None:
     if not username or not password:
         app.logger.warning("数据库为空；请设置 ADMIN_USERNAME 和 ADMIN_PASSWORD 以创建首个管理员")
         return
-    users.create(
-        username=username,
-        password=password,
-        display_name="系统管理员",
-        role="admin",
-        actor_user_id=None,
-    )
+    try:
+        user = users.create(
+            username=username,
+            password=password,
+            display_name="系统管理员",
+            role="admin",
+            actor_user_id=None,
+            commit=False,
+        )
+        workspaces.ensure_starter_workspaces(user.id)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        raise
     app.logger.info("已创建初始管理员：%s", username)
 
 

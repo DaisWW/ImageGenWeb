@@ -29,6 +29,7 @@ class UserService:
         generation_concurrency: int = 2,
         role: str = "user",
         actor_user_id: int | None = None,
+        commit: bool = True,
     ) -> User:
         username = username.strip()
         if not USERNAME_PATTERN.fullmatch(username):
@@ -79,7 +80,8 @@ class UserService:
                 details={"username": user.username, "role": role},
             )
         )
-        db.session.commit()
+        if commit:
+            db.session.commit()
         return user
 
     def update_status(self, user_id: int, status: str, actor_user_id: int) -> User:

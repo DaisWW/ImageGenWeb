@@ -35,23 +35,31 @@ def admin_users():
 @admin_required
 def admin_create_user():
     data = json_body()
+    application_services = services()
     try:
         concurrency = int(
             data.get(
                 "generation_concurrency",
-                services().settings.runtime().default_user_concurrency,
+                application_services.settings.runtime().default_user_concurrency,
             )
         )
     except (TypeError, ValueError) as exc:
         raise ServiceError("用户并发必须是整数") from exc
-    user = services().users.create(
-        username=str(data.get("username", "")),
-        display_name=str(data.get("display_name", "")),
-        password=str(data.get("password", "")),
-        balance_rmb=data.get("balance_rmb", "0"),
-        generation_concurrency=concurrency,
-        actor_user_id=current_user.id,
-    )
+    try:
+        user = application_services.users.create(
+            username=str(data.get("username", "")),
+            display_name=str(data.get("display_name", "")),
+            password=str(data.get("password", "")),
+            balance_rmb=data.get("balance_rmb", "0"),
+            generation_concurrency=concurrency,
+            actor_user_id=current_user.id,
+            commit=False,
+        )
+        application_services.workspaces.ensure_starter_workspaces(user.id)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        raise
     return jsonify(user=user_dict(user)), 201
 
 
