@@ -9,7 +9,6 @@ param(
     [switch]$Lan,
     [switch]$LocalOnly,
     [switch]$SkipFirewall,
-    [switch]$SkipAutostart,
     [switch]$NoBuild,
     [switch]$FirewallOnly
 )
@@ -23,7 +22,6 @@ if ($LocalOnly) {
 
 $projectDir = $PSScriptRoot
 $envPath = Join-Path $projectDir ".env"
-$autostartScript = Join-Path $projectDir "docker-autostart.ps1"
 $firewallRuleName = "Snow AI Studio LAN"
 
 function Test-IsAdministrator {
@@ -182,25 +180,6 @@ function Test-CurrentStackOwnsPort {
     return $exitCode -eq 0 -and ($publishedPort -match ":$ListenPort$")
 }
 
-function Install-LoginAutostart {
-    $startupDir = [Environment]::GetFolderPath("Startup")
-    if ([string]::IsNullOrWhiteSpace($startupDir)) {
-        throw "找不到 Windows 启动文件夹。"
-    }
-
-    $powerShellPath = Resolve-PowerShellHost
-    $shortcutPath = Join-Path $startupDir "Snow AI Studio Docker.lnk"
-    $shell = New-Object -ComObject WScript.Shell
-    $shortcut = $shell.CreateShortcut($shortcutPath)
-    $shortcut.TargetPath = $powerShellPath
-    $shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$autostartScript`""
-    $shortcut.WorkingDirectory = $projectDir
-    $shortcut.WindowStyle = 7
-    $shortcut.Description = "Windows 登录后启动 Docker Desktop 和 Snow AI Studio。"
-    $shortcut.Save()
-    Write-Host "已注册 Windows 登录自启动：$shortcutPath" -ForegroundColor Green
-}
-
 function Get-LanAddresses {
     return Get-NetIPConfiguration -ErrorAction SilentlyContinue |
         Where-Object {
@@ -221,12 +200,20 @@ try {
     if (-not (Get-Command docker.exe -ErrorAction SilentlyContinue)) {
         throw "找不到 docker.exe，请先安装 Docker Desktop。"
     }
-    if (-not (Test-Path -LiteralPath $autostartScript)) {
-        throw "找不到自启动脚本：$autostartScript"
+
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "SilentlyContinue"
+        docker info *> $null
+        $dockerReady = $LASTEXITCODE -eq 0
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    if (-not $dockerReady) {
+        throw "Docker 引擎未运行。请启动 Docker Desktop 后重试。"
     }
 
     $generatedAdminPassword = Initialize-EnvironmentFile
-    & $autostartScript -WaitForDockerOnly
 
     if (-not (Test-PortAvailable -ListenPort $Port) -and -not (Test-CurrentStackOwnsPort -ListenPort $Port)) {
         throw "端口 $Port 已被其他进程占用。请停止占用进程，或使用 -Port 选择其他端口。"
@@ -258,10 +245,6 @@ try {
     if (-not $healthy) {
         docker compose --project-directory $projectDir ps
         throw "服务未能在 3 分钟内通过健康检查。请运行：docker compose logs web worker"
-    }
-
-    if (-not $SkipAutostart) {
-        Install-LoginAutostart
     }
 
     if ($Lan -and -not $SkipFirewall) {

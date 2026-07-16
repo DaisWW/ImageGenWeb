@@ -36,7 +36,7 @@ tests/integration/ 业务与 HTTP 合同测试
 .\deploy-docker.cmd
 ```
 
-通过 `deploy-docker.cmd` 启动时，脚本默认监听所有网卡的 `18081` 端口，并配置仅允许本地子网访问的 Windows 防火墙规则；同时自动生成数据库密码、加密密钥和首次管理员密码，构建容器、等待健康检查、注册当前用户登录自启。
+通过 `deploy-docker.cmd` 启动时，脚本默认监听所有网卡的 `18081` 端口，并配置仅允许本地子网访问的 Windows 防火墙规则；同时自动生成数据库密码、加密密钥和首次管理员密码，构建容器并等待健康检查。
 
 如需仅允许本机访问，可显式启用本机模式：
 
@@ -62,9 +62,9 @@ Compose 包含三个容器：
 
 当前架构明确只支持一个 Gunicorn Web 进程和一个 Worker。登录限流、对话与工作站互斥是 Web 进程内状态，Worker 则通过数据库租约拒绝第二个活跃实例；不要通过增加 Gunicorn worker 数或复制 Compose 服务进行水平扩容。
 
-数据库与图片分别保存在 `postgres-data`、`imagegen-data` 命名卷。渠道、模型、价格、队列和上下文配置也保存在 PostgreSQL，重建容器不需要重新修改 YAML。服务默认 `restart: unless-stopped`：Docker 引擎恢复后容器会自动恢复。Windows Docker Desktop 由启动目录入口在当前用户登录后启动；Linux Docker Engine 设置为系统服务后可在无人登录时随系统启动。
+数据库与图片分别保存在 `postgres-data`、`imagegen-data` 命名卷。渠道、模型、价格、队列和上下文配置也保存在 PostgreSQL，重建容器不需要重新修改 YAML。服务默认 `restart: unless-stopped`：Docker 引擎恢复后容器会自动恢复。Windows 如需登录后自动恢复服务，请在 Docker Desktop 中启用 `Start Docker Desktop when you sign in`；Linux Docker Engine 设置为系统服务后可在无人登录时随系统启动。
 
-工程目录迁移后重新运行一次 `deploy-docker.cmd`，脚本会更新登录自启快捷方式；固定 Compose 项目名会继续使用原有数据库和图片卷。
+工程目录迁移后，固定 Compose 项目名会继续使用原有数据库和图片卷。
 
 查看日志与更新：
 
