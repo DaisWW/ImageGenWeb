@@ -36,15 +36,15 @@ tests/integration/ 业务与 HTTP 合同测试
 .\deploy-docker.cmd
 ```
 
-脚本默认只监听 `127.0.0.1:18081`；同时自动生成数据库密码、加密密钥和首次管理员密码，构建容器、等待健康检查、注册当前用户登录自启。
+通过 `deploy-docker.cmd` 启动时，脚本默认监听所有网卡的 `18081` 端口，并配置仅允许本地子网访问的 Windows 防火墙规则；同时自动生成数据库密码、加密密钥和首次管理员密码，构建容器、等待健康检查、注册当前用户登录自启。
 
-确需在可信局域网共享时，显式启用 LAN 模式：
+如需仅允许本机访问，可显式启用本机模式：
 
 ```powershell
-.\deploy-docker.ps1 -Lan
+.\deploy-docker.cmd -LocalOnly
 ```
 
-LAN 模式会监听所有网卡并配置仅允许本地子网访问的 Windows 防火墙规则。它仍使用明文 HTTP，登录密码和会话 Cookie 可被同网段观察；跨机器或跨网段共享前必须配置 TLS 反向代理，并设置 `COOKIE_SECURE=true`、`TRUST_PROXY_HEADERS=true`。后一个开关只适用于请求必经一个可信反向代理的部署，不能在应用直接暴露时启用。`-LocalOnly` 仅为旧部署脚本兼容参数，新部署无需指定。
+直接运行 `deploy-docker.ps1` 时仍默认仅允许本机访问，可通过 `-Lan` 显式启用 LAN 模式。LAN 模式仍使用明文 HTTP，登录密码和会话 Cookie 可被同网段观察；跨机器或跨网段共享前必须配置 TLS 反向代理，并设置 `COOKIE_SECURE=true`、`TRUST_PROXY_HEADERS=true`。后一个开关只适用于请求必经一个可信反向代理的部署，不能在应用直接暴露时启用。
 
 端口被占用时可从 PowerShell 指定其他端口：
 

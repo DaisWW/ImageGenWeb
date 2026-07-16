@@ -2,7 +2,8 @@
 chcp 65001 >nul
 setlocal EnableExtensions
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0deploy-docker.ps1" %*
+rem 产品需求：此入口必须默认启用局域网访问；仅在显式传入 -LocalOnly 时改为仅本机访问。
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0deploy-docker.ps1" -Lan %*
 set "exit_code=%ERRORLEVEL%"
 
 echo.
