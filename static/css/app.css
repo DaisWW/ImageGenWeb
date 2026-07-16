@@ -1971,6 +1971,11 @@ select option {
   animation: generation-composer-in 220ms var(--ease-out) both;
 }
 
+.generation-composer.is-closing {
+  animation: generation-composer-out 220ms ease-in both;
+  pointer-events: none;
+}
+
 .generation-composer .composer-controls {
   width: 100%;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3721,6 +3726,11 @@ tbody tr:hover td {
 @keyframes generation-composer-in {
   from { opacity: 0; transform: translateX(100%); }
   to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes generation-composer-out {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(100%); }
 }
 
 @keyframes backdrop-in {

@@ -367,6 +367,12 @@
       });
       this.el.generationBackdrop.addEventListener("click", () => this.setComposerMode("chat"));
       this.el.generationBackButton.addEventListener("click", () => this.setComposerMode("chat"));
+      this.el.generationForm.addEventListener("animationend", (event) => {
+        if (event.animationName !== "generation-composer-out") return;
+        this.el.generationForm.hidden = true;
+        this.el.generationBackdrop.hidden = true;
+        this.el.generationForm.classList.remove("is-closing");
+      });
       this.el.modeSwitch.addEventListener("click", (event) => {
         const button = event.target.closest("[data-mode]");
         if (button && !button.disabled) this.setMode(button.dataset.mode, true);
@@ -806,7 +812,7 @@
       this.messages = [];
       this.conversationContext = null;
       this.chatReferencePickerOpen = false;
-      this.setWorkspaceLoading(true, selection);
+      this.setWorkspaceLoading(!knownEmpty, selection);
       this.el.chatInput.value = this.chatDrafts.get(workspace.id) || "";
       this.renderWorkspaceList();
       this.el.workspaceTitle.textContent = workspace.name;
@@ -819,7 +825,7 @@
       this.animateWorkspaceIn();
       if (!knownEmpty) await Promise.all([this.loadJobs(), this.loadMessages()]);
       if (selection !== this.workspaceLoadSequence) return;
-      this.setWorkspaceLoading(false, selection);
+      if (!knownEmpty) this.setWorkspaceLoading(false, selection);
     }
 
     loadLastWorkspaceId() {
@@ -921,8 +927,13 @@
     setComposerMode(mode) {
       const generation = mode === "generation";
       this.el.chatForm.hidden = generation || !this.activeWorkspace;
-      this.el.generationBackdrop.hidden = !generation;
-      this.el.generationForm.hidden = !generation;
+      if (!generation && !this.el.generationForm.hidden) {
+        this.el.generationForm.classList.add("is-closing");
+      } else {
+        this.el.generationForm.classList.remove("is-closing");
+        this.el.generationBackdrop.hidden = !generation;
+        this.el.generationForm.hidden = !generation;
+      }
       this.updateInteractionState();
     }
 

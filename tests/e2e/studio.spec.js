@@ -47,6 +47,19 @@ test("deleting the last workspace leaves the workspace list empty", {
 
 test("new workspace is interactive while history is delayed", async ({ studioPage: page }) => {
   await expect(page.locator("#chatInput")).toBeEditable();
+  await page.evaluate(() => {
+    window.__workspaceLockTransitions = 0;
+    window.__workspaceLockObserver = new MutationObserver((records) => {
+      window.__workspaceLockTransitions += records.filter((record) => (
+        record.attributeName === "disabled" && record.oldValue === null
+      )).length;
+    });
+    window.__workspaceLockObserver.observe(document.getElementById("chatInput"), {
+      attributes: true,
+      attributeFilter: ["disabled"],
+      attributeOldValue: true,
+    });
+  });
 
   let releaseLoads;
   const loadsReleased = new Promise((resolve) => {
@@ -62,6 +75,10 @@ test("new workspace is interactive while history is delayed", async ({ studioPag
     await createWorkspace(page, name);
     await expect(page.locator("#chatInput")).toBeEditable({ timeout: 1000 });
     await expect(page.locator("#directGenerationButton")).toBeEnabled({ timeout: 1000 });
+    expect(await page.evaluate(() => {
+      window.__workspaceLockObserver.disconnect();
+      return window.__workspaceLockTransitions;
+    })).toBe(0);
   } finally {
     releaseLoads();
   }
@@ -110,6 +127,8 @@ test("workspace lifecycle remains usable", { tag: "@responsive" }, async ({
   if (page.viewportSize().width >= 640) {
     await expect(page.locator("#generationBackButton")).toBeHidden();
     await closeGenerationComposer(page);
+    await expect(page.locator("#generationForm")).toHaveClass(/is-closing/);
+    await expect(page.locator("#generationForm")).toHaveCSS("animation-name", "generation-composer-out");
     await expect(page.locator("#generationForm")).toBeHidden();
     await page.locator("#directGenerationButton").click();
     await page.keyboard.press("Escape");
