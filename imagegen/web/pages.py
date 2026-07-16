@@ -138,11 +138,9 @@ def change_password():
 @web.get("/")
 @login_required
 def studio():
-    workspace_service = services().workspaces
-    runtime = services().settings.runtime()
-    workspaces = workspace_service.list(current_user.id)
-    if not workspaces:
-        workspaces = workspace_service.ensure_starter_workspaces(current_user.id)
+    application_services = services()
+    runtime = application_services.settings.runtime()
+    workspaces = application_services.workspaces.list(current_user.id)
     return render_template(
         "pages/studio.html",
         user=user_dict(current_user),

@@ -1420,9 +1420,9 @@ select option {
   display: grid;
 }
 
-.reference-remove.chat-reference-remove {
+.reference-remove.chat-reference-remove,
+.chat-reference-item .reference-library-save {
   top: 3px;
-  right: 3px;
   z-index: 2;
   width: 21px;
   height: 21px;
@@ -1433,7 +1433,11 @@ select option {
   opacity: .94;
 }
 
-.reference-remove.chat-reference-remove svg {
+.reference-remove.chat-reference-remove { right: 3px; }
+.chat-reference-item .reference-library-save { left: 3px; }
+
+.reference-remove.chat-reference-remove svg,
+.chat-reference-item .reference-library-save svg {
   width: 13px;
   height: 13px;
 }
@@ -2226,10 +2230,11 @@ select option {
   display: grid;
 }
 
-.reference-remove {
+.reference-remove,
+.reference-library-save {
   position: absolute;
+  z-index: 2;
   top: -5px;
-  right: -5px;
   display: grid;
   width: 19px;
   height: 19px;
@@ -2242,33 +2247,19 @@ select option {
   opacity: 0;
   transition: opacity 150ms ease;
 }
+
+.reference-remove { right: -5px; }
+.reference-library-save { left: -5px; }
 
 .reference-card:hover .reference-remove,
 .reference-remove:focus-visible {
   opacity: 1;
 }
 
-.reference-remove svg {
+.reference-remove svg,
+.reference-library-save svg {
   width: 12px;
   height: 12px;
-}
-
-.reference-library-save {
-  position: absolute;
-  z-index: 2;
-  top: -5px;
-  left: -5px;
-  display: grid;
-  width: 19px;
-  height: 19px;
-  padding: 0;
-  place-items: center;
-  color: var(--text-soft);
-  border: 1px solid var(--line-strong);
-  border-radius: 50%;
-  background: var(--surface-4);
-  opacity: 0;
-  transition: opacity 150ms ease;
 }
 
 .reference-card:hover .reference-library-save,
@@ -2276,23 +2267,6 @@ select option {
   color: var(--accent);
   border-color: var(--accent);
   opacity: 1;
-}
-
-.reference-library-save svg {
-  width: 11px;
-  height: 11px;
-}
-
-.chat-reference-item .reference-library-save {
-  top: 3px;
-  left: 3px;
-  width: 21px;
-  height: 21px;
-  color: #fff;
-  border-color: rgb(255 255 255 / 38%);
-  background: rgb(8 10 12 / 92%);
-  box-shadow: 0 2px 7px rgb(0 0 0 / 55%);
-  opacity: .94;
 }
 
 .chat-reference-item:hover .reference-library-save,
@@ -2593,19 +2567,6 @@ select option {
   white-space: nowrap;
 }
 
-.library-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.library-toolbar > span {
-  color: var(--muted);
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-}
-
 .library-content {
   position: relative;
   min-height: 340px;
@@ -2619,6 +2580,17 @@ select option {
   grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
   gap: 9px;
   padding-top: 14px;
+}
+
+.library-pagination {
+  display: flex;
+  justify-content: center;
+  padding: 14px 0 2px;
+}
+
+.library-pagination .loading svg,
+.library-state > svg {
+  animation: spin 850ms linear infinite;
 }
 
 .library-card {
@@ -2662,7 +2634,6 @@ select option {
 .library-card-copy {
   display: grid;
   min-width: 0;
-  gap: 2px;
   padding: 8px 9px 9px;
 }
 
@@ -2672,11 +2643,6 @@ select option {
   font-weight: 620;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.library-card-copy small {
-  color: var(--muted);
-  font-size: 9px;
 }
 
 .library-delete {
@@ -2697,9 +2663,8 @@ select option {
   background: var(--danger-muted);
 }
 
-.library-loading,
 .library-empty,
-.library-drop-overlay {
+.library-state {
   position: absolute;
   inset: 0;
   display: grid;
@@ -2709,23 +2674,19 @@ select option {
   color: var(--muted);
 }
 
-.library-loading svg {
-  animation: spin 850ms linear infinite;
-}
-
 .library-empty strong,
-.library-drop-overlay strong {
+.library-state strong {
   color: var(--text-soft);
   font-size: 12px;
 }
 
-.library-drop-overlay {
-  z-index: 4;
-  margin-top: 10px;
-  color: var(--accent);
-  border: 1px dashed var(--accent);
-  border-radius: 6px;
-  background: rgb(16 19 25 / 94%);
+.library-error > svg {
+  color: var(--danger);
+  animation: none;
+}
+
+.library-error .icon-button {
+  margin-top: 3px;
 }
 
 .detail-list {
@@ -2815,6 +2776,14 @@ img.media-reveal.is-loaded {
   width: min(360px, calc(100vw - 32px));
   gap: 8px;
   pointer-events: none;
+}
+
+body:has(#generationForm:not([hidden])):has(#toastRegion .toast) .toast-region {
+  top: 8px;
+}
+
+body:has(#generationForm:not([hidden])):has(#toastRegion .toast) #generationForm {
+  padding-top: 110px;
 }
 
 .toast {

@@ -36,6 +36,7 @@
   function toast(message, tone = "info") {
     const region = document.getElementById("toastRegion");
     if (!region || !message) return;
+    region.replaceChildren();
     const node = document.createElement("div");
     node.className = `toast ${tone}`;
     const icon = document.createElement("i");
