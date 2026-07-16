@@ -9,8 +9,7 @@ param(
     [switch]$Lan,
     [switch]$LocalOnly,
     [switch]$SkipFirewall,
-    [switch]$NoBuild,
-    [switch]$FirewallOnly
+    [switch]$NoBuild
 )
 
 Set-StrictMode -Version Latest
@@ -24,50 +23,29 @@ $projectDir = $PSScriptRoot
 $envPath = Join-Path $projectDir ".env"
 $firewallRuleName = "Snow AI Studio LAN"
 
-function Test-IsAdministrator {
-    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
-    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+function Get-FirewallRule {
+    try {
+        $policy = New-Object -ComObject HNetCfg.FwPolicy2
+        return $policy.Rules.Item($firewallRuleName)
+    } catch [IO.FileNotFoundException] {
+        return $null
+    }
 }
 
-function Resolve-PowerShellHost {
-    $windowsPowerShell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-    if (Test-Path -LiteralPath $windowsPowerShell) {
-        return $windowsPowerShell
-    }
+function Test-FirewallRule {
+    param($Rule, [int]$ListenPort)
 
-    return (Get-Process -Id $PID).Path
-}
-
-function Install-FirewallRule {
-    param([int]$ListenPort)
-
-    if (-not (Test-IsAdministrator)) {
-        throw "配置 Windows 防火墙需要管理员权限。"
-    }
-
-    $rule = Get-NetFirewallRule -DisplayName $firewallRuleName -ErrorAction SilentlyContinue
-    if ($rule) {
-        $rule | Set-NetFirewallRule -Enabled True -Profile Any -Direction Inbound -Action Allow | Out-Null
-        $rule | Get-NetFirewallPortFilter | Set-NetFirewallPortFilter -Protocol TCP -LocalPort $ListenPort | Out-Null
-        $rule | Get-NetFirewallAddressFilter | Set-NetFirewallAddressFilter -RemoteAddress LocalSubnet | Out-Null
-    } else {
-        New-NetFirewallRule `
-            -DisplayName $firewallRuleName `
-            -Description "允许本地子网访问 Snow AI Studio。" `
-            -Direction Inbound `
-            -Action Allow `
-            -Protocol TCP `
-            -LocalPort $ListenPort `
-            -RemoteAddress LocalSubnet `
-            -Profile Any | Out-Null
-    }
-    Write-Host "Windows 防火墙已允许专用网络访问 TCP 端口 $ListenPort。" -ForegroundColor Green
-}
-
-if ($FirewallOnly) {
-    Install-FirewallRule -ListenPort $Port
-    exit 0
+    # HNetCfg values: inbound=1, allow=1, all profiles=0x7fffffff, TCP=6.
+    return (
+        $null -ne $Rule -and
+        $Rule.Enabled -and
+        $Rule.Direction -eq 1 -and
+        $Rule.Action -eq 1 -and
+        $Rule.Profiles -eq [int]0x7FFFFFFF -and
+        $Rule.Protocol -eq 6 -and
+        $Rule.LocalPorts -eq [string]$ListenPort -and
+        $Rule.RemoteAddresses -eq "LocalSubnet"
+    )
 }
 
 function New-RandomSecret {
@@ -181,14 +159,28 @@ function Test-CurrentStackOwnsPort {
 }
 
 function Get-LanAddresses {
-    return Get-NetIPConfiguration -ErrorAction SilentlyContinue |
+    return [Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() |
         Where-Object {
-            $_.IPv4DefaultGateway -and
-            $_.IPv4Address -and
-            $_.InterfaceDescription -notmatch "TAP-Windows|Hyper-V|Docker|WSL"
+            $properties = $_.GetIPProperties()
+            $_.OperationalStatus -eq [Net.NetworkInformation.OperationalStatus]::Up -and
+            $_.NetworkInterfaceType -notin @(
+                [Net.NetworkInformation.NetworkInterfaceType]::Loopback,
+                [Net.NetworkInformation.NetworkInterfaceType]::Tunnel
+            ) -and
+            $_.Description -notmatch "TAP-Windows|Hyper-V|Docker|WSL" -and
+            @($properties.GatewayAddresses | Where-Object {
+                $_.Address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork -and
+                -not $_.Address.Equals([Net.IPAddress]::Any)
+            }).Count -gt 0
         } |
-        ForEach-Object { $_.IPv4Address.IPAddress } |
-        Where-Object { $_ -and $_ -ne "127.0.0.1" -and -not $_.StartsWith("169.254.") } |
+        ForEach-Object { $_.GetIPProperties().UnicastAddresses } |
+        ForEach-Object { $_.Address } |
+        Where-Object {
+            $_.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork -and
+            -not [Net.IPAddress]::IsLoopback($_) -and
+            -not $_.IPAddressToString.StartsWith("169.254.")
+        } |
+        ForEach-Object { $_.IPAddressToString } |
         Select-Object -Unique
 }
 
@@ -214,6 +206,34 @@ try {
     }
 
     $generatedAdminPassword = Initialize-EnvironmentFile
+
+    $firewallRule = Get-FirewallRule
+    if ($Lan -and -not $SkipFirewall -and -not (Test-FirewallRule -Rule $firewallRule -ListenPort $Port)) {
+        Write-Host "正在配置 Windows 防火墙，需要确认一次管理员权限。" -ForegroundColor Yellow
+        $operation = if ($null -eq $firewallRule) { "add" } else { "set" }
+        $firewallArguments = @(
+            "advfirewall", "firewall", $operation, "rule",
+            "name=`"$firewallRuleName`""
+        )
+        if ($operation -eq "set") {
+            $firewallArguments += "new"
+        }
+        $firewallArguments += @(
+            "dir=in", "action=allow", "enable=yes", "profile=any",
+            "protocol=TCP", "localport=$Port", "remoteip=LocalSubnet"
+        )
+        $process = Start-Process `
+            -FilePath (Join-Path $env:SystemRoot "System32\netsh.exe") `
+            -ArgumentList $firewallArguments `
+            -Verb RunAs `
+            -WindowStyle Hidden `
+            -Wait `
+            -PassThru
+        if ($process.ExitCode -ne 0 -or -not (Test-FirewallRule -Rule (Get-FirewallRule) -ListenPort $Port)) {
+            throw "Windows 防火墙规则未正确生效。"
+        }
+        Write-Host "Windows 防火墙已允许本地子网访问 TCP 端口 $Port。" -ForegroundColor Green
+    }
 
     if (-not (Test-PortAvailable -ListenPort $Port) -and -not (Test-CurrentStackOwnsPort -ListenPort $Port)) {
         throw "端口 $Port 已被其他进程占用。请停止占用进程，或使用 -Port 选择其他端口。"
@@ -245,30 +265,6 @@ try {
     if (-not $healthy) {
         docker compose --project-directory $projectDir ps
         throw "服务未能在 3 分钟内通过健康检查。请运行：docker compose logs web worker"
-    }
-
-    if ($Lan -and -not $SkipFirewall) {
-        if (Test-IsAdministrator) {
-            Install-FirewallRule -ListenPort $Port
-        } else {
-            $elevationArguments = @(
-                "-NoProfile",
-                "-ExecutionPolicy", "Bypass",
-                "-File", "`"$PSCommandPath`"",
-                "-FirewallOnly",
-                "-Lan",
-                "-Port", $Port
-            )
-            $process = Start-Process `
-                -FilePath (Resolve-PowerShellHost) `
-                -ArgumentList $elevationArguments `
-                -Verb RunAs `
-                -Wait `
-                -PassThru
-            if ($process.ExitCode -ne 0) {
-                Write-Warning "Windows 防火墙配置失败。本机访问仍可使用，但局域网访问可能被阻止。"
-            }
-        }
     }
 
     Write-Host ""
