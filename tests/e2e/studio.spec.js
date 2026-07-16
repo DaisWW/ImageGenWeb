@@ -1,38 +1,89 @@
 const path = require("node:path");
-const { test, expect } = require("@playwright/test");
+const {
+  closeGenerationComposer,
+  createWorkspace,
+  deleteWorkspace,
+  expect,
+  loginAsAdmin,
+  test,
+  uploadLibraryImage,
+} = require("./fixtures");
 
-async function closeGenerationComposer(page) {
-  if (page.viewportSize().width >= 640) {
-    await page.locator("#generationBackdrop").click({ position: { x: 10, y: 10 } });
-  } else {
-    await page.locator("#generationBackButton").click();
-  }
-}
-
-test("workspace lifecycle remains usable", async ({ page }, testInfo) => {
-  await page.goto("/login");
-  await page.getByLabel("用户名").fill("e2e-admin");
-  await page.getByLabel("密码").fill("E2eStrongPass123!");
+test("deleting the last workspace leaves the workspace list empty", {
+  tag: "@responsive",
+}, async ({ page }) => {
+  await loginAsAdmin(page);
+  const username = `e2e-empty-${Date.now()}`;
+  const password = "E2eEmptyPass123!";
+  await page.evaluate(async ({ username: name, password: secret }) => {
+    await window.ImageGen.api("/api/admin/users", {
+      method: "POST",
+      body: { username: name, password: secret },
+    });
+  }, { username, password });
+  await page.getByRole("button", { name: "退出登录" }).click();
+  await page.getByLabel("用户名").fill(username);
+  await page.getByLabel("密码").fill(password);
   await page.getByRole("button", { name: "进入工作台" }).click();
 
-  await expect(page).toHaveURL(/\/$/);
+  const workspaceNames = await page.locator("#workspaceList .workspace-copy strong").allTextContents();
+  expect(workspaceNames.length).toBeGreaterThan(0);
+  for (const name of workspaceNames) await deleteWorkspace(page, name);
+
+  await expect(page.locator("#workspaceList .workspace-item")).toHaveCount(0);
+  await expect(page.locator("#workspaceCount")).toHaveText(/^0 \/ /);
+  await expect(page.locator("#workspaceTitle")).toHaveText("暂无工作站");
+  await expect(page.locator("#chatForm")).toBeHidden();
+  await expect(page.locator("#chatInput")).toBeDisabled();
+
+  await page.reload();
+  await expect(page.locator("#workspaceList .workspace-item")).toHaveCount(0);
+  await expect(page.locator("#workspaceTitle")).toHaveText("暂无工作站");
+
+  await createWorkspace(page, "重新开始");
+  await expect(page.locator("#workspaceList .workspace-item")).toHaveCount(1);
+  await expect(page.locator("#chatInput")).toBeEnabled();
+});
+
+test("new workspace is interactive while history is delayed", async ({ studioPage: page }) => {
+  await expect(page.locator("#chatInput")).toBeEditable();
+
+  let releaseLoads;
+  const loadsReleased = new Promise((resolve) => {
+    releaseLoads = resolve;
+  });
+  await page.route("**/api/workspaces/*/messages?*", async (route) => {
+    await loadsReleased;
+    await route.continue();
+  });
+
+  const name = `E2E-Immediate-${Date.now()}`;
+  try {
+    await createWorkspace(page, name);
+    await expect(page.locator("#chatInput")).toBeEditable({ timeout: 1000 });
+    await expect(page.locator("#directGenerationButton")).toBeEnabled({ timeout: 1000 });
+  } finally {
+    releaseLoads();
+  }
+
+  await deleteWorkspace(page, name);
+});
+
+test("workspace lifecycle remains usable", { tag: "@responsive" }, async ({
+  studioPage: page,
+}, testInfo) => {
   await expect(page.locator("#workspaceList .workspace-item").first()).toBeVisible();
 
   const suffix = `${testInfo.project.name}-${Date.now()}`;
   const createdName = `E2E-${suffix}`;
   const renamedName = `E2E-Renamed-${suffix}`;
 
-  await page.locator("#newWorkspaceButton").click();
-  await page.locator("#workspaceNameInput").fill(createdName);
-  await page.locator('#workspaceForm button[type="submit"]').click();
-  await expect(page.locator("#workspaceTitle")).toHaveText(createdName);
+  await createWorkspace(page, createdName);
 
   await page.locator("#libraryButton").click();
   await expect(page.locator("#libraryDialog")).toBeVisible();
   await expect(page.locator("#libraryTargetLabel")).toHaveText("随消息发送");
-  await page.locator("#libraryInput").setInputFiles(
-    path.resolve("static/assets/starter-ocean-sky-reference.png"),
-  );
+  await uploadLibraryImage(page, path.resolve("static/assets/starter-ocean-sky-reference.png"));
   const libraryImage = page.locator("#libraryGrid .library-card", {
     hasText: "starter-ocean-sky-reference.png",
   }).first();
@@ -76,24 +127,14 @@ test("workspace lifecycle remains usable", async ({ page }, testInfo) => {
   await page.locator('#workspaceForm button[type="submit"]').click();
   await expect(page.locator("#workspaceTitle")).toHaveText(renamedName);
 
-  const item = page.locator("#workspaceList .workspace-item", { hasText: renamedName });
-  await item.locator("[data-delete-workspace]").click();
-  await expect(page.locator("#workspaceDeleteDialog")).toBeVisible();
-  await page.locator('#workspaceDeleteForm button[type="submit"]').click();
-  await expect(page.locator("#workspaceList")).not.toContainText(renamedName);
+  await deleteWorkspace(page, renamedName);
 });
 
-test("animation workstation only generates frames from a user-selected master", async ({ page }, testInfo) => {
-  await page.goto("/login");
-  await page.getByLabel("用户名").fill("e2e-admin");
-  await page.getByLabel("密码").fill("E2eStrongPass123!");
-  await page.getByRole("button", { name: "进入工作台" }).click();
-
+test("animation workstation only generates frames from a user-selected master", async ({
+  studioPage: page,
+}, testInfo) => {
   const workspaceName = `E2E-Animation-${testInfo.project.name}-${Date.now()}`;
-  await page.locator("#newWorkspaceButton").click();
-  await page.locator("#workspaceNameInput").fill(workspaceName);
-  await page.locator('#workspaceKindSwitch [data-workspace-kind="animation"]').click();
-  await page.locator('#workspaceForm button[type="submit"]').click();
+  await createWorkspace(page, workspaceName, "animation");
 
   await expect(page.locator("#directGenerationButtonLabel")).toHaveText("直接制作帧动画");
   await page.locator("#chatInput").fill("角色原地挥手，固定镜头，无缝循环。");
@@ -110,9 +151,7 @@ test("animation workstation only generates frames from a user-selected master", 
 
   await page.locator("#referenceLibrary").click();
   await expect(page.locator("#libraryTargetLabel")).toHaveText("设为母图");
-  await page.locator("#libraryInput").setInputFiles(
-    path.resolve("static/assets/starter-ocean-sky-reference.png"),
-  );
+  await uploadLibraryImage(page, path.resolve("static/assets/starter-ocean-sky-reference.png"));
   await page.locator("#libraryGrid [data-use-library-image]").first().click();
   await expect(page.locator("#libraryDialog")).toBeHidden();
   await expect(page.locator("#referenceList .reference-card.selected")).toHaveCount(1);
@@ -132,29 +171,19 @@ test("animation workstation only generates frames from a user-selected master", 
   await expect(page.locator("#generateButton")).toHaveAttribute("title", "");
 
   await closeGenerationComposer(page);
-  const workspace = page.locator("#workspaceList .workspace-item", { hasText: workspaceName });
-  await workspace.locator("[data-delete-workspace]").click();
-  await page.locator('#workspaceDeleteForm button[type="submit"]').click();
+  await deleteWorkspace(page, workspaceName);
 });
 
-test("image library keeps the selected animation master when chat has an attachment", async ({ page }, testInfo) => {
-  await page.goto("/login");
-  await page.getByLabel("用户名").fill("e2e-admin");
-  await page.getByLabel("密码").fill("E2eStrongPass123!");
-  await page.getByRole("button", { name: "进入工作台" }).click();
-
+test("image library keeps the selected animation master when chat has an attachment", async ({
+  studioPage: page,
+}, testInfo) => {
   const workspaceName = `E2E-Library-${testInfo.project.name}-${Date.now()}`;
-  await page.locator("#newWorkspaceButton").click();
-  await page.locator("#workspaceNameInput").fill(workspaceName);
-  await page.locator('#workspaceKindSwitch [data-workspace-kind="animation"]').click();
-  await page.locator('#workspaceForm button[type="submit"]').click();
+  await createWorkspace(page, workspaceName, "animation");
 
   await page.locator("#chatReferenceButton").click();
   await page.locator('[data-open-library="chat"]').click();
   await expect(page.locator("#libraryTargetLabel")).toHaveText("随消息发送");
-  await page.locator("#libraryInput").setInputFiles(
-    path.resolve("static/assets/brand-mark-v2.png"),
-  );
+  await uploadLibraryImage(page, path.resolve("static/assets/brand-mark-v2.png"));
   const chatImage = page.locator("#libraryGrid .library-card", { hasText: "brand-mark-v2.png" });
   await expect(chatImage).toHaveCount(1);
   await chatImage.locator(".library-use").click();
@@ -162,9 +191,7 @@ test("image library keeps the selected animation master when chat has an attachm
 
   await page.locator("#libraryButton").click();
   await expect(page.locator("#libraryTargetLabel")).toHaveText("设为母图");
-  await page.locator("#libraryInput").setInputFiles(
-    path.resolve("static/assets/starter-ocean-sky-reference.png"),
-  );
+  await uploadLibraryImage(page, path.resolve("static/assets/starter-ocean-sky-reference.png"));
   const master = page.locator("#libraryGrid .library-card", { hasText: "starter-ocean" });
   await master.locator(".library-use").click();
 
@@ -175,17 +202,12 @@ test("image library keeps the selected animation master when chat has an attachm
   await expect(page.locator("#generateButton")).toHaveAttribute("title", "");
 
   await closeGenerationComposer(page);
-  const workspace = page.locator("#workspaceList .workspace-item", { hasText: workspaceName });
-  await workspace.locator("[data-delete-workspace]").click();
-  await page.locator('#workspaceDeleteForm button[type="submit"]').click();
+  await deleteWorkspace(page, workspaceName);
 });
 
-test("active generation locks prompt reuse without trapping the composer", async ({ page }) => {
-  await page.goto("/login");
-  await page.getByLabel("用户名").fill("e2e-admin");
-  await page.getByLabel("密码").fill("E2eStrongPass123!");
-  await page.getByRole("button", { name: "进入工作台" }).click();
-
+test("active generation locks prompt reuse without trapping the composer", {
+  tag: "@responsive",
+}, async ({ studioPage: page }) => {
   const workspace = page.locator("#workspaceList .workspace-item.active");
   await expect(workspace).toBeVisible();
   const workspaceId = await workspace.getAttribute("data-workspace-id");
@@ -287,4 +309,106 @@ test("active generation locks prompt reuse without trapping the composer", async
   }
   await closeGenerationComposer(page);
   await expect(page.locator("#chatForm")).toBeVisible();
+});
+
+test("image library exposes retry after its initial load fails", async ({ studioPage: page }) => {
+  let attempts = 0;
+  await page.route("**/api/library-images?*", async (route) => {
+    attempts += 1;
+    if (attempts === 1) {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "图库暂时不可用", code: "library_unavailable" }),
+      });
+      return;
+    }
+    await route.fulfill({
+      json: {
+        images: [],
+        total: 0,
+        has_more: false,
+        max_count: 200,
+        max_bytes: 2147483648,
+      },
+    });
+  });
+
+  await page.locator("#libraryButton").click();
+  await expect(page.locator("#libraryError")).toBeVisible();
+  await expect(page.locator("#libraryUploadButton")).toBeDisabled();
+  await page.locator("#libraryRetryButton").click();
+
+  await expect(page.locator("#libraryEmpty")).toBeVisible();
+  await expect(page.locator("#libraryUploadButton")).toBeEnabled();
+  expect(attempts).toBe(2);
+});
+
+test("image library pagination keeps its server offset after merging a duplicate", async ({
+  studioPage: page,
+}) => {
+  const image = (index) => ({
+    id: `library-${index}`,
+    name: `library-${index}.png`,
+    url: "/static/assets/brand-mark-v2.png",
+    thumbnail_url: "/static/assets/brand-mark-v2.png",
+  });
+  const images = Array.from({ length: 61 }, (_value, index) => image(index));
+  const requestedOffsets = [];
+  await page.route("**/api/library-images**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (url.pathname !== "/api/library-images") {
+      await route.continue();
+      return;
+    }
+    if (request.method() === "POST") {
+      await route.fulfill({ json: { images: [images[60]], added_count: 0 } });
+      return;
+    }
+    const offset = Number(url.searchParams.get("offset") || 0);
+    requestedOffsets.push(offset);
+    const pageImages = offset === 0 ? images.slice(0, 60) : images.slice(offset);
+    await route.fulfill({
+      json: {
+        images: pageImages,
+        total: images.length,
+        has_more: offset + pageImages.length < images.length,
+        max_count: 200,
+        max_bytes: 2147483648,
+      },
+    });
+  });
+
+  await page.locator("#libraryButton").click();
+  await expect(page.locator("#libraryGrid .library-card")).toHaveCount(60);
+  await uploadLibraryImage(page, path.resolve("static/assets/brand-mark-v2.png"));
+  await expect(page.locator("#libraryGrid .library-card")).toHaveCount(61);
+  await expect(page.locator("#libraryLoadMoreButton")).toBeVisible();
+  await page.locator("#libraryLoadMoreButton").click();
+
+  await expect(page.locator("#libraryPagination")).toBeHidden();
+  expect(requestedOffsets).toEqual([0, 60]);
+});
+
+test("latest toast does not cover the generation composer", {
+  tag: "@responsive",
+}, async ({ studioPage: page }) => {
+  await page.locator("#directGenerationButton").click();
+  await expect(page.locator("#generationForm")).toBeVisible();
+
+  await page.evaluate(() => {
+    window.ImageGen.toast("较早的提示", "info");
+    window.ImageGen.toast("图库原图累计不能超过 2 GiB", "error");
+  });
+  const toast = page.locator("#toastRegion .toast");
+  const heading = page.locator("#generationForm .generation-composer-heading");
+  await expect(toast).toHaveCount(1);
+  await expect(toast).toContainText("图库原图累计不能超过 2 GiB");
+
+  const toastBox = await toast.boundingBox();
+  const headingBox = await heading.boundingBox();
+  expect(toastBox).not.toBeNull();
+  expect(headingBox).not.toBeNull();
+  expect(toastBox.y + toastBox.height).toBeLessThanOrEqual(headingBox.y);
 });

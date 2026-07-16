@@ -1,9 +1,15 @@
 const path = require("node:path");
+const { existsSync } = require("node:fs");
 const { defineConfig, devices } = require("@playwright/test");
 
 const port = 18765;
 const dataDir = path.resolve(".ui-test-data", `playwright-${process.pid}`);
 const localBrowser = process.env.CI ? {} : { channel: "chrome" };
+const venvPython = path.resolve(
+  ".venv",
+  process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
+);
+const defaultServerCommand = `${existsSync(venvPython) ? JSON.stringify(venvPython) : "python"} app.py`;
 
 module.exports = defineConfig({
   testDir: "tests/e2e",
@@ -17,7 +23,7 @@ module.exports = defineConfig({
     screenshot: "only-on-failure",
   },
   webServer: {
-    command: process.env.E2E_SERVER_COMMAND || "python app.py",
+    command: process.env.E2E_SERVER_COMMAND || defaultServerCommand,
     url: `http://127.0.0.1:${port}/health/live`,
     timeout: 120000,
     reuseExistingServer: false,
@@ -36,6 +42,10 @@ module.exports = defineConfig({
   },
   projects: [
     { name: "desktop-chromium", use: { ...devices["Desktop Chrome"], ...localBrowser } },
-    { name: "mobile-chromium", use: { ...devices["Pixel 7"], ...localBrowser } },
+    {
+      name: "mobile-chromium",
+      grep: /@responsive/,
+      use: { ...devices["Pixel 7"], ...localBrowser },
+    },
   ],
 });

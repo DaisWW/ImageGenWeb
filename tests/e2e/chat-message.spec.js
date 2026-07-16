@@ -1,4 +1,4 @@
-const { test, expect } = require("@playwright/test");
+const { expect, loginAsAdmin, test } = require("./fixtures");
 
 test("chat delivery uses stable IDs and retries the same message", async ({ page }) => {
   const content = "改成宫崎骏风格";
@@ -79,10 +79,7 @@ test("chat delivery uses stable IDs and retries the same message", async ({ page
     await route.continue();
   });
 
-  await page.goto("/login");
-  await page.getByLabel("用户名").fill("e2e-admin");
-  await page.getByLabel("密码").fill("E2eStrongPass123!");
-  await page.getByRole("button", { name: "进入工作台" }).click();
+  await loginAsAdmin(page);
   workspaceId = await page.locator("#workspaceList .workspace-item.active")
     .getAttribute("data-workspace-id");
 

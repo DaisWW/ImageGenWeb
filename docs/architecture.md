@@ -20,7 +20,9 @@ imagegen/
 config/                管理员配置保存前使用的兼容默认值
 static/                按 css、js、图片和第三方资源组织的浏览器文件
 templates/             基础模板、页面和共享局部模板
-tests/integration/     端到端业务与 HTTP 合同测试
+tests/support/         隔离应用、数据构造器和可复用上游测试替身
+tests/integration/     按领域组织的业务与 HTTP 合同测试
+tests/e2e/             跨组件浏览器流程与响应式回归
 ```
 
 ## 依赖规则
