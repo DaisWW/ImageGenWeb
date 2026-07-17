@@ -11,6 +11,10 @@ from .models import ANALYSIS_MAX_SIDE, AxisLayout
 MIN_VISUAL_COVERAGE = 0.35
 MIN_HINTED_COVERAGE = 0.18
 PROMPT_FALLBACK_SCORE = 0.50
+MIN_LAYOUT_SCORE = 0.45
+MIN_PERIODIC_ACTIVITY = 0.006
+MAX_PERIODIC_BOUNDARY_RATIO = 0.72
+MIN_PERIODIC_UNIFORMITY = 0.70
 
 
 def analyze_image(path: str | Path, *, prompt: str = "") -> dict[str, object]:
@@ -98,6 +102,49 @@ def _detect_axis(image: Image.Image, *, axis: int, hinted_count: int | None) -> 
         )
         if score > best.score:
             best = AxisLayout(count=count, score=min(1.0, score))
+
+    periodic = _detect_periodic_axis(edge)
+    if periodic.score > best.score:
+        best = periodic
+    return best if best.score >= MIN_LAYOUT_SCORE else AxisLayout(count=1, score=0.0)
+
+
+def _detect_periodic_axis(profile: list[float]) -> AxisLayout:
+    smoothed = _smooth_profile(profile, radius=2)
+    length = len(smoothed)
+    if length < 32:
+        return AxisLayout(count=1, score=0.0)
+    mean_activity = _range_average(smoothed, 2, length - 2)
+    if mean_activity < MIN_PERIODIC_ACTIVITY:
+        return AxisLayout(count=1, score=0.0)
+
+    best = AxisLayout(count=1, score=0.0)
+    for count in range(4, 9):
+        if length < count * 8:
+            continue
+        edges = [round(length * index / count) for index in range(count + 1)]
+        segment_activity = [
+            _range_average(smoothed, edges[index], edges[index + 1])
+            for index in range(count)
+        ]
+        average_segment = sum(segment_activity) / len(segment_activity)
+        uniformity = min(segment_activity) / max(average_segment, 1e-6)
+        if uniformity < MIN_PERIODIC_UNIFORMITY:
+            continue
+
+        radius = max(1, round(length / count * 0.06))
+        boundary_activity = [
+            _range_average(smoothed, position - radius, position + radius + 1)
+            for position in edges[1:-1]
+        ]
+        boundary_ratio = max(boundary_activity) / max(mean_activity, 1e-6)
+        if boundary_ratio > MAX_PERIODIC_BOUNDARY_RATIO:
+            continue
+
+        valley_score = 1.0 - boundary_ratio / MAX_PERIODIC_BOUNDARY_RATIO
+        score = valley_score * 0.65 + uniformity * 0.35
+        if score > best.score:
+            best = AxisLayout(count=count, score=score)
     return best
 
 
@@ -134,6 +181,21 @@ def _window_max(values: list[float], position: int, radius: int) -> float:
     start = max(0, position - radius)
     end = min(len(values), position + radius + 1)
     return max(values[start:end], default=0.0)
+
+
+def _smooth_profile(values: list[float], *, radius: int) -> list[float]:
+    return [
+        _range_average(values, index - radius, index + radius + 1)
+        for index in range(len(values))
+    ]
+
+
+def _range_average(values: list[float], start: int, end: int) -> float:
+    if not values:
+        return 0.0
+    lower = max(0, min(len(values) - 1, start))
+    upper = min(len(values), max(lower + 1, end))
+    return sum(values[lower:upper]) / (upper - lower)
 
 
 def _grid_hint(prompt: str) -> tuple[int, int] | None:

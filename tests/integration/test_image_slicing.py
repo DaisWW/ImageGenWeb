@@ -64,6 +64,35 @@ def transparent_atlas_png_bytes() -> bytes:
     return output.getvalue()
 
 
+def dense_icon_atlas_png_bytes(*, rows=8, columns=8, cell=48) -> bytes:
+    image = Image.new("RGB", (columns * cell, rows * cell), (2, 2, 3))
+    draw = ImageDraw.Draw(image)
+    for row in range(rows):
+        for column in range(columns):
+            left = column * cell
+            top = row * cell
+            draw.ellipse(
+                (left + 5, top + 5, left + cell - 6, top + cell - 6),
+                fill=(18, 17, 18),
+                outline=(62, 55, 52),
+                width=2,
+            )
+            draw.line(
+                (left + 13, top + 34, left + 35, top + 13),
+                fill=(224, 213, 198),
+                width=3,
+            )
+            if (row + column) % 2:
+                draw.line(
+                    (left + 15, top + 15, left + 33, top + 33),
+                    fill=(167, 54, 44),
+                    width=2,
+                )
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
+
+
 class TestImageSlicing(PlatformTestCase):
     def _completed_item(self, content: bytes, *, prompt="六张素材，2×3 图集"):
         workspace = self.create_workspace("智能切图")
@@ -142,6 +171,21 @@ class TestImageSlicing(PlatformTestCase):
         analysis = response.json["analysis"]
         self.assertTrue(analysis["detected"])
         self.assertEqual((analysis["rows"], analysis["columns"]), (2, 3))
+
+    def test_analysis_detects_dense_icon_grid_without_visible_grid_lines(self):
+        _workspace, item = self._completed_item(
+            dense_icon_atlas_png_bytes(),
+            prompt="一组技能图标",
+        )
+        response = self.user_client().post(f"/api/generation-items/{item.id}/slice-analysis")
+
+        analysis = response.json["analysis"]
+        self.assertTrue(analysis["detected"])
+        self.assertEqual((analysis["rows"], analysis["columns"]), (8, 8))
+        self.assertEqual(len(analysis["boxes"]), 64)
+        self.assertTrue(
+            all(box["width"] == 48 and box["height"] == 48 for box in analysis["boxes"])
+        )
 
     def test_prompt_grid_hint_still_uniformly_splits_transparent_image(self):
         _workspace, item = self._completed_item(
