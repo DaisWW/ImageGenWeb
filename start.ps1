@@ -6,6 +6,14 @@
 $projectDir = $PSScriptRoot
 $venvPython = Join-Path $projectDir ".venv\Scripts\python.exe"
 $python = if (Test-Path -LiteralPath $venvPython) { $venvPython } else { "py" }
+$existingListener = (
+    [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() |
+        Where-Object { $_.Port -eq $Port } |
+        Select-Object -First 1
+)
+if ($existingListener) {
+    throw "端口 $Port 已被占用（监听地址 $($existingListener.Address)）。请先停止现有服务或使用 -Port 指定其他端口。"
+}
 $chatKeyWasSet = -not [string]::IsNullOrWhiteSpace($env:GPT_CHAT_API_KEY)
 $chatBaseUrlWasSet = -not [string]::IsNullOrWhiteSpace($env:GPT_CHAT_API_BASE_URL)
 $lucenKeyWasSet = -not [string]::IsNullOrWhiteSpace($env:LUCEN_API_KEY)
