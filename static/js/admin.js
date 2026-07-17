@@ -904,7 +904,7 @@
           <td><strong>${UI.escapeHtml(model.label)}</strong><small class="subline">${UI.escapeHtml(model.id)}</small></td>
           <td><span class="status-badge ${model.configured ? "succeeded" : "failed"}"><span></span>${model.configured ? "可用" : model.enabled ? "缺少 Key" : "停用"}</span></td>
           <td>${UI.escapeHtml(model.model)}${model.reasoning_effort ? `<small class="subline">推理 ${UI.escapeHtml(model.reasoning_effort)}</small>` : ""}</td>
-          <td><div class="capability-list"><span>${context.compact_at_tokens.toLocaleString()} tokens 开始压缩</span><span>保留最近 ${context.keep_recent_messages} 条消息</span></div></td>
+          <td><div class="capability-list"><span>超限直接截断较早内容</span><span>历史图片和生成结果优先</span></div></td>
           <td class="actions-cell"><div class="row-actions">
             <button class="icon-button" type="button" data-edit-chat-model="${UI.escapeHtml(model.id)}" title="编辑模型" aria-label="编辑模型"><i data-lucide="pencil"></i></button>
             <button class="icon-button danger" type="button" data-delete-chat-model="${UI.escapeHtml(model.id)}" title="删除模型" aria-label="删除模型"><i data-lucide="trash-2"></i></button>
@@ -991,7 +991,6 @@
       const systemPrompts = this.chatConfig?.system_prompts;
       if (!prompts || !systemPrompts) return;
       this.el.workspacePromptsForm.elements.chat.value = systemPrompts.chat;
-      this.el.workspacePromptsForm.elements.summary.value = systemPrompts.summary;
       this.el.workspacePromptsForm.elements.image.value = prompts.image;
       this.el.workspacePromptsForm.elements.animation.value = prompts.animation;
       UI.openDialog(this.el.workspacePromptsDialog);
@@ -1005,7 +1004,6 @@
         const next = copy(this.chatConfig);
         next.system_prompts = {
           chat: this.el.workspacePromptsForm.elements.chat.value.trim(),
-          summary: this.el.workspacePromptsForm.elements.summary.value.trim(),
         };
         next.workspace_prompts = {
           image: this.el.workspacePromptsForm.elements.image.value.trim(),

@@ -4,7 +4,6 @@ from ...config.chat_models import DEFAULT_SYSTEM_PROMPTS
 from ...validation import as_bool
 
 CHAT_SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPTS["chat"]
-SUMMARY_SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPTS["summary"]
 
 
 def generation_mode_prompt(
@@ -12,7 +11,7 @@ def generation_mode_prompt(
     mode: str,
     reference_count: int,
 ) -> str:
-    """给对话和总结模型同一份生成模式/参考图契约。"""
+    """给对话模型提供生成模式和参考图契约。"""
     if workspace_kind == "animation":
         return """当前任务固定为 img2img，母图必须由用户指定，禁止生成母图或切换为文生图。
 所有沟通和提示词只针对帧动画；参考图 1 是身份、造型、配色、构图和镜头基准。"""

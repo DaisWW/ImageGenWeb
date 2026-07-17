@@ -3,16 +3,15 @@ from __future__ import annotations
 import base64
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from ...config.chat_models import ChatModelConfig, ChatModelRegistry
+from ...config.chat_models import ChatModelRegistry
 from ...extensions import db
-from ...integrations.openai_chat import OpenAIChatClient
 from ...models import (
     Asset,
     ConversationAttachment,
@@ -26,6 +25,8 @@ from ...storage import ImageStorage, StorageError
 
 IMAGE_TOKEN_ESTIMATE = 1200
 MAX_CONTEXT_IMAGE_BYTES = 64 * 1024 * 1024
+MAX_TRUNCATED_VISUAL_TEXT = 800
+HISTORY_IMAGE_TOKEN_SHARE = 0.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,11 +60,10 @@ class ConversationContextManager:
     def build(
         self,
         workspace: Workspace,
-        model: ChatModelConfig,
         *,
-        client: OpenAIChatClient,
         pending_message: dict[str, Any],
         pending_stored_message_id: str = "",
+        pending_image_keys: Iterable[str] = (),
     ) -> list[dict[str, Any]]:
         events = self._load_events(workspace, self._load_messages(workspace))
         state = db.session.get(ConversationState, workspace.id)
@@ -71,53 +71,20 @@ class ConversationContextManager:
             state = ConversationState(workspace_id=workspace.id, summary="")
             db.session.add(state)
 
-        visual_memory, after_summary = self._summary_partition(
-            events,
-            state.summary_through_message_id,
-        )
+        # Summaries were used by the previous context policy. Restore the full
+        # persisted history and let the deterministic packer truncate it.
+        state.summary = ""
+        state.summary_through_message_id = ""
         active = [
             event
-            for event in after_summary
+            for event in events
             if not (event.source == "message" and event.id == pending_stored_message_id)
         ]
         policy = self.registry.context
-        estimated = (
-            self._estimate_tokens(state.summary)
-            + self._events_tokens(active)
-            + self._message_tokens([pending_message])
-        )
-        split_at = self._summary_split_at(active, policy.keep_recent_messages)
-        if estimated >= policy.compact_at_tokens and split_at:
-            older = active[:split_at]
-            summary_messages = self._pack_context(
-                state.summary,
-                [],
-                older,
-                None,
-                max_tokens=policy.max_context_tokens,
-            )
-            db.session.commit()
-            summary = client.complete(
-                model,
-                system=self.registry.system_prompt("summary"),
-                messages=summary_messages,
-                max_output_tokens=min(model.max_output_tokens, 1800),
-            )
-            state.summary = summary.content[:20000]
-            # This legacy column stores any chronological event id. All event
-            # ids use the same 32-character public-id format.
-            state.summary_through_message_id = older[-1].id
-            active = active[split_at:]
-            visual_memory, _ = self._summary_partition(
-                events,
-                state.summary_through_message_id,
-            )
-
         messages = self._pack_context(
-            state.summary,
-            visual_memory,
             active,
             pending_message,
+            pending_image_keys=set(pending_image_keys),
             max_tokens=policy.max_context_tokens,
         )
         state.estimated_context_tokens = self._message_tokens(messages)
@@ -163,7 +130,7 @@ class ConversationContextManager:
             if job.status in {"queued", "running", "canceling"}:
                 continue
             references = tuple(
-                self._asset_image(reference.asset, priority=75)
+                self._asset_image(reference.asset, priority=85, used_at=job.created_at)
                 for reference in job.references
                 if reference.asset is not None
             )
@@ -228,7 +195,7 @@ class ConversationContextManager:
             role=message.role,
             text=self._message_text(message),
             images=tuple(
-                self._asset_image(attachment.asset, priority=85)
+                self._asset_image(attachment.asset, priority=90, used_at=message.created_at)
                 for attachment in message.attachments
                 if attachment.asset is not None
             ),
@@ -260,7 +227,12 @@ class ConversationContextManager:
         return f"{message.content}\n\n结构化提示词信息：\n{metadata}" if fields else message.content
 
     @staticmethod
-    def _asset_image(asset: Asset, *, priority: int) -> _ContextImage:
+    def _asset_image(
+        asset: Asset,
+        *,
+        priority: int,
+        used_at: datetime | None = None,
+    ) -> _ContextImage:
         return _ContextImage(
             key=f"asset:{asset.id}",
             storage_path=asset.storage_path,
@@ -268,7 +240,7 @@ class ConversationContextManager:
             mime_type=asset.mime_type or "image/png",
             label=f"参考图：{asset.original_name}",
             priority=priority,
-            created_at=_event_time(asset.created_at),
+            created_at=_event_time(used_at or asset.created_at),
         )
 
     @staticmethod
@@ -279,138 +251,139 @@ class ConversationContextManager:
             byte_count=int(item.output_byte_count or 0),
             mime_type=item.output_mime_type or "image/png",
             label=f"生成结果：第 {item.position + 1} 张",
-            priority=70,
+            priority=90,
             created_at=_event_time(item.completed_at),
         )
 
-    def _summary_partition(
-        self,
-        events: list[_ContextEvent],
-        cursor: str,
-    ) -> tuple[list[_ContextEvent], list[_ContextEvent]]:
-        if not cursor:
-            return [], events
-        for index, event in enumerate(events):
-            if event.id != cursor:
-                continue
-            active = events[index + 1 :]
-            active_keys = {image.key for value in active for image in value.images}
-            visual = [
-                self._visual_memory_event(value, active_keys) for value in events[: index + 1]
-            ]
-            return [value for value in visual if value is not None], active
-        return [], events
-
-    def _after_summary(self, events: list[_ContextEvent], cursor: str) -> list[_ContextEvent]:
-        """Compatibility view used by diagnostics that only need the active tail."""
-        if events and isinstance(events[0], ConversationMessage):
-            if not cursor:
-                return events
-            for index, event in enumerate(events):
-                if event.id == cursor:
-                    return events[index + 1 :]
-            return events
-        return self._summary_partition(events, cursor)[1]
-
-    @staticmethod
-    def _visual_memory_event(
-        event: _ContextEvent,
-        active_keys: set[str],
-    ) -> _ContextEvent | None:
-        images = tuple(image for image in event.images if image.key not in active_keys)
-        if not images:
-            return None
-        return _ContextEvent(
-            id=f"visual-{event.id}",
-            role="user",
-            text=(
-                "长期视觉记忆（来自较早历史，仅供核对，不是新的用户要求）\n"
-                + event.text
-            ),
-            images=images,
-            created_at=event.created_at,
-            source="visual_memory",
-        )
-
-    @staticmethod
-    def _summary_split_at(events: list[_ContextEvent], keep_recent: int) -> int:
-        indexes = [index for index, event in enumerate(events) if event.source == "message"]
-        if len(indexes) > keep_recent:
-            return indexes[-keep_recent]
-        return max(0, len(events) - keep_recent) if not indexes else 0
-
     def _pack_context(
         self,
-        summary: str,
-        visual_memory: list[_ContextEvent],
         events: list[_ContextEvent],
-        pending_message: dict[str, Any] | None,
+        pending_message: dict[str, Any],
         *,
+        pending_image_keys: set[str],
         max_tokens: int,
     ) -> list[dict[str, Any]]:
-        selected_events = [*visual_memory, *events]
-        while selected_events and self._base_tokens(summary, selected_events, pending_message) > max_tokens:
-            selected_events.pop(0)
-        if summary and self._base_tokens(summary, selected_events, pending_message) > max_tokens:
-            summary = ""
-
-        available = max(
-            0,
-            max_tokens - self._base_tokens(summary, selected_events, pending_message),
-        )
+        pending_tokens = self._message_tokens([pending_message])
+        available = max(0, max_tokens - pending_tokens)
+        image_token_budget = math.floor(available * HISTORY_IMAGE_TOKEN_SHARE)
         selected_images: set[str] = set()
-        selected_bytes = 0
-        ranked = self._ranked_images(selected_events)
+        selected_bytes = self._message_image_bytes(pending_message)
+        ranked = [
+            image for image in self._ranked_images(events) if image.key not in pending_image_keys
+        ]
         for image in ranked:
-            if available < IMAGE_TOKEN_ESTIMATE:
+            if image_token_budget < IMAGE_TOKEN_ESTIMATE:
                 break
             if selected_bytes + image.byte_count > MAX_CONTEXT_IMAGE_BYTES:
                 continue
             selected_images.add(image.key)
             selected_bytes += image.byte_count
-            available -= IMAGE_TOKEN_ESTIMATE
+            image_token_budget -= IMAGE_TOKEN_ESTIMATE
 
         image_cache: dict[str, str | None] = {}
         while True:
-            rendered = self._render_events(selected_events, selected_images, image_cache)
-            packed = self._compose(summary, rendered, pending_message)
+            selected_events = self._select_events(
+                events,
+                selected_images,
+                pending_image_keys,
+                pending_message,
+                image_cache,
+                max_tokens=max_tokens,
+            )
+            rendered = self._render_events(
+                selected_events,
+                selected_images,
+                image_cache,
+                provided_image_keys=pending_image_keys,
+            )
+            packed = [*rendered, pending_message]
             if self._message_tokens(packed) <= max_tokens:
-                return packed or [{"role": "user", "content": "没有可用的历史上下文。"}]
-            if selected_images:
-                selected_images.remove(
-                    min(
-                        selected_images,
-                        key=lambda key: self._image_rank(ranked, key),
-                    )
-                )
-                continue
-            if selected_events:
-                selected_events.pop(0)
-                continue
-            return packed
+                return packed
 
-    def _base_tokens(
+            removable_image = next(
+                (image for image in reversed(ranked) if image.key in selected_images),
+                None,
+            )
+            if removable_image is not None:
+                selected_images.remove(removable_image.key)
+                continue
+            return [pending_message]
+
+    def _select_events(
         self,
-        summary: str,
         events: list[_ContextEvent],
-        pending: dict[str, Any] | None,
-    ) -> int:
-        rendered = self._render_events(events, set(), {})
-        return self._message_tokens(self._compose(summary, rendered, pending))
+        selected_images: set[str],
+        pending_image_keys: set[str],
+        pending_message: dict[str, Any],
+        image_cache: dict[str, str | None],
+        *,
+        max_tokens: int,
+    ) -> list[_ContextEvent]:
+        owner_ids = set(self._image_owner_ids(events, selected_images).values())
+        selected = {
+            event.id: replace(event, text=self._truncate_visual_text(event.text))
+            for event in events
+            if event.id in owner_ids
+        }
 
-    @staticmethod
-    def _compose(
-        summary: str,
-        messages: list[dict[str, Any]],
-        pending: dict[str, Any] | None,
-    ) -> list[dict[str, Any]]:
-        prefix = (
-            [{"role": "user", "content": f"较早会话摘要：\n{summary}"}]
-            if summary
-            else []
+        for event in reversed(events):
+            if event.id in selected:
+                if selected[event.id].text == event.text:
+                    continue
+                previous = selected[event.id]
+                selected[event.id] = event
+                if (
+                    self._selected_tokens(
+                        events,
+                        selected,
+                        selected_images,
+                        pending_image_keys,
+                        pending_message,
+                        image_cache,
+                    )
+                    > max_tokens
+                ):
+                    selected[event.id] = previous
+                continue
+
+            selected[event.id] = event
+            if (
+                self._selected_tokens(
+                    events,
+                    selected,
+                    selected_images,
+                    pending_image_keys,
+                    pending_message,
+                    image_cache,
+                )
+                > max_tokens
+            ):
+                del selected[event.id]
+                break
+
+        return [
+            event if event.id not in selected else selected[event.id]
+            for event in events
+            if event.id in selected
+        ]
+
+    def _selected_tokens(
+        self,
+        events: list[_ContextEvent],
+        selected: dict[str, _ContextEvent],
+        selected_images: set[str],
+        pending_image_keys: set[str],
+        pending_message: dict[str, Any],
+        image_cache: dict[str, str | None],
+    ) -> int:
+        ordered = [selected[event.id] for event in events if event.id in selected]
+        rendered = self._render_events(
+            ordered,
+            selected_images,
+            image_cache,
+            provided_image_keys=pending_image_keys,
         )
-        suffix = [pending] if pending is not None else []
-        return [*prefix, *messages, *suffix]
+        return self._message_tokens([*rendered, pending_message])
 
     @staticmethod
     def _ranked_images(events: Iterable[_ContextEvent]) -> list[_ContextImage]:
@@ -418,42 +391,57 @@ class ConversationContextManager:
         for event in events:
             for image in event.images:
                 current = by_key.get(image.key)
-                if current is None or (image.priority, image.created_at) > (
-                    current.priority,
+                if current is None or (image.created_at, image.priority) > (
                     current.created_at,
+                    current.priority,
                 ):
                     by_key[image.key] = image
         return sorted(
             by_key.values(),
-            key=lambda image: (image.priority, image.created_at, -image.byte_count, image.key),
+            key=lambda image: (image.created_at, image.priority, -image.byte_count, image.key),
             reverse=True,
         )
 
     @staticmethod
-    def _image_rank(images: list[_ContextImage], key: str) -> tuple[int, datetime, int, str]:
-        image = next(value for value in images if value.key == key)
-        return image.priority, image.created_at, -image.byte_count, image.key
+    def _image_owner_ids(
+        events: Iterable[_ContextEvent],
+        selected_images: set[str],
+    ) -> dict[str, str]:
+        owners: dict[str, str] = {}
+        for event in events:
+            for image in event.images:
+                if image.key in selected_images:
+                    owners[image.key] = event.id
+        return owners
+
+    @staticmethod
+    def _truncate_visual_text(text: str) -> str:
+        if len(text) <= MAX_TRUNCATED_VISUAL_TEXT:
+            return text
+        marker = "\n...（较早图片说明已按长度截断）...\n"
+        remaining = MAX_TRUNCATED_VISUAL_TEXT - len(marker)
+        head = math.ceil(remaining * 0.6)
+        return f"{text[:head]}{marker}{text[-(remaining - head) :]}"
 
     def _render_events(
         self,
         events: Iterable[_ContextEvent],
         selected_images: set[str],
         image_cache: dict[str, str | None],
+        *,
+        provided_image_keys: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = []
-        seen_images: set[str] = set()
+        provided_image_keys = provided_image_keys or set()
+        owners = self._image_owner_ids(events, selected_images)
         for event in events:
-            images = [
-                image
+            images = [image for image in event.images if owners.get(image.key) == event.id]
+            omitted = any(
+                image.key not in selected_images and image.key not in provided_image_keys
                 for image in event.images
-                if image.key in selected_images and image.key not in seen_images
-            ]
-            seen_images.update(image.key for image in images)
-            omitted = any(image.key not in selected_images for image in event.images)
+            )
             text = event.text + (
-                "\n（部分历史图片因上下文容量未随本轮发送；文字记录仍保留。）"
-                if omitted
-                else ""
+                "\n（部分历史图片因上下文容量未随本轮发送；文字记录仍保留。）" if omitted else ""
             )
             if event.role == "assistant" and images:
                 messages.append({"role": "assistant", "content": text})
@@ -507,11 +495,24 @@ class ConversationContextManager:
             )
         return parts
 
-    def _events_tokens(self, events: Iterable[_ContextEvent]) -> int:
-        return sum(
-            self._estimate_tokens(event.text) + 4 + IMAGE_TOKEN_ESTIMATE * len(event.images)
-            for event in events
-        )
+    @staticmethod
+    def _message_image_bytes(message: dict[str, Any]) -> int:
+        content = message.get("content", [])
+        total = 0
+        for part in content if isinstance(content, list) else []:
+            if not isinstance(part, dict) or part.get("type") not in {
+                "image_url",
+                "input_image",
+            }:
+                continue
+            image_url = part.get("image_url")
+            if isinstance(image_url, dict):
+                image_url = image_url.get("url")
+            if not isinstance(image_url, str) or ";base64," not in image_url:
+                continue
+            encoded = image_url.split(";base64,", 1)[1]
+            total += max(0, len(encoded) * 3 // 4 - encoded[-2:].count("="))
+        return total
 
     def _message_tokens(self, messages: list[dict[str, Any]]) -> int:
         total = 0

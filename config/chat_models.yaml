@@ -20,9 +20,7 @@ workspace_prompts:
     禁止分镜表、连环画、拼图、接触表、Sprite Sheet、帧编号、字幕或把多个时间点画在同一张图中；不要使用“让画面动起来”这类不可执行的空泛描述。
 
 context:
-  compact_at_tokens: 24000
   max_context_tokens: 32000
-  keep_recent_messages: 12
 
 models:
   - id: gpt

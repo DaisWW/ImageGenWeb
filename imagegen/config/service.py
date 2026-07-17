@@ -170,25 +170,18 @@ class RuntimeConfigService:
             raise ServiceError("工作站提示词格式无效")
         system_prompts = payload.get("system_prompts")
         if system_prompts is None:
-            system_prompts = {
-                kind: self.chat_models.system_prompt(kind) for kind in ("chat", "summary")
-            }
+            system_prompts = {"chat": self.chat_models.system_prompt("chat")}
         if not isinstance(system_prompts, dict):
             raise ServiceError("系统提示词格式无效")
         return {
             "version": 1,
-            "system_prompts": {
-                "chat": system_prompts.get("chat"),
-                "summary": system_prompts.get("summary"),
-            },
+            "system_prompts": {"chat": system_prompts.get("chat")},
             "workspace_prompts": {
                 "image": workspace_prompts.get("image"),
                 "animation": workspace_prompts.get("animation"),
             },
             "context": {
-                "compact_at_tokens": context.get("compact_at_tokens"),
                 "max_context_tokens": context.get("max_context_tokens"),
-                "keep_recent_messages": context.get("keep_recent_messages"),
             },
             "models": models,
         }

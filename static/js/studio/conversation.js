@@ -362,8 +362,7 @@
       const used = Number(this.conversationContext?.estimated_context_tokens || 0);
       const maximum = Number(this.conversationContext?.max_context_tokens || 0);
       const percent = maximum > 0 ? Math.min(100, Math.round(used / maximum * 100)) : 0;
-      const compacted = this.conversationContext?.compacted ? " · 已压缩早期对话" : "";
-      setText(this.el.contextStatus.querySelector("span"), `上下文 ${percent}%${compacted}`);
+      setText(this.el.contextStatus.querySelector("span"), `上下文 ${percent}%`);
       const title = maximum
         ? `约 ${used.toLocaleString()} / ${maximum.toLocaleString()} tokens`
         : "当前会话上下文";

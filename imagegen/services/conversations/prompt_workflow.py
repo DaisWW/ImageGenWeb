@@ -99,9 +99,8 @@ class PromptDraftWorkflow(ConversationSupport):
         try:
             context = self.context.build(
                 workspace,
-                model,
-                client=self.client,
                 pending_message=pending,
+                pending_image_keys=(f"asset:{asset.id}" for asset in attachments),
             )
             db.session.commit()
             result = self.client.complete(

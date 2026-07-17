@@ -3,8 +3,10 @@ from __future__ import annotations
 import base64
 import io
 import json
+from datetime import datetime, timedelta, timezone
 
 from imagegen.extensions import db
+from imagegen.models import ConversationMessage, ConversationState
 from imagegen.services import ServiceError
 from imagegen.storage import InvalidImageError
 from tests.support.platform import (
@@ -95,6 +97,73 @@ class TestConversationImages(PlatformTestCase):
             and base64.b64encode(png_bytes()).decode("ascii") in part["image_url"]["url"]
         ]
         self.assertTrue(result_image)
+
+    def test_overflow_truncates_old_text_without_ai_summary_or_losing_images(self):
+        workspace = self.create_workspace("直接截断上下文")
+        reference_content = png_bytes((220, 35, 45))
+        reference = self.services.workspaces.add_assets(
+            workspace,
+            [("historical-reference.png", reference_content)],
+        )[0]
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="这张图是必须保留的历史主体参考",
+            attachment_ids=(reference.id,),
+        )
+
+        prompt = "必须保留的历史生成成品"
+        job = self.submit(workspace, prompt=prompt)
+        worker = self.create_worker()
+        worker.providers = FakeProviderFactory()
+        channel = self.app.extensions["channel_registry"].get("test")
+        self.assertTrue(worker._claim(job.items[0].id, channel))
+        worker._process_item(job.items[0].id)
+
+        db.session.add_all(
+            ConversationMessage(
+                workspace_id=workspace.id,
+                role="user" if index % 2 == 0 else "assistant",
+                kind="message",
+                content=f"普通历史-{index}-" + "旧内容" * 500,
+                created_at=datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=index),
+            )
+            for index in range(20)
+        )
+        db.session.commit()
+
+        config = self.admin_client().get("/api/admin/chat-models").json["config"]
+        config["context"] = {"max_context_tokens": 6000}
+        response = self.admin_client().put("/api/admin/chat-models", json=config)
+        self.assertEqual(response.status_code, 200)
+
+        calls_before = len(self.chat_client.calls)
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="继续处理当前方案",
+        )
+
+        self.assertEqual(len(self.chat_client.calls), calls_before + 1)
+        context = self.chat_client.calls[-1]["messages"]
+        serialized = json.dumps(context, ensure_ascii=False)
+        self.assertNotIn("普通历史-0-", serialized)
+        self.assertIn("普通历史-19-", serialized)
+        self.assertIn(prompt, serialized)
+        images = [
+            part["image_url"]["url"]
+            for message in context
+            for part in (message.get("content") if isinstance(message.get("content"), list) else [])
+            if part.get("type") == "image_url"
+        ]
+        self.assertEqual(len(images), 2)
+        self.assertTrue(
+            any(url.endswith(base64.b64encode(reference_content).decode("ascii")) for url in images)
+        )
+        state = db.session.get(ConversationState, workspace.id)
+        self.assertEqual(state.summary, "")
+        self.assertEqual(state.summary_through_message_id, "")
+        self.assertLessEqual(state.estimated_context_tokens, 6000)
 
     def test_chat_multiple_attachments_are_sent_persisted_and_cannot_cross_workspaces(self):
         workspace = self.create_workspace()

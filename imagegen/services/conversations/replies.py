@@ -226,10 +226,9 @@ class ConversationReplyService(ConversationSupport):
         try:
             context = self.context.build(
                 workspace,
-                model,
-                client=self.client,
                 pending_message=pending,
                 pending_stored_message_id=user_message.id,
+                pending_image_keys=(f"asset:{asset.id}" for asset in context_attachments),
             )
             db.session.commit()
             result = self.client.complete(

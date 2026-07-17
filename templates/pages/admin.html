@@ -258,7 +258,6 @@
   <form class="modal-form config-form workspace-prompts-form" id="workspacePromptsForm">
     <div class="modal-header"><div><span class="eyebrow">System Prompts</span><h2>提示词策略</h2></div><button class="icon-button" type="button" data-close-dialog="workspacePromptsDialog" aria-label="关闭"><i data-lucide="x"></i></button></div>
     <label class="field"><span>基础对话</span><textarea name="chat" rows="9" maxlength="20000" required></textarea></label>
-    <label class="field"><span>会话摘要</span><textarea name="summary" rows="5" maxlength="20000" required></textarea></label>
     <label class="field"><span>图片工作站</span><textarea name="image" rows="9" maxlength="12000" required></textarea></label>
     <label class="field"><span>帧动画工作站</span><textarea name="animation" rows="9" maxlength="12000" required></textarea></label>
     <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="workspacePromptsDialog">取消</button><button class="button primary" type="submit"><i data-lucide="save"></i>保存策略</button></div>
@@ -268,10 +267,8 @@
 <dialog class="modal" id="contextDialog">
   <form class="modal-form" id="contextForm">
     <div class="modal-header"><div><span class="eyebrow">Context</span><h2>上下文策略</h2></div><button class="icon-button" type="button" data-close-dialog="contextDialog" aria-label="关闭"><i data-lucide="x"></i></button></div>
-    <div class="form-grid three-columns">
-      <label class="field"><span>开始压缩 Tokens</span><input type="number" name="compact_at_tokens" min="1000" max="500000" required></label>
+    <div class="form-grid">
       <label class="field"><span>最大上下文 Tokens</span><input type="number" name="max_context_tokens" min="2000" max="1000000" required></label>
-      <label class="field"><span>保留最近消息</span><input type="number" name="keep_recent_messages" min="4" max="100" required></label>
     </div>
     <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="contextDialog">取消</button><button class="button primary" type="submit"><i data-lucide="save"></i>保存策略</button></div>
   </form>

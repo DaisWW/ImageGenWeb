@@ -87,9 +87,7 @@ channels:
 CHAT_CONFIG = """\
 version: 1
 context:
-  compact_at_tokens: 24000
   max_context_tokens: 32000
-  keep_recent_messages: 12
 models:
   - id: test-chat
     label: 测试 GPT

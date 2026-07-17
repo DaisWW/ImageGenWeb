@@ -182,7 +182,7 @@ class ConversationService:
     def state_dict(self, workspace: Workspace) -> dict[str, Any]:
         state = db.session.get(ConversationState, workspace.id)
         return {
-            "compacted": bool(state and state.summary),
+            "compacted": False,
             "estimated_context_tokens": state.estimated_context_tokens if state else 0,
             "max_context_tokens": self.chat_models.context.max_context_tokens,
         }

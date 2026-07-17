@@ -407,7 +407,6 @@ class TestPromptDrafts(PlatformTestCase):
         self.assertIn("AI 视觉创作搭档", config["system_prompts"]["chat"])
         config["system_prompts"] = {
             "chat": "自定义基础对话规则：先准确理解用户，再提出必要问题。",
-            "summary": "自定义摘要规则：只保留已确认的视觉事实。",
         }
         self.assertIn("当前是静态图片工作站", config["workspace_prompts"]["image"])
         self.assertIn(
@@ -425,10 +424,6 @@ class TestPromptDrafts(PlatformTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["config"]["system_prompts"], config["system_prompts"])
         self.assertEqual(response.json["config"]["workspace_prompts"], config["workspace_prompts"])
-        self.assertEqual(
-            self.app.extensions["chat_model_registry"].system_prompt("summary"),
-            config["system_prompts"]["summary"],
-        )
         image_workspace = self.create_workspace("自定义单图")
         self.services.conversations.send(
             image_workspace,
