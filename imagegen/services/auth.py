@@ -11,7 +11,7 @@ from ..errors import ServiceError
 from ..extensions import db
 from ..models import User, utcnow
 
-MIN_PASSWORD_LENGTH = 10
+MIN_PASSWORD_LENGTH = 6
 LOGIN_FAILURE_LIMIT = 5
 LOGIN_FAILURE_WINDOW_SECONDS = 5 * 60
 LOGIN_FAILURE_KEY_LIMIT = 4096

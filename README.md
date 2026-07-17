@@ -100,7 +100,7 @@ py scripts/backup.py
 py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 $env:ADMIN_USERNAME = "admin"
-$env:ADMIN_PASSWORD = "至少 10 位强密码"
+$env:ADMIN_PASSWORD = "至少 6 位密码"
 .\start.ps1
 ```
 

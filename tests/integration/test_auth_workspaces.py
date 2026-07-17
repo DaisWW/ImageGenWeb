@@ -95,14 +95,14 @@ class TestAuthAndWorkspaces(PlatformTestCase):
         self.assertEqual(client.get("/").status_code, 200)
         self.assertNotEqual(client.get_cookie("remember_token").value, old_token)
 
-    def test_password_requires_at_least_ten_characters(self):
-        self.services.auth.set_password(self.user, "1234567890")
-        self.assertTrue(self.services.auth.verify_password(self.user, "1234567890"))
+    def test_password_requires_at_least_six_characters(self):
+        self.services.auth.set_password(self.user, "123456")
+        self.assertTrue(self.services.auth.verify_password(self.user, "123456"))
 
         with self.assertRaisesRegex(ServiceError, "密码不能为空"):
             self.services.auth.set_password(self.user, "")
-        with self.assertRaisesRegex(ServiceError, "至少需要 10"):
-            self.services.auth.set_password(self.user, "123456789")
+        with self.assertRaisesRegex(ServiceError, "至少需要 6"):
+            self.services.auth.set_password(self.user, "12345")
 
     def test_login_rate_limit_uses_trusted_forwarded_client(self):
         client = self.app.test_client()
