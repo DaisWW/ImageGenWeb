@@ -1,0 +1,324 @@
+.chat-composer {
+  position: relative;
+  z-index: 8;
+  padding: 10px clamp(16px, 4vw, 58px) 16px;
+  border-top: 1px solid var(--line);
+  background: rgb(16 19 21 / 98%);
+  box-shadow: 0 -12px 35px rgb(0 0 0 / 25%);
+}
+.chat-toolbar,
+.chat-input-row,
+.chat-reference-strip {
+  max-width: 980px;
+  margin-inline: auto;
+}
+
+.chat-toolbar {
+  display: flex;
+  align-items: end;
+  gap: 9px;
+  margin-bottom: 8px;
+}
+
+.chat-model-field {
+  width: min(260px, 32vw);
+}
+
+.toggle-line,
+.context-meter {
+  display: inline-flex;
+  height: 36px;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.toggle-line input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.toggle-track {
+  display: block;
+  width: 30px;
+  height: 18px;
+  padding: 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--surface-3);
+  transition: background-color 160ms ease, border-color 160ms ease;
+}
+
+.toggle-track > span {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform 160ms ease, background-color 160ms ease;
+}
+
+.toggle-line input:checked + .toggle-track {
+  border-color: #755236;
+  background: var(--accent-muted);
+}
+
+.toggle-line input:checked + .toggle-track > span {
+  background: var(--accent);
+  transform: translateX(12px);
+}
+
+.context-meter {
+  margin-left: auto;
+}
+
+.chat-toolbar-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.context-meter svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chat-reference-strip {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.chat-reference-strip > span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.chat-reference-list {
+  display: flex;
+  min-width: 0;
+  gap: 7px;
+  overflow-x: auto;
+}
+
+.chat-reference-add,
+.chat-reference-item {
+  position: relative;
+  display: block;
+  width: 48px;
+  min-width: 48px;
+  aspect-ratio: 1;
+}
+
+.chat-reference-add,
+.chat-reference-card {
+  overflow: hidden;
+  padding: 0;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-3);
+}
+
+.chat-reference-card {
+  width: 100%;
+  height: 100%;
+}
+
+.chat-reference-add {
+  display: grid;
+  place-items: center;
+  border-style: dashed;
+}
+
+.chat-reference-add:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.chat-reference-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.chat-reference-card > span {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  display: none;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  color: #1a120a;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.chat-reference-card > span svg {
+  width: 10px;
+  height: 10px;
+}
+
+.chat-reference-card.selected {
+  border-color: var(--accent);
+}
+
+.chat-reference-card.selected > span {
+  display: grid;
+}
+
+.reference-remove.chat-reference-remove,
+.chat-reference-item .reference-library-save {
+  top: 3px;
+  z-index: 2;
+  width: 21px;
+  height: 21px;
+  color: #fff;
+  border-color: rgb(255 255 255 / 38%);
+  background: rgb(8 10 12 / 92%);
+  box-shadow: 0 2px 7px rgb(0 0 0 / 55%);
+  opacity: .94;
+}
+
+.reference-remove.chat-reference-remove { right: 3px; }
+.chat-reference-item .reference-library-save { left: 3px; }
+
+.reference-remove.chat-reference-remove svg,
+.chat-reference-item .reference-library-save svg {
+  width: 13px;
+  height: 13px;
+}
+
+.chat-reference-item:hover .chat-reference-remove,
+.chat-reference-remove:focus-visible {
+  color: #fff;
+  border-color: var(--danger);
+  background: var(--danger-muted);
+  opacity: 1;
+}
+
+.chat-reference-strip.is-picker-open
+  .chat-reference-card:not(.selected):not(.reference-upload-preview) img {
+  opacity: .58;
+}
+
+.chat-reference-strip.is-picker-open
+  .chat-reference-card:not(.selected):not(.reference-upload-preview):hover img {
+  opacity: .86;
+}
+
+.chat-input-row {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) 38px;
+  align-items: end;
+  gap: 8px;
+}
+
+.chat-input-field textarea {
+  position: absolute;
+  inset: 0;
+  display: block;
+  height: 58px;
+  min-height: 58px;
+  max-height: 160px;
+  padding: 10px 12px;
+  resize: none;
+  line-height: 1.55;
+}
+
+.chat-input-field {
+  position: relative;
+  display: block;
+  height: 58px;
+}
+
+.chat-composer.is-image-dragover .chat-input-field::after {
+  position: absolute;
+  inset: 0;
+  border: 2px dashed var(--accent);
+  border-radius: 6px;
+  background: rgb(239 157 81 / 9%);
+  content: "";
+  pointer-events: none;
+}
+
+.chat-attach-button,
+.chat-send-button {
+  position: relative;
+  margin-bottom: 10px;
+}
+
+.chat-send-button {
+  color: #1a120a;
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.chat-send-button:hover:not(:disabled) {
+  color: #1a120a;
+  background: var(--accent-strong);
+}
+
+.chat-attach-button > span {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  color: #1a120a;
+  border-radius: 9px;
+  background: var(--accent);
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 17px;
+}
+
+.admin-empty {
+  display: grid;
+  min-height: 260px;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+  color: var(--muted);
+}
+
+.empty-mark {
+  display: grid;
+  width: 54px;
+  height: 54px;
+  place-items: center;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-1);
+}
+
+.empty-mark svg {
+  width: 23px;
+  height: 23px;
+}
+
+.brand-empty-mark {
+  width: 68px;
+  height: 68px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.brand-empty-mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 12px 24px rgb(0 0 0 / 32%));
+}

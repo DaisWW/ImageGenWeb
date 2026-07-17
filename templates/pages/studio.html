@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='css/studio-workflow.css') }}">{% endblock %}
 {% block body_class %}app-page{% endblock %}
 {% block body %}
 {% include "partials/header.html" %}
@@ -59,15 +60,19 @@
         <form class="chat-composer" id="chatForm">
           <div class="chat-toolbar">
             <label class="compact-field chat-model-field"><span>对话模型</span><select id="chatModelSelect" required></select></label>
-            <label class="toggle-line" title="总结需求时输出英文提示词">
+            <div class="creative-direction-control">
+              <label class="compact-field creative-direction-field"><span>创作方向</span><select id="creativeDirectionSelect"></select></label>
+              <a class="icon-button" id="promptGalleryLink" href="{{ prompt_gallery_url }}" target="_blank" rel="noopener" title="浏览 GPT Image 2 提示词图库" aria-label="浏览 GPT Image 2 提示词图库"><i data-lucide="external-link"></i></a>
+            </div>
+            <label class="toggle-line" title="自动整理时输出英文提示词">
               <input type="checkbox" id="translatePrompt">
               <span class="toggle-track"><span></span></span>
               <span>英文提示词</span>
             </label>
             <span class="context-meter" id="contextStatus" title="当前会话上下文"><i data-lucide="braces"></i><span>上下文 0%</span></span>
             <div class="chat-toolbar-actions">
-              <button class="button secondary small" type="button" id="draftPromptButton"><i data-lucide="wand-sparkles"></i>总结需求</button>
-              <button class="button primary small" type="button" id="directGenerationButton"><i data-lucide="image-plus"></i><span id="directGenerationButtonLabel">直接生图</span></button>
+              <button class="button primary small" type="button" id="directGenerationButton" hidden><i data-lucide="image-plus"></i>直接生图</button>
+              <button class="button primary small" type="button" id="animationParametersButton" hidden><i data-lucide="sliders-horizontal"></i>动画参数</button>
             </div>
           </div>
           <div class="chat-reference-strip" id="chatReferenceStrip" hidden>
@@ -89,6 +94,7 @@
           <div class="generation-composer-heading">
             <button class="icon-button generation-back-button" type="button" id="generationBackButton" title="返回对话" aria-label="返回对话"><i data-lucide="arrow-left"></i></button>
             <div><strong id="generationHeadingTitle">确认生图参数</strong><span id="generationHeadingSubtitle">提示词和参数会保存在当前工作站</span></div>
+            <span class="prompt-review-status" id="promptReviewStatus"><i data-lucide="shield"></i><span>可直接编辑提示词</span></span>
           </div>
           <div class="composer-controls">
             <div class="mode-switch" id="modeSwitch" data-mode="text2img">
@@ -103,6 +109,11 @@
             </label>
             <label class="compact-field channel-field"><span>渠道</span><select id="channelSelect" required></select></label>
             <label class="compact-field model-field"><span>模型</span><select id="modelSelect" required></select></label>
+            <div class="quality-stage-switch" id="qualityStageSwitch" data-stage="draft" aria-label="生成阶段">
+              <button type="button" class="active" data-generation-stage="draft" aria-pressed="true" title="Low 质量探索">草稿</button>
+              <button type="button" data-generation-stage="refine" aria-pressed="false" title="Medium 质量精修">精修</button>
+              <button type="button" data-generation-stage="final" aria-pressed="false" title="High 质量成品">成品</button>
+            </div>
             <label class="compact-field"><span>尺寸</span><input id="sizeInput" list="sizeOptions" maxlength="20" placeholder="1024x1024" autocomplete="off" required><datalist id="sizeOptions"></datalist></label>
             <label class="compact-field"><span id="frameFormatLabel">格式</span><select id="formatSelect"></select></label>
             <label class="compact-field number-field" id="imageCountControl"><span>张数</span><input id="batchCount" type="number" min="1" max="{{ runtime_settings.max_batch_images }}" value="1"></label>
@@ -205,12 +216,66 @@
       <dl class="detail-list" id="detailList"></dl>
       <div class="detail-prompt"><span>提示词</span><p id="detailPrompt"></p></div>
       <div class="detail-references" id="detailReferences"></div>
+      <section class="detail-review" id="detailReview">
+        <header><span>AI 验收</span><strong id="detailReviewVerdict">尚未验收</strong></header>
+        <div class="detail-review-scores" id="detailReviewScores" hidden></div>
+        <ul id="detailReviewChecks" hidden></ul>
+        <p id="detailReviewSuggestion" hidden></p>
+      </section>
       <div class="detail-actions">
+        <button class="button secondary" type="button" id="detailSlice"><i data-lucide="scan-line"></i>智能切图</button>
         <button class="button secondary" type="button" id="detailSaveLibrary"><i data-lucide="bookmark-plus"></i>存入图库</button>
+        <button class="button secondary" type="button" id="detailRunReview"><i data-lucide="scan-search"></i>AI 验收</button>
+        <button class="button secondary" type="button" id="detailApplyReview" hidden><i data-lucide="wrench"></i>按建议精修</button>
         <button class="button secondary" type="button" id="detailReuse"><i data-lucide="image-plus"></i><span id="detailReuseLabel">基于此图继续</span></button>
         <a class="button primary" id="detailDownload" download><i data-lucide="download"></i>下载原图</a>
       </div>
     </div>
+  </div>
+</dialog>
+
+<dialog class="modal slice-modal" id="sliceDialog">
+  <div class="slice-dialog-layout">
+    <section class="slice-preview-pane">
+      <div class="slice-preview-heading">
+        <div><span class="eyebrow">Smart Slicer</span><strong id="slicePreviewTitle">正在识别图集</strong></div>
+        <span class="slice-confidence" id="sliceConfidence">分析中</span>
+      </div>
+      <div class="slice-preview-scroll">
+        <div class="slice-canvas" id="sliceCanvas">
+          <img id="sliceImage" alt="待切分原图" decoding="async">
+          <div class="slice-overlay" id="sliceOverlay"></div>
+        </div>
+      </div>
+    </section>
+    <aside class="slice-controls">
+      <div class="modal-header">
+        <div><span class="eyebrow">Post Process</span><h2>智能切图</h2></div>
+        <button class="icon-button" type="button" data-close-dialog="sliceDialog" aria-label="关闭"><i data-lucide="x"></i></button>
+      </div>
+      <div class="slice-layout-fields" id="sliceLayoutFields">
+        <label class="compact-field"><span>行数</span><input id="sliceRows" type="number" min="1" max="8" value="1"></label>
+        <label class="compact-field"><span>列数</span><input id="sliceColumns" type="number" min="1" max="8" value="1"></label>
+        <label class="compact-field"><span>横向边距</span><input id="sliceMarginX" type="number" min="0" value="0"></label>
+        <label class="compact-field"><span>纵向边距</span><input id="sliceMarginY" type="number" min="0" value="0"></label>
+        <label class="compact-field"><span>横向间距</span><input id="sliceGapX" type="number" min="0" value="0"></label>
+        <label class="compact-field"><span>纵向间距</span><input id="sliceGapY" type="number" min="0" value="0"></label>
+      </div>
+      <div class="slice-selection-heading">
+        <span id="sliceSelectionSummary">已选择 0 个切片</span>
+        <div>
+          <button class="icon-button" type="button" id="sliceReset" title="恢复智能识别结果" aria-label="恢复智能识别结果"><i data-lucide="refresh-cw"></i></button>
+          <button class="icon-button" type="button" id="sliceSelectAll" title="选择全部切片" aria-label="选择全部切片"><i data-lucide="square-check-big"></i></button>
+          <button class="icon-button" type="button" id="sliceClearSelection" title="清空选择" aria-label="清空选择"><i data-lucide="square"></i></button>
+        </div>
+      </div>
+      <div class="slice-list" id="sliceList"></div>
+      <div class="slice-actions">
+        <button class="button secondary" type="button" id="sliceSaveLibrary"><i data-lucide="bookmark-plus"></i>存入图库</button>
+        <button class="button secondary" type="button" id="sliceReuse"><i data-lucide="image-plus"></i>选择一张继续</button>
+        <button class="button primary" type="button" id="sliceDownload"><i data-lucide="file-archive"></i>下载 ZIP</button>
+      </div>
+    </aside>
   </div>
 </dialog>
 
@@ -237,6 +302,20 @@
   </div>
 </dialog>
 
-<script id="bootstrapData" type="application/json">{{ {"user": user, "workspaces": workspaces, "max_workspaces": max_workspaces, "runtime_settings": runtime_settings, "history_retention_days": history_retention_days, "channels": channels, "chat_models": chat_models}|tojson }}</script>
+<script id="bootstrapData" type="application/json">{{ {"user": user, "workspaces": workspaces, "max_workspaces": max_workspaces, "runtime_settings": runtime_settings, "history_retention_days": history_retention_days, "channels": channels, "chat_models": chat_models, "creative_directions": creative_directions}|tojson }}</script>
 {% endblock %}
-{% block scripts %}<script src="{{ url_for('static', filename='js/studio.js') }}" defer></script>{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/studio/core.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/studio/selections.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/studio/workspaces.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/studio/settings.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/studio/workspace-actions.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/studio/timeline.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/studio/conversation.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/studio/library.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/studio/references.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/studio/generations.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/studio/image-tools.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/studio/runtime.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/studio.js') }}" defer></script>
+{% endblock %}

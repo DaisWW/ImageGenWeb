@@ -1,0 +1,253 @@
+.admin-shell {
+  width: min(1440px, 100%);
+  margin: 0 auto;
+  padding: 26px 24px 70px;
+}
+.admin-heading,
+.view-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.admin-heading h1 {
+  font-size: 22px;
+  font-weight: 690;
+}
+
+.admin-tabs {
+  position: relative;
+  display: flex;
+  gap: 3px;
+  margin-top: 24px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+}
+
+.admin-tab {
+  position: relative;
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 15px;
+  color: var(--muted);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+  transition: color 160ms ease, transform 160ms ease;
+}
+
+.admin-tab-indicator {
+  position: absolute;
+  z-index: 2;
+  bottom: 0;
+  left: 0;
+  width: 0;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--accent);
+  pointer-events: none;
+  transition: width var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-out);
+}
+
+.admin-tab-indicator.instant {
+  transition: none;
+}
+
+.admin-tab:hover {
+  color: var(--text-soft);
+}
+
+.admin-tab.active {
+  color: var(--accent);
+  border-bottom-color: transparent;
+}
+
+.admin-tab svg {
+  width: 16px;
+  height: 16px;
+}
+
+.admin-view {
+  display: none;
+  padding-top: 23px;
+}
+
+.admin-view.active {
+  display: block;
+}
+
+.view-toolbar {
+  margin-bottom: 16px;
+}
+
+.generation-filter-form {
+  display: grid;
+  margin-bottom: 16px;
+  grid-template-columns: minmax(180px, 240px) minmax(220px, 1fr) auto auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.generation-filter-form .icon-button {
+  height: 40px;
+}
+
+.log-mode-switch {
+  display: inline-flex;
+  margin-bottom: 14px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.log-mode-switch button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  color: var(--muted);
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.log-mode-switch button.active {
+  color: var(--text);
+  background: var(--surface-4);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 28%);
+}
+
+.log-mode-switch svg {
+  width: 14px;
+  height: 14px;
+}
+
+.log-filter-form {
+  display: grid;
+  margin-bottom: 14px;
+  grid-template-columns: repeat(6, minmax(120px, 1fr)) minmax(220px, 1.5fr) auto auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.log-filter-form .button,
+.log-filter-form .icon-button {
+  height: 40px;
+}
+
+.log-table-wrap table {
+  min-width: 1100px;
+}
+
+.log-primary,
+.log-secondary {
+  display: block;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-primary {
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.log-secondary {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.log-error {
+  color: var(--danger);
+}
+
+.log-empty-cell {
+  height: 120px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.log-pagination,
+.log-pagination > div {
+  display: flex;
+  align-items: center;
+}
+
+.log-pagination {
+  justify-content: space-between;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.log-pagination > div {
+  gap: 6px;
+}
+
+#refreshLogsButton.is-loading svg {
+  animation: spin 850ms linear infinite;
+}
+
+.log-detail-modal {
+  width: min(94vw, 900px);
+  max-width: min(94vw, 900px);
+}
+
+.log-detail-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 20px;
+  margin: 0;
+}
+
+.log-detail-list > div {
+  min-width: 0;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.log-detail-list dt,
+.log-detail-data > span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 680;
+}
+
+.log-detail-list dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.log-detail-data {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+}
+
+.log-detail-data pre {
+  max-height: 330px;
+  padding: 12px;
+  margin: 0;
+  overflow: auto;
+  color: var(--text-soft);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+  font: 10px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

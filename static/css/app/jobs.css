@@ -1,0 +1,324 @@
+.job-card {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-1);
+  box-shadow: 0 10px 26px rgb(0 0 0 / 13%);
+  transition: border-color 180ms ease, background-color 180ms ease;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 180px;
+}
+.job-card.running,
+.job-card.canceling {
+  border-color: #62472f;
+}
+
+.job-header {
+  display: flex;
+  min-height: 45px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  padding: 8px 13px;
+  border-bottom: 1px solid var(--line);
+}
+
+.job-heading,
+.job-actions,
+.job-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.job-heading,
+.job-actions {
+  gap: 9px;
+}
+
+.status-badge {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-2);
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.status-badge > span:first-child {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.status-badge.running,
+.status-badge.succeeded {
+  color: var(--accent);
+  border-color: #67482f;
+  background: var(--accent-muted);
+}
+
+.status-badge.running > span:first-child {
+  animation: status-pulse 1.8s ease-in-out infinite;
+}
+
+.status-badge.queued {
+  color: var(--focus);
+  border-color: #36546a;
+  background: var(--focus-muted);
+}
+
+.status-badge.partial,
+.status-badge.canceling {
+  color: var(--credit);
+  border-color: #5a4828;
+  background: var(--credit-muted);
+}
+
+.status-badge.failed,
+.status-badge.canceled {
+  color: var(--danger);
+  border-color: #65343a;
+  background: var(--danger-muted);
+}
+
+.queue-note {
+  color: var(--focus);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.job-time,
+.job-actions > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.job-actions svg {
+  width: 14px;
+  height: 14px;
+}
+
+.job-progress {
+  height: 2px;
+  overflow: hidden;
+  background: var(--surface-3);
+}
+
+.job-progress span {
+  position: relative;
+  display: block;
+  height: 100%;
+  overflow: hidden;
+  background: var(--accent);
+  transition: width 700ms ease;
+}
+
+.job-card.running .job-progress span::after,
+.job-card.canceling .job-progress span::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 48%), transparent);
+  content: "";
+  transform: translateX(-110%);
+  animation: progress-flow 1.7s ease-in-out infinite;
+}
+
+.job-card.queued .job-progress span {
+  background: var(--focus);
+}
+
+.job-card.failed .job-progress span,
+.job-card.canceled .job-progress span {
+  background: var(--danger);
+}
+
+.job-body {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) auto;
+  align-items: center;
+  gap: 20px;
+  padding: 13px;
+}
+
+.job-copy {
+  min-width: 0;
+}
+
+.job-copy p {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.job-meta {
+  gap: 5px;
+  margin-top: 9px;
+}
+
+.job-meta span,
+.admin-job-detail span,
+.capability-list span {
+  padding: 2px 6px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface-2);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.output-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 64px);
+  gap: 6px;
+}
+
+.animation-job .job-body {
+  grid-template-columns: minmax(240px, 1fr) auto;
+}
+
+.animation-job.has-animation-result .job-body {
+  grid-template-columns: minmax(240px, 1fr) 148px auto;
+}
+
+.animation-result {
+  display: grid;
+  width: 148px;
+  gap: 6px;
+}
+
+.animation-preview {
+  display: grid;
+  overflow: hidden;
+  aspect-ratio: 1;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background-color: #202427;
+  background-image:
+    linear-gradient(45deg, rgb(255 255 255 / 5%) 25%, transparent 25%),
+    linear-gradient(-45deg, rgb(255 255 255 / 5%) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgb(255 255 255 / 5%) 75%),
+    linear-gradient(-45deg, transparent 75%, rgb(255 255 255 / 5%) 75%);
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-size: 16px 16px;
+}
+
+.animation-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.animation-result-bar {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.animation-result-bar span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.animation-result-bar .icon-button {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+}
+
+.output-tile {
+  position: relative;
+  width: 64px;
+  aspect-ratio: 1;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-2);
+}
+
+.output-tile.has-transparency,
+.image-dialog-preview.has-transparency,
+.transparent-background-swatch {
+  --checkerboard-dark: #d4d8d6;
+  --checkerboard-light: #f2f4f3;
+  background:
+    conic-gradient(
+      var(--checkerboard-dark) 25%,
+      var(--checkerboard-light) 0 50%,
+      var(--checkerboard-dark) 0 75%,
+      var(--checkerboard-light) 0
+    )
+    0 0 / 16px 16px;
+}
+
+.output-tile:not(:disabled):hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+
+.output-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 180ms ease;
+}
+
+.output-tile:hover img {
+  transform: scale(1.04);
+}
+
+.output-tile.result-arrived::after {
+  position: absolute;
+  z-index: 2;
+  inset: -45%;
+  background: linear-gradient(100deg, transparent 38%, rgb(255 255 255 / 72%) 50%, transparent 62%);
+  content: "";
+  pointer-events: none;
+  transform: translateX(-80%) rotate(10deg);
+  animation: result-sweep 720ms var(--ease-out) both;
+}
+
+.output-placeholder {
+  display: grid;
+  height: 100%;
+  place-items: center;
+  align-content: center;
+  gap: 5px;
+  color: var(--muted);
+}
+
+.output-placeholder svg {
+  width: 17px;
+  height: 17px;
+}
+
+.output-tile.running .output-placeholder svg,
+.output-tile.queued .output-placeholder svg {
+  animation: spin 1.4s linear infinite;
+}
+
+.output-placeholder small {
+  font-size: 9px;
+}

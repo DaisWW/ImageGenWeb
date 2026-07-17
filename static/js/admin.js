@@ -683,7 +683,7 @@
       try {
         await UI.api(`/api/admin/generations/${button.dataset.adminCancel}/cancel`, { method: "POST" });
         await this.loadJobs();
-        UI.toast("取消请求已提交", "success");
+        UI.toast("任务已取消", "success");
       } catch (error) {
         button.disabled = false;
         UI.toast(error.message, "error");

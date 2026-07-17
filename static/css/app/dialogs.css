@@ -1,0 +1,351 @@
+.modal {
+  max-width: min(94vw, 680px);
+  padding: 0;
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-1);
+  box-shadow: var(--shadow);
+}
+.modal::backdrop {
+  background: rgb(0 0 0 / 72%);
+  opacity: 0;
+}
+
+.modal[open] {
+  animation: dialog-in 180ms ease both;
+}
+
+.modal[open]::backdrop {
+  animation: backdrop-in 180ms ease both;
+}
+
+.compact-modal {
+  width: min(94vw, 440px);
+}
+
+.workspace-kind-field {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  margin: 0;
+}
+
+.workspace-kind-field legend {
+  margin-bottom: 7px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.workspace-kind-switch {
+  width: 100%;
+}
+
+.modal-form,
+.image-dialog-info {
+  display: grid;
+  gap: 17px;
+  padding: 21px;
+}
+
+.detail-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.modal-header h2 {
+  font-size: 17px;
+  font-weight: 680;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 3px;
+}
+
+.workspace-danger-copy {
+  color: var(--text-soft);
+  line-height: 1.7;
+}
+
+.workspace-danger-copy strong {
+  color: var(--text);
+}
+
+.workspace-danger-copy small {
+  display: block;
+  margin-top: 8px;
+  color: var(--danger);
+}
+
+.image-modal {
+  width: min(96vw, 1100px);
+  max-width: min(96vw, 1100px);
+}
+
+.image-dialog-layout {
+  display: grid;
+  max-height: 88vh;
+  grid-template-columns: minmax(0, 1.6fr) minmax(310px, .8fr);
+}
+
+.image-dialog-preview {
+  display: grid;
+  min-height: 500px;
+  place-items: center;
+  overflow: hidden;
+  background: #050606;
+}
+
+.image-dialog-preview img {
+  width: 100%;
+  height: 100%;
+  max-height: 88vh;
+  object-fit: contain;
+}
+
+.image-dialog-info {
+  align-content: start;
+  overflow: auto;
+  border-left: 1px solid var(--line);
+}
+
+.library-modal {
+  width: min(94vw, 780px);
+  max-width: min(94vw, 780px);
+}
+
+.library-dialog {
+  display: grid;
+  max-height: 84vh;
+  grid-template-rows: auto auto minmax(260px, 1fr);
+  gap: 14px;
+  padding: 21px;
+}
+
+.library-heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.library-heading > span {
+  padding: 2px 7px;
+  color: var(--accent);
+  border: 1px solid rgb(242 166 90 / 32%);
+  border-radius: 4px;
+  background: var(--accent-muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.library-content {
+  position: relative;
+  min-height: 340px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+  scrollbar-gutter: stable;
+}
+
+.library-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 9px;
+  padding-top: 14px;
+}
+
+.library-pagination {
+  display: flex;
+  justify-content: center;
+  padding: 14px 0 2px;
+}
+
+.library-pagination .loading svg,
+.library-state > svg {
+  animation: spin 850ms linear infinite;
+}
+
+.library-card {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.library-use {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  color: var(--text);
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.library-use:hover:not(:disabled),
+.library-use:focus-visible {
+  background: var(--surface-3);
+}
+
+.library-thumbnail {
+  width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  background: #090b0f;
+}
+
+.library-thumbnail img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.library-card-copy {
+  display: grid;
+  min-width: 0;
+  padding: 8px 9px 9px;
+}
+
+.library-card-copy strong {
+  overflow: hidden;
+  font-size: 10px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-delete {
+  position: absolute;
+  z-index: 2;
+  top: 6px;
+  right: 6px;
+  width: 28px;
+  height: 28px;
+  color: #fff;
+  border-color: rgb(255 255 255 / 32%);
+  background: rgb(8 10 12 / 88%);
+}
+
+.library-delete:hover:not(:disabled) {
+  color: #fff;
+  border-color: var(--danger);
+  background: var(--danger-muted);
+}
+
+.library-empty,
+.library-state {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 9px;
+  color: var(--muted);
+}
+
+.library-empty strong,
+.library-state strong {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.library-error > svg {
+  color: var(--danger);
+  animation: none;
+}
+
+.library-error .icon-button {
+  margin-top: 3px;
+}
+
+.detail-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  border-top: 1px solid var(--line);
+}
+
+.detail-list > div {
+  display: grid;
+  grid-template-columns: 62px 1fr;
+  gap: 14px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.detail-list dt,
+.detail-prompt > span,
+.detail-references > span,
+.admin-references > span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.detail-list dd {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.detail-prompt {
+  display: grid;
+  gap: 7px;
+}
+
+.detail-prompt p {
+  max-height: 180px;
+  overflow: auto;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.detail-references > div {
+  display: flex;
+  gap: 6px;
+  margin-top: 7px;
+  overflow-x: auto;
+}
+
+.detail-references img {
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  object-fit: cover;
+}
+
+.message-attachments img.media-reveal,
+.output-tile img.media-reveal,
+.image-dialog-preview img.media-reveal,
+.detail-references img.media-reveal {
+  opacity: 0;
+  transform: scale(.985);
+  transition: opacity 260ms ease, transform 320ms ease;
+}
+
+img.media-reveal.is-loaded {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.message-attachments a:hover img.media-reveal.is-loaded,
+.output-tile:hover img.media-reveal.is-loaded {
+  transform: scale(1.04);
+}
