@@ -427,8 +427,10 @@ class GenerationService:
         completed_times = [item.completed_at for item in job.items if item.completed_at]
         job.completed_at = max(
             completed_times,
-            key=lambda value: value.replace(tzinfo=timezone.utc)
-            if value.tzinfo is None
-            else value.astimezone(timezone.utc),
+            key=lambda value: (
+                value.replace(tzinfo=timezone.utc)
+                if value.tzinfo is None
+                else value.astimezone(timezone.utc)
+            ),
             default=utcnow(),
         )
