@@ -23,8 +23,8 @@ channels:
     price_rmb: 0.0600
     capabilities:
       modes: [text2img, img2img]
-      # 已支持两张参考图；帧动画会同时传入母图和上一帧。
-      max_reference_images: 2
+      # 2026-07-17 已验证 32 张；生产统一限制为 20 张。
+      max_reference_images: 20
       max_reference_image_mb: 10
       max_reference_total_mb: 40
       sizes: [1024x1024, 1536x1024, 1024x1536]
@@ -49,8 +49,8 @@ channels:
     price_rmb: 0.0900
     capabilities:
       modes: [text2img, img2img]
-      # 2026-07-14 已用两张视觉差异明显的参考图验证。
-      max_reference_images: 2
+      # 2026-07-17 已验证 20 张；21 张起上游返回 502。
+      max_reference_images: 20
       max_reference_image_mb: 10
       max_reference_total_mb: 40
       sizes: [1024x1024, 1536x1024, 1024x1536]

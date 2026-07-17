@@ -23,10 +23,10 @@ MIB = 1024 * 1024
 class RuntimeSettings:
     default_user_concurrency: int = 2
     max_workspaces_per_user: int = 10
-    max_assets_per_workspace: int = 8
+    max_assets_per_workspace: int = 20
     create_starter_workspaces: bool = True
     max_message_characters: int = 12000
-    max_chat_attachments: int = 8
+    max_chat_attachments: int = 20
     max_attachment_mb: int = 10
     max_attachment_total_mb: int = 40
     max_concurrent_chats: int = 4
@@ -287,10 +287,10 @@ def _parse_runtime_settings(raw: dict[str, Any]) -> RuntimeSettings:
     settings = RuntimeSettings(
         default_user_concurrency=_bounded_int(raw, "default_user_concurrency", 2, 1, 16),
         max_workspaces_per_user=_bounded_int(raw, "max_workspaces_per_user", 10, 2, 100),
-        max_assets_per_workspace=_bounded_int(raw, "max_assets_per_workspace", 8, 1, 32),
+        max_assets_per_workspace=_bounded_int(raw, "max_assets_per_workspace", 20, 1, 32),
         create_starter_workspaces=as_bool(raw.get("create_starter_workspaces", True)),
         max_message_characters=_bounded_int(raw, "max_message_characters", 12000, 100, 50000),
-        max_chat_attachments=_bounded_int(raw, "max_chat_attachments", 8, 1, 32),
+        max_chat_attachments=_bounded_int(raw, "max_chat_attachments", 20, 1, 32),
         max_attachment_mb=_bounded_int(raw, "max_attachment_mb", 10, 1, 40),
         max_attachment_total_mb=_bounded_int(raw, "max_attachment_total_mb", 40, 1, 40),
         max_concurrent_chats=_bounded_int(raw, "max_concurrent_chats", 4, 1, 64),

@@ -16,6 +16,7 @@ from imagegen.models import (
 )
 from imagegen.services import ServiceError
 from tests.support.platform import (
+    CHANNEL_CONFIG,
     BlockingProviderFactory,
     PlatformTestCase,
     png_bytes,
@@ -166,13 +167,36 @@ class TestGenerations(PlatformTestCase):
         self.assertEqual(stale.json["code"], "prompt_review_stale")
         self.assertIn("参考图或顺序已改变", stale.json["error"])
 
-    def test_bundled_channels_support_two_references(self):
+    def test_bundled_channels_support_twenty_references(self):
         config_path = Path(__file__).resolve().parents[2] / "config" / "channels.yaml"
         registry = ChannelRegistry(config_path)
 
         for channel_id in ("current", "lucen"):
             channel = registry.get(channel_id, require_available=False)
-            self.assertEqual(channel.capabilities.max_reference_images, 2)
+            self.assertEqual(channel.capabilities.max_reference_images, 20)
+
+    def test_generation_accepts_twenty_ordered_references(self):
+        self.channel_path.write_text(
+            CHANNEL_CONFIG.replace("max_reference_images: 8", "max_reference_images: 20"),
+            encoding="utf-8",
+        )
+        self.assertTrue(self.app.extensions["channel_registry"].reload(force=True))
+        workspace = self.create_workspace("二十张垫图")
+        assets = self.services.workspaces.add_assets(
+            workspace,
+            [(f"reference-{index}.png", png_bytes((index * 10, 80, 160))) for index in range(20)],
+        )
+
+        job = self.submit(
+            workspace,
+            mode="img2img",
+            reference_ids=tuple(asset.id for asset in reversed(assets)),
+        )
+
+        self.assertEqual(
+            [reference.asset_id for reference in job.references],
+            [asset.id for asset in reversed(assets)],
+        )
 
     def test_transparent_background_is_validated_persisted_and_serialized(self):
         workspace = self.create_workspace()

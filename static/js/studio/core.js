@@ -69,9 +69,9 @@
       this.workspaces = this.bootstrap.workspaces;
       this.limits = this.bootstrap.runtime_settings || {
         max_workspaces_per_user: this.bootstrap.max_workspaces,
-        max_assets_per_workspace: 8,
+        max_assets_per_workspace: 20,
         max_message_characters: 12000,
-        max_chat_attachments: 8,
+        max_chat_attachments: 20,
         max_attachment_mb: 10,
         max_attachment_total_mb: 40,
         max_prompt_characters: 8000,

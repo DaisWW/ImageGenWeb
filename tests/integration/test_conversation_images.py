@@ -245,9 +245,9 @@ class TestConversationImages(PlatformTestCase):
         workspace = self.create_workspace()
         assets = self.services.workspaces.add_assets(
             workspace,
-            [(f"reference-{index}.png", png_bytes((index * 20, 80, 160))) for index in range(8)],
+            [(f"reference-{index}.png", png_bytes((index * 10, 80, 160))) for index in range(20)],
         )
-        with self.assertRaisesRegex(ServiceError, "最多保留 8 张参考图"):
+        with self.assertRaisesRegex(ServiceError, "最多保留 20 张参考图"):
             self.services.workspaces.add_assets(
                 workspace,
                 [("too-many.png", png_bytes((250, 250, 20)))],

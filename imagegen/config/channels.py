@@ -264,7 +264,7 @@ class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
 
         capabilities = ChannelCapabilities(
             modes=modes,
-            max_reference_images=bounded_int(capabilities_raw, "max_reference_images", 1, 0, 8),
+            max_reference_images=bounded_int(capabilities_raw, "max_reference_images", 1, 0, 20),
             max_reference_image_mb=bounded_int(
                 capabilities_raw, "max_reference_image_mb", 10, 1, 50
             ),
