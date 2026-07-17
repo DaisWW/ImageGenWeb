@@ -93,6 +93,24 @@ def dense_icon_atlas_png_bytes(*, rows=8, columns=8, cell=48) -> bytes:
     return output.getvalue()
 
 
+def partial_boundary_atlas_png_bytes() -> bytes:
+    image = Image.new("RGB", (201, 201), (238, 238, 238))
+    draw = ImageDraw.Draw(image)
+    colors = [(20, 80, 150), (180, 40, 70), (40, 160, 80), (180, 130, 20)]
+    for row in range(2):
+        for column in range(2):
+            x0, x1 = (0, 99) if column == 0 else (100, 200)
+            y0, y1 = (0, 99) if row == 0 else (100, 200)
+            bar_x0, bar_x1 = (10, 45) if column == 0 else (120, 155)
+            bar_y0, bar_y1 = (10, 45) if row == 0 else (120, 155)
+            color = colors[row * 2 + column]
+            draw.rectangle((x0, bar_y0, x1, bar_y1), fill=color)
+            draw.rectangle((bar_x0, y0, bar_x1, y1), fill=color)
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
+
+
 class TestImageSlicing(PlatformTestCase):
     def _completed_item(self, content: bytes, *, prompt="六张素材，2×3 图集"):
         workspace = self.create_workspace("智能切图")
@@ -186,6 +204,18 @@ class TestImageSlicing(PlatformTestCase):
         self.assertTrue(
             all(box["width"] == 48 and box["height"] == 48 for box in analysis["boxes"])
         )
+
+    def test_low_confidence_visual_grid_still_wins_over_wrong_prompt_hint(self):
+        _workspace, item = self._completed_item(
+            partial_boundary_atlas_png_bytes(),
+            prompt="3x3 素材图",
+        )
+        response = self.user_client().post(f"/api/generation-items/{item.id}/slice-analysis")
+
+        analysis = response.json["analysis"]
+        self.assertTrue(analysis["detected"])
+        self.assertEqual(analysis["confidence"], "low")
+        self.assertEqual((analysis["rows"], analysis["columns"]), (2, 2))
 
     def test_prompt_grid_hint_still_uniformly_splits_transparent_image(self):
         _workspace, item = self._completed_item(

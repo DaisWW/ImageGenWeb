@@ -11,7 +11,7 @@ from .models import ANALYSIS_MAX_SIDE, AxisLayout
 MIN_VISUAL_COVERAGE = 0.35
 MIN_HINTED_COVERAGE = 0.18
 PROMPT_FALLBACK_SCORE = 0.50
-MIN_LAYOUT_SCORE = 0.45
+MIN_PERIODIC_SCORE = 0.45
 MIN_PERIODIC_ACTIVITY = 0.006
 MAX_PERIODIC_BOUNDARY_RATIO = 0.72
 MIN_PERIODIC_UNIFORMITY = 0.70
@@ -106,7 +106,7 @@ def _detect_axis(image: Image.Image, *, axis: int, hinted_count: int | None) -> 
     periodic = _detect_periodic_axis(edge)
     if periodic.score > best.score:
         best = periodic
-    return best if best.score >= MIN_LAYOUT_SCORE else AxisLayout(count=1, score=0.0)
+    return best
 
 
 def _detect_periodic_axis(profile: list[float]) -> AxisLayout:
@@ -145,7 +145,7 @@ def _detect_periodic_axis(profile: list[float]) -> AxisLayout:
         score = valley_score * 0.65 + uniformity * 0.35
         if score > best.score:
             best = AxisLayout(count=count, score=score)
-    return best
+    return best if best.score >= MIN_PERIODIC_SCORE else AxisLayout(count=1, score=0.0)
 
 
 def _axis_profiles(image: Image.Image, axis: int) -> tuple[list[float], list[float]]:
