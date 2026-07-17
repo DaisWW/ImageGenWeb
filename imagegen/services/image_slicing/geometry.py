@@ -17,30 +17,21 @@ def grid_boxes(
     *,
     rows: int,
     columns: int,
-    margin_x: int = 0,
-    margin_y: int = 0,
-    gap_x: int = 0,
-    gap_y: int = 0,
 ) -> list[SliceBox]:
     if not 1 <= rows <= 8 or not 1 <= columns <= 8 or rows * columns > MAX_SLICES:
         raise ValueError("切片行列数无效")
     if min(width, height) < MIN_SLICE_SIDE:
         raise ValueError("原图尺寸过小")
-    if min(margin_x, margin_y, gap_x, gap_y) < 0:
-        raise ValueError("切片边距不能为负数")
+    if width < columns * MIN_SLICE_SIDE or height < rows * MIN_SLICE_SIDE:
+        raise ValueError("行列数过多，没有足够的切片空间")
 
-    usable_width = width - margin_x * 2 - gap_x * (columns - 1)
-    usable_height = height - margin_y * 2 - gap_y * (rows - 1)
-    if usable_width < columns * MIN_SLICE_SIDE or usable_height < rows * MIN_SLICE_SIDE:
-        raise ValueError("边距或间距过大，没有足够的切片空间")
-
-    x_edges = [margin_x + round(usable_width * index / columns) for index in range(columns + 1)]
-    y_edges = [margin_y + round(usable_height * index / rows) for index in range(rows + 1)]
+    x_edges = [_grid_edge(width, index, columns) for index in range(columns + 1)]
+    y_edges = [_grid_edge(height, index, rows) for index in range(rows + 1)]
     boxes = []
     for row in range(rows):
         for column in range(columns):
-            x = x_edges[column] + column * gap_x
-            y = y_edges[row] + row * gap_y
+            x = x_edges[column]
+            y = y_edges[row]
             boxes.append(
                 SliceBox(
                     x=x,
@@ -50,6 +41,10 @@ def grid_boxes(
                 )
             )
     return boxes
+
+
+def _grid_edge(size: int, index: int, count: int) -> int:
+    return (size * index + count // 2) // count
 
 
 def validate_boxes(value: object, *, width: int, height: int) -> list[SliceBox]:

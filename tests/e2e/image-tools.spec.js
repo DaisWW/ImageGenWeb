@@ -325,21 +325,17 @@ test("smart slicer detects, adjusts, selects and exports atlas tiles", {
     confidence: "high",
     rows: 2,
     columns: 3,
-    margin_x: 9,
-    margin_y: 9,
-    gap_x: 7,
-    gap_y: 7,
     boxes: [],
   };
   const exported = [];
   const referenceAsset = {
     id: "e2e-slice-reference",
-    name: "slice_01_72x56.png",
+    name: "slice_01_83x69.png",
     url: imageUrl,
     mime_type: "image/png",
     bytes: 512,
-    width: 72,
-    height: 56,
+    width: 83,
+    height: 69,
     position: 0,
   };
 
@@ -422,6 +418,8 @@ test("smart slicer detects, adjusts, selects and exports atlas tiles", {
   await expect(page.locator("#sliceOverlay .slice-box")).toHaveCount(6);
   await expect(page.locator("#sliceList .slice-list-item.selected")).toHaveCount(6);
   await expect(page.locator("#sliceSelectionSummary")).toHaveText("已选择 6 / 6 个切片");
+  await expect(page.locator("#sliceMarginX, #sliceMarginY, #sliceGapX, #sliceGapY"))
+    .toHaveCount(0);
   await expect(page.locator("#sliceReuse")).toBeDisabled();
 
   await page.locator("#sliceColumns").fill("2");
@@ -436,12 +434,12 @@ test("smart slicer detects, adjusts, selects and exports atlas tiles", {
   expect(exported[0]).toEqual({
     action: "library",
     boxes: [
-      { x: 9, y: 9, width: 72, height: 56 },
-      { x: 88, y: 9, width: 72, height: 56 },
-      { x: 167, y: 9, width: 72, height: 56 },
-      { x: 9, y: 72, width: 72, height: 56 },
-      { x: 88, y: 72, width: 72, height: 56 },
-      { x: 167, y: 72, width: 72, height: 56 },
+      { x: 0, y: 0, width: 83, height: 69 },
+      { x: 83, y: 0, width: 82, height: 69 },
+      { x: 165, y: 0, width: 83, height: 69 },
+      { x: 0, y: 69, width: 83, height: 68 },
+      { x: 83, y: 69, width: 82, height: 68 },
+      { x: 165, y: 69, width: 83, height: 68 },
     ],
   });
 
@@ -461,6 +459,6 @@ test("smart slicer detects, adjusts, selects and exports atlas tiles", {
   await expect(page.locator("#chatReferenceCount")).toHaveText("1");
   expect(exported[2]).toEqual({
     action: "reference",
-    boxes: [{ x: 9, y: 9, width: 72, height: 56 }],
+    boxes: [{ x: 0, y: 0, width: 83, height: 69 }],
   });
 });

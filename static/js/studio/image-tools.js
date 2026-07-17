@@ -96,18 +96,10 @@
       const values = {
         sliceRows: analysis.rows,
         sliceColumns: analysis.columns,
-        sliceMarginX: analysis.margin_x,
-        sliceMarginY: analysis.margin_y,
-        sliceGapX: analysis.gap_x,
-        sliceGapY: analysis.gap_y,
       };
       Object.entries(values).forEach(([key, value]) => {
         this.el[key].value = value;
       });
-      this.el.sliceMarginX.max = Math.max(0, Math.floor(analysis.width / 2) - 4);
-      this.el.sliceMarginY.max = Math.max(0, Math.floor(analysis.height / 2) - 4);
-      this.el.sliceGapX.max = Math.max(0, analysis.width - 8);
-      this.el.sliceGapY.max = Math.max(0, analysis.height - 8);
       this.el.sliceCanvas.style.setProperty("--slice-ratio", analysis.width / analysis.height);
       const confidenceLabels = { high: "高置信度", medium: "中置信度", low: "低置信度" };
       const title = analysis.detected
@@ -128,18 +120,12 @@
       const values = {
         rows: numeric(this.el.sliceRows),
         columns: numeric(this.el.sliceColumns),
-        marginX: numeric(this.el.sliceMarginX),
-        marginY: numeric(this.el.sliceMarginY),
-        gapX: numeric(this.el.sliceGapX),
-        gapY: numeric(this.el.sliceGapY),
       };
       const valid = Number.isInteger(values.rows)
         && Number.isInteger(values.columns)
         && values.rows >= 1 && values.rows <= 8
         && values.columns >= 1 && values.columns <= 8
-        && values.rows * values.columns <= 64
-        && [values.marginX, values.marginY, values.gapX, values.gapY]
-          .every((value) => Number.isInteger(value) && value >= 0);
+        && values.rows * values.columns <= 64;
       return valid ? values : null;
     },
 
@@ -152,21 +138,17 @@
         this.renderSlices();
         return;
       }
-      const usableWidth = analysis.width - values.marginX * 2
-        - values.gapX * (values.columns - 1);
-      const usableHeight = analysis.height - values.marginY * 2
-        - values.gapY * (values.rows - 1);
-      if (usableWidth < values.columns * 4 || usableHeight < values.rows * 4) {
+      if (analysis.width < values.columns * 4 || analysis.height < values.rows * 4) {
         this.sliceBoxes = [];
         this.sliceSelected.clear();
         this.renderSlices();
         return;
       }
       const xEdges = Array.from({ length: values.columns + 1 }, (_value, index) => (
-        values.marginX + Math.round(usableWidth * index / values.columns)
+        Math.floor(analysis.width * index / values.columns + 0.5)
       ));
       const yEdges = Array.from({ length: values.rows + 1 }, (_value, index) => (
-        values.marginY + Math.round(usableHeight * index / values.rows)
+        Math.floor(analysis.height * index / values.rows + 0.5)
       ));
       this.sliceBoxes = [];
       for (let row = 0; row < values.rows; row += 1) {
@@ -174,8 +156,8 @@
           this.sliceBoxes.push({
             row,
             column,
-            x: xEdges[column] + column * values.gapX,
-            y: yEdges[row] + row * values.gapY,
+            x: xEdges[column],
+            y: yEdges[row],
             width: xEdges[column + 1] - xEdges[column],
             height: yEdges[row + 1] - yEdges[row],
           });

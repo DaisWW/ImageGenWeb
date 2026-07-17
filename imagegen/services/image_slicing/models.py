@@ -28,6 +28,4 @@ class SliceBox:
 @dataclass(frozen=True, slots=True)
 class AxisLayout:
     count: int
-    margin: int
-    gap: int
     score: float

@@ -87,22 +87,35 @@ class TestImageSlicing(PlatformTestCase):
         db.session.commit()
         return workspace, item
 
-    def test_analysis_detects_grid_margin_gap_and_exact_boxes(self):
-        _workspace, item = self._completed_item(atlas_png_bytes())
+    def test_analysis_uses_grid_count_and_uniformly_splits_the_whole_image(self):
+        _workspace, item = self._completed_item(
+            atlas_png_bytes(),
+            prompt="六张均匀排列的素材图",
+        )
         response = self.user_client().post(f"/api/generation-items/{item.id}/slice-analysis")
 
         self.assertEqual(response.status_code, 200)
         analysis = response.json["analysis"]
         self.assertTrue(analysis["detected"])
         self.assertEqual((analysis["rows"], analysis["columns"]), (2, 3))
-        self.assertLessEqual(abs(analysis["margin_x"] - 9), 2)
-        self.assertLessEqual(abs(analysis["margin_y"] - 9), 2)
-        self.assertLessEqual(abs(analysis["gap_x"] - 7), 2)
-        self.assertLessEqual(abs(analysis["gap_y"] - 7), 2)
+        self.assertTrue(
+            {"margin_x", "margin_y", "gap_x", "gap_y"}.isdisjoint(analysis)
+        )
         self.assertEqual(len(analysis["boxes"]), 6)
-        first = analysis["boxes"][0]
-        self.assertLessEqual(abs(first["width"] - 72), 2)
-        self.assertLessEqual(abs(first["height"] - 56), 2)
+        self.assertEqual(
+            [
+                (box["x"], box["y"], box["width"], box["height"])
+                for box in analysis["boxes"]
+            ],
+            [
+                (0, 0, 83, 69),
+                (83, 0, 82, 69),
+                (165, 0, 83, 69),
+                (0, 69, 83, 68),
+                (83, 69, 82, 68),
+                (165, 69, 83, 68),
+            ],
+        )
 
     def test_analysis_detects_zero_gap_grid_without_inventing_gutters(self):
         _workspace, item = self._completed_item(
@@ -115,20 +128,22 @@ class TestImageSlicing(PlatformTestCase):
         self.assertTrue(analysis["detected"])
         self.assertEqual((analysis["rows"], analysis["columns"]), (2, 3))
         self.assertEqual(
-            (
-                analysis["margin_x"],
-                analysis["margin_y"],
-                analysis["gap_x"],
-                analysis["gap_y"],
-            ),
-            (0, 0, 0, 0),
-        )
-        self.assertEqual(
             (analysis["boxes"][0]["width"], analysis["boxes"][0]["height"]),
             (72, 56),
         )
 
-    def test_analysis_uses_alpha_channel_for_transparent_gutters(self):
+    def test_visual_grid_count_wins_over_a_wrong_prompt_hint(self):
+        _workspace, item = self._completed_item(
+            atlas_png_bytes(rows=2, columns=3, margin=0, gap=0),
+            prompt="2行2列素材图",
+        )
+        response = self.user_client().post(f"/api/generation-items/{item.id}/slice-analysis")
+
+        analysis = response.json["analysis"]
+        self.assertTrue(analysis["detected"])
+        self.assertEqual((analysis["rows"], analysis["columns"]), (2, 3))
+
+    def test_prompt_grid_hint_still_uniformly_splits_transparent_image(self):
         _workspace, item = self._completed_item(
             transparent_atlas_png_bytes(),
             prompt="透明背景四宫格",
@@ -138,15 +153,8 @@ class TestImageSlicing(PlatformTestCase):
         analysis = response.json["analysis"]
         self.assertTrue(analysis["detected"])
         self.assertEqual((analysis["rows"], analysis["columns"]), (2, 2))
-        self.assertEqual(
-            (
-                analysis["margin_x"],
-                analysis["margin_y"],
-                analysis["gap_x"],
-                analysis["gap_y"],
-            ),
-            (8, 8, 8, 8),
-        )
+        self.assertTrue(all(box["width"] == 89 for box in analysis["boxes"]))
+        self.assertTrue(all(box["height"] == 65 for box in analysis["boxes"]))
 
     def test_plain_image_is_not_reported_as_detected_atlas(self):
         _workspace, item = self._completed_item(png_bytes(), prompt="一张完整人物肖像")
@@ -167,10 +175,12 @@ class TestImageSlicing(PlatformTestCase):
         self.assertFalse(response.json["analysis"]["detected"])
 
     def test_export_downloads_selected_crops_as_png_zip(self):
-        _workspace, item = self._completed_item(atlas_png_bytes())
+        _workspace, item = self._completed_item(
+            atlas_png_bytes(rows=2, columns=3, margin=0, gap=0)
+        )
         boxes = [
-            {"x": 9, "y": 9, "width": 72, "height": 56},
-            {"x": 88, "y": 72, "width": 72, "height": 56},
+            {"x": 0, "y": 0, "width": 72, "height": 56},
+            {"x": 72, "y": 56, "width": 72, "height": 56},
         ]
         response = self.user_client().post(
             f"/api/generation-items/{item.id}/slice-export",
@@ -185,9 +195,11 @@ class TestImageSlicing(PlatformTestCase):
                 self.assertEqual(crop.size, (72, 56))
 
     def test_export_can_save_to_library_or_use_one_slice_as_reference(self):
-        workspace, item = self._completed_item(atlas_png_bytes())
+        workspace, item = self._completed_item(
+            atlas_png_bytes(rows=2, columns=3, margin=0, gap=0)
+        )
         client = self.user_client()
-        box = {"x": 9, "y": 9, "width": 72, "height": 56}
+        box = {"x": 0, "y": 0, "width": 72, "height": 56}
 
         library = client.post(
             f"/api/generation-items/{item.id}/slice-export",
@@ -211,7 +223,9 @@ class TestImageSlicing(PlatformTestCase):
         self.assertEqual(workspace.id, item.job.workspace_id)
 
     def test_export_rejects_out_of_bounds_and_multiple_reference_slices(self):
-        _workspace, item = self._completed_item(atlas_png_bytes())
+        _workspace, item = self._completed_item(
+            atlas_png_bytes(rows=2, columns=3, margin=0, gap=0)
+        )
         client = self.user_client()
         invalid = client.post(
             f"/api/generation-items/{item.id}/slice-export",
@@ -224,7 +238,7 @@ class TestImageSlicing(PlatformTestCase):
             f"/api/generation-items/{item.id}/slice-export",
             json={
                 "action": "download",
-                "boxes": [{"x": 9.5, "y": 9, "width": 72, "height": 56}],
+                "boxes": [{"x": 0.5, "y": 0, "width": 72, "height": 56}],
             },
         )
         multiple = client.post(
@@ -232,8 +246,8 @@ class TestImageSlicing(PlatformTestCase):
             json={
                 "action": "reference",
                 "boxes": [
-                    {"x": 9, "y": 9, "width": 72, "height": 56},
-                    {"x": 88, "y": 9, "width": 72, "height": 56},
+                    {"x": 0, "y": 0, "width": 72, "height": 56},
+                    {"x": 72, "y": 0, "width": 72, "height": 56},
                 ],
             },
         )
