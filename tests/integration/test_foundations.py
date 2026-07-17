@@ -341,11 +341,11 @@ class TestFoundations(PlatformTestCase):
 
     def test_large_static_assets_are_compressed(self):
         response = self.app.test_client().get(
-            "/static/js/studio.js",
+            "/static/js/studio/core.js",
             headers={"Accept-Encoding": "br"},
         )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers.get("Content-Encoding"), "br")
         self.assertIn("Accept-Encoding", response.headers.get("Vary", ""))
-        self.assertLess(len(response.data), Path("static/js/studio.js").stat().st_size // 2)
+        self.assertLess(len(response.data), Path("static/js/studio/core.js").stat().st_size // 2)

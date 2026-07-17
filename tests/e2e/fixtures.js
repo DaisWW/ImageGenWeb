@@ -39,6 +39,39 @@ async function uploadLibraryImage(page, file) {
   await page.locator("#libraryInput").setInputFiles(file);
 }
 
+async function mockConfiguredImageChannel(page) {
+  await page.route("**/api/channels", (route) => route.fulfill({
+    json: {
+      version: "e2e-channels",
+      channels: [{
+        id: "e2e",
+        label: "E2E 渠道",
+        enabled: true,
+        configured: true,
+        models: [{ id: "e2e-image", label: "GPT Image 2" }],
+        default_model: "e2e-image",
+        price_rmb: "0.0300",
+        capabilities: {
+          modes: ["text2img", "img2img"],
+          max_reference_images: 2,
+          max_reference_image_mb: 10,
+          max_reference_total_mb: 40,
+          sizes: ["1024x1024"],
+          formats: ["png", "jpeg", "webp"],
+        },
+        limits: { max_concurrency: 2 },
+      }],
+    },
+  }));
+}
+
+function rectanglesOverlap(first, second) {
+  return first.x < second.x + second.width
+    && first.x + first.width > second.x
+    && first.y < second.y + second.height
+    && first.y + first.height > second.y;
+}
+
 const test = base.extend({
   studioPage: async ({ page }, use) => {
     await loginAsAdmin(page);
@@ -52,6 +85,8 @@ module.exports = {
   deleteWorkspace,
   expect,
   loginAsAdmin,
+  mockConfiguredImageChannel,
+  rectanglesOverlap,
   test,
   uploadLibraryImage,
 };

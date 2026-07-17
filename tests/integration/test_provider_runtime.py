@@ -59,6 +59,7 @@ class TestProviderAndRuntime(PlatformTestCase):
         adapter.generate(channel, request)
         self.assertEqual(session.request["url"], "https://relay.example/v1/images/generations")
         self.assertEqual(session.request["json"]["n"], 1)
+        self.assertEqual(session.request["json"]["prompt"], request.prompt)
         self.assertNotIn("background", session.request["json"])
         self.assertNotIn("data", session.request)
         self.assertEqual(session.request["headers"]["Content-Type"], "application/json")
@@ -68,6 +69,10 @@ class TestProviderAndRuntime(PlatformTestCase):
             replace(request, transparent_background=True),
         )
         self.assertEqual(session.request["json"]["background"], "transparent")
+        self.assertTrue(session.request["json"]["prompt"].startswith(request.prompt))
+        self.assertIn("genuinely transparent canvas", session.request["json"]["prompt"])
+        self.assertIn("transparency checkerboard", session.request["json"]["prompt"])
+        self.assertIn("semi-transparent specks", session.request["json"]["prompt"])
         with Image.open(io.BytesIO(transparent_result.content)) as image:
             self.assertEqual(image.mode, "RGBA")
             self.assertEqual(image.getchannel("A").getextrema(), (0, 255))
@@ -86,6 +91,7 @@ class TestProviderAndRuntime(PlatformTestCase):
         self.assertEqual(session.request["url"], "https://relay.example/v1/images/edits")
         self.assertEqual(session.request["data"]["n"], "1")
         self.assertEqual(session.request["data"]["background"], "transparent")
+        self.assertIn("genuinely transparent canvas", session.request["data"]["prompt"])
         self.assertEqual([part[0] for part in session.request["files"]], ["image[]", "image[]"])
         self.assertEqual(
             [part[1][0] for part in session.request["files"]],
@@ -120,8 +126,11 @@ class TestProviderAndRuntime(PlatformTestCase):
 
         self.assertEqual(len(session.requests), 2)
         self.assertEqual(session.requests[0]["json"]["background"], "transparent")
+        self.assertIn("genuinely transparent canvas", session.requests[0]["json"]["prompt"])
         self.assertNotIn("background", session.requests[1]["json"])
         self.assertIn("#FFFFFF", session.requests[1]["json"]["prompt"])
+        self.assertIn("transparency checkerboard", session.requests[1]["json"]["prompt"])
+        self.assertNotIn("genuinely transparent canvas", session.requests[1]["json"]["prompt"])
         with Image.open(io.BytesIO(result.content)) as image:
             self.assertEqual(image.mode, "RGBA")
             self.assertEqual(image.getchannel("A").getextrema(), (0, 255))

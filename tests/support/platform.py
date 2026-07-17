@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import os
 import tempfile
 import threading
@@ -224,7 +225,9 @@ class RecordingDownloadSession:
 class FakeChatClient:
     def __init__(self):
         self.calls = []
+        self.reply_content = ""
         self.prompt_draft_content = ""
+        self.image_review_content = ""
 
     def complete(self, model, *, system, messages, max_output_tokens=None):
         self.calls.append(
@@ -238,12 +241,54 @@ class FakeChatClient:
         )
         if "工作站生成一个简短、具体的标题" in system:
             content = "红发蓝眼中年男性角色"
+        elif "生产图片验收员" in system:
+            content = self.image_review_content or json.dumps(
+                {
+                    "verdict": "pass",
+                    "hard_checks": [
+                        {
+                            "id": "instruction_following",
+                            "label": "整体指令遵循",
+                            "passed": True,
+                            "evidence": "结果符合整体要求",
+                        },
+                        *(
+                            {
+                                "id": f"criterion_{index}",
+                                "label": f"硬门槛 {index}",
+                                "passed": True,
+                                "evidence": "图片中可见",
+                            }
+                            for index in range(1, 7)
+                        ),
+                    ],
+                    "scores": {"composition": 4.5, "visual_quality": 4.3, "usability": 4.4},
+                    "findings": [],
+                    "suggested_edit": "",
+                },
+                ensure_ascii=False,
+            )
+        elif "对话行为规则如下" in system:
+            content = self.reply_content or json.dumps(
+                {
+                    "status": "needs_clarification",
+                    "questions": ["请确认人物所处的场景。"],
+                    "creative_direction": "other",
+                },
+                ensure_ascii=False,
+            )
         elif "只输出一个 JSON 对象" in system:
             content = self.prompt_draft_content or (
-                '{"status":"ready","summary_zh":"一位人物肖像","prompt":"cinematic portrait"}'
+                '{"status":"ready","summary_zh":"一位人物肖像",'
+                '"prompt":"cinematic portrait","creative_direction":"other",'
+                '"template_id":"custom","style_tags":[],"scene_tags":[],'
+                '"selection_reason":"使用通用 Craft 整理清晰的人物肖像需求。",'
+                '"brief":{"deliverable":"人物肖像","subject":"人物"},'
+                '"hard_checks":["只出现一位主体","主体清晰可见"],'
+                '"quality_hint":"low"}'
             )
         else:
-            content = "我已理解需求，请确认人物所处的场景。"
+            content = self.reply_content or "测试回复"
         return ChatCompletion(
             content=content,
             request_id="chat-request-test",
@@ -294,7 +339,14 @@ class BlockingFirstChatClient:
             if not self.release.wait(10):
                 raise RuntimeError("blocking chat client timed out")
         return ChatCompletion(
-            content=f"并行回复 {call_number}",
+            content=json.dumps(
+                {
+                    "status": "needs_clarification",
+                    "questions": [f"并行回复 {call_number}"],
+                    "creative_direction": "other",
+                },
+                ensure_ascii=False,
+            ),
             request_id=f"parallel-chat-{call_number}",
             input_tokens=10,
             output_tokens=5,
@@ -410,6 +462,48 @@ class PlatformTestCase(unittest.TestCase):
             self.app,
             self.app.extensions["channel_registry"],
             self.app.extensions["image_storage"],
+        )
+
+    def create_ready_prompt_draft(
+        self,
+        workspace,
+        *,
+        prompt="电影感人物肖像",
+        mode="text2img",
+        reference_ids=(),
+        creative_direction_id="auto",
+        template_id="custom",
+        hard_checks=None,
+    ):
+        direction = creative_direction_id if creative_direction_id != "auto" else "other"
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content=f"请生成：{prompt}",
+        )
+        self.chat_client.prompt_draft_content = json.dumps(
+            {
+                "status": "ready",
+                "summary_zh": prompt,
+                "prompt": prompt,
+                "creative_direction": direction,
+                "template_id": template_id,
+                "style_tags": [],
+                "scene_tags": [],
+                "selection_reason": "按交付物和场景选择最接近的提示词结构。",
+                "brief": {"deliverable": "测试图片", "subject": prompt},
+                "hard_checks": hard_checks or ["主体符合提示词", "没有无关主体"],
+                "quality_hint": "low",
+            },
+            ensure_ascii=False,
+        )
+        return self.services.conversations.create_prompt_draft(
+            workspace,
+            model_id="test-chat",
+            translate_to_english=False,
+            mode=mode,
+            reference_ids=tuple(reference_ids),
+            creative_direction_id=creative_direction_id,
         )
 
     def record_generation_durations(self, samples, *, model="model-b"):

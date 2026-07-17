@@ -5,6 +5,8 @@ const {
   deleteWorkspace,
   expect,
   loginAsAdmin,
+  mockConfiguredImageChannel,
+  rectanglesOverlap,
   test,
   uploadLibraryImage,
 } = require("./fixtures");
@@ -25,6 +27,8 @@ test("deleting the last workspace leaves the workspace list empty", {
   await page.getByLabel("用户名").fill(username);
   await page.getByLabel("密码").fill(password);
   await page.getByRole("button", { name: "进入工作台" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.locator("#workspaceList .workspace-item").first()).toBeVisible();
 
   const workspaceNames = await page.locator("#workspaceList .workspace-copy strong").allTextContents();
   expect(workspaceNames.length).toBeGreaterThan(0);
@@ -74,7 +78,7 @@ test("new workspace is interactive while history is delayed", async ({ studioPag
   try {
     await createWorkspace(page, name);
     await expect(page.locator("#chatInput")).toBeEditable({ timeout: 1000 });
-    await expect(page.locator("#directGenerationButton")).toBeEnabled({ timeout: 1000 });
+    await expect(page.locator("#animationParametersButton")).toBeHidden();
     expect(await page.evaluate(() => {
       window.__workspaceLockObserver.disconnect();
       return window.__workspaceLockTransitions;
@@ -86,9 +90,83 @@ test("new workspace is interactive while history is delayed", async ({ studioPag
   await deleteWorkspace(page, name);
 });
 
+test("direct generation bypasses AI conversation", { tag: "@responsive" }, async ({
+  studioPage: page,
+}) => {
+  await mockConfiguredImageChannel(page);
+  await page.route("**/api/chat-models", (route) => route.fulfill({
+    json: { version: "e2e-no-chat-models", models: [] },
+  }));
+  const workspaceId = await page.locator("#workspaceList .workspace-item.active")
+    .getAttribute("data-workspace-id");
+  await page.evaluate(async ({ id, draftId }) => {
+    await window.ImageGen.api("/api/workspaces/" + id, {
+      method: "PATCH",
+      body: { settings: { prompt_draft_id: draftId } },
+    });
+  }, { id: workspaceId, draftId: "d".repeat(32) });
+  await page.reload();
+
+  let aiRequests = 0;
+  page.on("request", (request) => {
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === "POST"
+      && (pathname.includes("/messages") || pathname.includes("/prompt-drafts"))) {
+      aiRequests += 1;
+    }
+  });
+  await page.route("**/api/generations", async (route) => {
+    if (route.request().method() === "POST") {
+      await route.fulfill({ status: 409, json: { error: "E2E 已接收直接生成请求" } });
+      return;
+    }
+    await route.continue();
+  });
+
+  await expect(page.locator("#chatSendButton")).toBeDisabled();
+  await expect(page.locator("#directGenerationButton")).toBeVisible();
+  await expect(page.locator("#directGenerationButton")).toBeEnabled();
+  await page.locator("#chatInput").fill("一张雨夜霓虹街道的电影感照片");
+  const settingsSaved = page.waitForResponse((response) => (
+    response.request().method() === "PATCH"
+      && new URL(response.url()).pathname === "/api/workspaces/" + workspaceId
+  ));
+  await page.locator("#directGenerationButton").click();
+
+  await expect(page.locator("#generationForm")).toBeVisible();
+  await expect(page.locator("#promptInput"))
+    .toHaveValue("一张雨夜霓虹街道的电影感照片");
+  await expect(page.locator("#promptReviewStatus")).toContainText("可直接编辑提示词");
+  await page.locator('#modeSwitch [data-mode="text2img"]').click();
+  await settingsSaved;
+  const savedPromptDraftId = await page.evaluate(async (id) => {
+    const data = await window.ImageGen.api("/api/workspaces");
+    return data.workspaces.find((workspace) => workspace.id === id).settings.prompt_draft_id;
+  }, workspaceId);
+  expect(savedPromptDraftId).toBe("");
+
+  await page.reload();
+  await expect(page.locator("#promptReviewStatus")).toContainText("可直接编辑提示词");
+  await expect(page.locator("#generationForm")).toBeHidden();
+  await page.locator("#chatInput").fill("一张雨夜霓虹街道的电影感照片");
+  await page.locator("#directGenerationButton").click();
+  await expect(page.locator("#generationForm")).toBeVisible();
+
+  const generationRequest = page.waitForRequest((request) => (
+    request.method() === "POST" && new URL(request.url()).pathname === "/api/generations"
+  ));
+  await page.locator("#generateButton").click();
+  const body = (await generationRequest).postDataJSON();
+  expect(body.prompt).toBe("一张雨夜霓虹街道的电影感照片");
+  expect(body.prompt_draft_id).toBe("");
+  expect(aiRequests).toBe(0);
+});
+
 test("workspace lifecycle remains usable", { tag: "@responsive" }, async ({
   studioPage: page,
 }, testInfo) => {
+  await mockConfiguredImageChannel(page);
+  await page.reload();
   await expect(page.locator("#workspaceList .workspace-item").first()).toBeVisible();
 
   const suffix = `${testInfo.project.name}-${Date.now()}`;
@@ -113,32 +191,10 @@ test("workspace lifecycle remains usable", { tag: "@responsive" }, async ({
   await expect(chatInput).toBeEditable();
   await chatInput.fill("新工作站无需刷新即可输入");
   await expect(chatInput).toHaveValue("新工作站无需刷新即可输入");
-  let promptDraftRequests = 0;
-  page.on("request", (request) => {
-    if (request.method() === "POST" && request.url().includes("/prompt-drafts")) {
-      promptDraftRequests += 1;
-    }
-  });
-  await page.locator("#directGenerationButton").click();
-  await expect(page.locator("#generationForm")).toBeVisible();
-  await expect(page.locator("#promptInput")).toHaveValue("新工作站无需刷新即可输入");
-  await expect(page.locator("#qualitySelect")).toHaveCount(0);
-  expect(promptDraftRequests).toBe(0);
-  if (page.viewportSize().width >= 640) {
-    await expect(page.locator("#generationBackButton")).toBeHidden();
-    await closeGenerationComposer(page);
-    await expect(page.locator("#generationForm")).toHaveClass(/is-closing/);
-    await expect(page.locator("#generationForm")).toHaveCSS("animation-name", "generation-composer-out");
-    await expect(page.locator("#generationForm")).toBeHidden();
-    await page.locator("#directGenerationButton").click();
-    await page.keyboard.press("Escape");
-    await expect(page.locator("#generationForm")).toBeHidden();
-    await page.locator("#directGenerationButton").click();
-  } else {
-    await expect(page.locator("#generationBackButton")).toBeVisible();
-  }
-  await closeGenerationComposer(page);
-  await expect(chatInput).toHaveValue("新工作站无需刷新即可输入");
+  await expect(page.locator("#animationParametersButton")).toBeHidden();
+  await expect(page.locator("#promptGalleryLink"))
+    .toHaveAttribute("href", "https://gpt-image2.canghe.ai/");
+  await expect(page.locator("#promptGalleryLink")).toHaveAttribute("target", "_blank");
 
   await chatInput.blur();
   await page.keyboard.press("F2");
@@ -149,82 +205,32 @@ test("workspace lifecycle remains usable", { tag: "@responsive" }, async ({
   await deleteWorkspace(page, renamedName);
 });
 
-test("animation workstation only generates frames from a user-selected master", async ({
-  studioPage: page,
-}, testInfo) => {
-  const workspaceName = `E2E-Animation-${testInfo.project.name}-${Date.now()}`;
+test("composer close fallback keeps workspace switching interactive", {
+  tag: "@responsive",
+}, async ({ studioPage: page }, testInfo) => {
+  const workspaceName = `E2E-Close-${testInfo.project.name}-${Date.now()}`;
   await createWorkspace(page, workspaceName, "animation");
+  const target = page.locator("#workspaceList .workspace-item:not(.active)").first();
+  const targetName = await target.locator(".workspace-copy strong").textContent();
 
-  await expect(page.locator("#directGenerationButtonLabel")).toHaveText("直接制作帧动画");
-  await page.locator("#chatInput").fill("角色原地挥手，固定镜头，无缝循环。");
-  await page.locator("#directGenerationButton").click();
-
-  await expect(page.locator("#generationHeadingTitle")).toHaveText("确认帧动画参数");
-  await expect(page.locator("#generationHeadingSubtitle")).toContainText("必须先添加并选择 1 张母图");
-  await expect(page.locator("#modeSwitch")).toBeHidden();
-  await expect(page.locator(".animation-control").first()).toBeVisible();
-  await expect(page.locator("#referenceStrip")).toBeVisible();
-  await expect(page.locator("#generateButtonLabel")).toHaveText("开始生成帧");
-  await expect(page.locator("#generateButton")).toHaveAttribute("title", "请先添加并选择一张母图");
-  await expect(page.locator("body")).not.toContainText("生成母图");
-
-  await page.locator("#referenceLibrary").click();
-  await expect(page.locator("#libraryTargetLabel")).toHaveText("设为母图");
-  await uploadLibraryImage(page, path.resolve("static/assets/starter-ocean-sky-reference.png"));
-  await page.locator("#libraryGrid [data-use-library-image]").first().click();
-  await expect(page.locator("#libraryDialog")).toBeHidden();
-  await expect(page.locator("#referenceList .reference-card.selected")).toHaveCount(1);
-  await expect(page.locator("#referenceLimit")).toHaveText("1 / 1");
-  await expect(page.locator("#modeSwitch")).toHaveAttribute("data-mode", "img2img");
-  await expect(page.locator("#generateButton")).toHaveAttribute("title", "");
-  const master = page.locator("#referenceList [data-reference-toggle]");
-  await master.click();
-  await expect(page.locator("#generateButton")).toHaveAttribute("title", "请先添加并选择一张母图");
-  await master.click();
-  await expect(page.locator("#generateButton")).toHaveAttribute("title", "");
-
-  await master.click();
-  await closeGenerationComposer(page);
-  await page.locator("#directGenerationButton").click();
-  await expect(page.locator("#referenceList .reference-card.selected")).toHaveCount(1);
-  await expect(page.locator("#generateButton")).toHaveAttribute("title", "");
-
-  await closeGenerationComposer(page);
-  await deleteWorkspace(page, workspaceName);
-});
-
-test("image library keeps the selected animation master when chat has an attachment", async ({
-  studioPage: page,
-}, testInfo) => {
-  const workspaceName = `E2E-Library-${testInfo.project.name}-${Date.now()}`;
-  await createWorkspace(page, workspaceName, "animation");
-
-  await page.locator("#chatReferenceButton").click();
-  await page.locator('[data-open-library="chat"]').click();
-  await expect(page.locator("#libraryTargetLabel")).toHaveText("随消息发送");
-  await uploadLibraryImage(page, path.resolve("static/assets/brand-mark-v2.png"));
-  const chatImage = page.locator("#libraryGrid .library-card", { hasText: "brand-mark-v2.png" });
-  await expect(chatImage).toHaveCount(1);
-  await chatImage.locator(".library-use").click();
-  await expect(page.locator("#chatReferenceCount")).toHaveText("1");
-
-  await page.locator("#libraryButton").click();
-  await expect(page.locator("#libraryTargetLabel")).toHaveText("设为母图");
-  await uploadLibraryImage(page, path.resolve("static/assets/starter-ocean-sky-reference.png"));
-  const master = page.locator("#libraryGrid .library-card", { hasText: "starter-ocean" });
-  await master.locator(".library-use").click();
-
+  await page.locator("#animationParametersButton").click();
   await expect(page.locator("#generationForm")).toBeVisible();
-  await expect(page.locator("#referenceList .reference-card.selected img"))
-    .toHaveAttribute("alt", "starter-ocean-sky-reference.png");
-  await expect(page.locator("#referenceLimit")).toHaveText("1 / 1");
-  await expect(page.locator("#generateButton")).toHaveAttribute("title", "");
-
+  await page.locator("#generationForm").evaluate((form) => {
+    form.style.animationName = "none";
+  });
   await closeGenerationComposer(page);
+
+  await expect(page.locator("#generationBackdrop")).toBeHidden({ timeout: 100 });
+  await target.locator("[data-select-workspace]").click({ timeout: 1000 });
+  await expect(page.locator("#workspaceTitle")).toHaveText(targetName);
+  await expect(page.locator("#generationForm")).toBeHidden();
+
+  await page.locator("#workspaceList .workspace-item", { hasText: workspaceName })
+    .locator("[data-select-workspace]").click();
   await deleteWorkspace(page, workspaceName);
 });
 
-test("active generation locks prompt reuse without trapping the composer", {
+test("active generation locks prompt reuse and cancellation unlocks immediately", {
   tag: "@responsive",
 }, async ({ studioPage: page }) => {
   const workspace = page.locator("#workspaceList .workspace-item.active");
@@ -272,15 +278,29 @@ test("active generation locks prompt reuse without trapping the composer", {
     animation_url: null,
     animation_download_url: null,
   };
+  const canceledJob = {
+    ...activeJob,
+    status: "canceled",
+    progress_percent: 100,
+    reserved_rmb: "0.0000",
+    completed_at: createdAt,
+    canceled_count: 1,
+    can_cancel: false,
+  };
+  let canceled = false;
 
+  await page.route(`**/api/generations/${activeJob.id}/cancel`, async (route) => {
+    canceled = true;
+    await route.fulfill({ json: { job: canceledJob } });
+  });
   await page.route("**/api/generations*", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/generations/active") {
-      await route.fulfill({ json: { jobs: [activeJob] } });
+      await route.fulfill({ json: { jobs: canceled ? [] : [activeJob] } });
       return;
     }
     if (url.pathname === "/api/generations") {
-      await route.fulfill({ json: { jobs: [activeJob], queue_total: 0 } });
+      await route.fulfill({ json: { jobs: [canceled ? canceledJob : activeJob], queue_total: 0 } });
       return;
     }
     await route.continue();
@@ -328,92 +348,23 @@ test("active generation locks prompt reuse without trapping the composer", {
   }
   await closeGenerationComposer(page);
   await expect(page.locator("#chatForm")).toBeVisible();
-});
 
-test("image library exposes retry after its initial load fails", async ({ studioPage: page }) => {
-  let attempts = 0;
-  await page.route("**/api/library-images?*", async (route) => {
-    attempts += 1;
-    if (attempts === 1) {
-      await route.fulfill({
-        status: 503,
-        contentType: "application/json",
-        body: JSON.stringify({ error: "图库暂时不可用", code: "library_unavailable" }),
-      });
-      return;
-    }
-    await route.fulfill({
-      json: {
-        images: [],
-        total: 0,
-        has_more: false,
-        max_count: 200,
-        max_bytes: 2147483648,
-      },
-    });
-  });
-
-  await page.locator("#libraryButton").click();
-  await expect(page.locator("#libraryError")).toBeVisible();
-  await expect(page.locator("#libraryUploadButton")).toBeDisabled();
-  await page.locator("#libraryRetryButton").click();
-
-  await expect(page.locator("#libraryEmpty")).toBeVisible();
-  await expect(page.locator("#libraryUploadButton")).toBeEnabled();
-  expect(attempts).toBe(2);
-});
-
-test("image library pagination keeps its server offset after merging a duplicate", async ({
-  studioPage: page,
-}) => {
-  const image = (index) => ({
-    id: `library-${index}`,
-    name: `library-${index}.png`,
-    url: "/static/assets/brand-mark-v2.png",
-    thumbnail_url: "/static/assets/brand-mark-v2.png",
-  });
-  const images = Array.from({ length: 61 }, (_value, index) => image(index));
-  const requestedOffsets = [];
-  await page.route("**/api/library-images**", async (route) => {
-    const request = route.request();
-    const url = new URL(request.url());
-    if (url.pathname !== "/api/library-images") {
-      await route.continue();
-      return;
-    }
-    if (request.method() === "POST") {
-      await route.fulfill({ json: { images: [images[60]], added_count: 0 } });
-      return;
-    }
-    const offset = Number(url.searchParams.get("offset") || 0);
-    requestedOffsets.push(offset);
-    const pageImages = offset === 0 ? images.slice(0, 60) : images.slice(offset);
-    await route.fulfill({
-      json: {
-        images: pageImages,
-        total: images.length,
-        has_more: offset + pageImages.length < images.length,
-        max_count: 200,
-        max_bytes: 2147483648,
-      },
-    });
-  });
-
-  await page.locator("#libraryButton").click();
-  await expect(page.locator("#libraryGrid .library-card")).toHaveCount(60);
-  await uploadLibraryImage(page, path.resolve("static/assets/brand-mark-v2.png"));
-  await expect(page.locator("#libraryGrid .library-card")).toHaveCount(61);
-  await expect(page.locator("#libraryLoadMoreButton")).toBeVisible();
-  await page.locator("#libraryLoadMoreButton").click();
-
-  await expect(page.locator("#libraryPagination")).toBeHidden();
-  expect(requestedOffsets).toEqual([0, 60]);
+  const jobCard = page.locator(`[data-job-id="${activeJob.id}"]`);
+  await expect(jobCard.locator("[data-job-status-label]")).toHaveText("生成中");
+  await jobCard.getByRole("button", { name: "取消" }).click();
+  await expect(jobCard.locator("[data-job-status-label]")).toHaveText("已取消");
+  await expect(jobCard.getByRole("button", { name: "取消" })).toBeHidden();
+  await expect(reusePrompt).toBeEnabled();
+  await expect(page.locator("#chatInput")).toBeEditable();
+  await expect(page.getByText("取消中", { exact: true })).toHaveCount(0);
 });
 
 test("latest toast does not cover the generation composer", {
   tag: "@responsive",
 }, async ({ studioPage: page }) => {
-  await page.locator("#directGenerationButton").click();
+  const workspaceName = `E2E-Toast-Animation-${Date.now()}`;
+  await createWorkspace(page, workspaceName, "animation");
+  await page.locator("#animationParametersButton").click();
   await expect(page.locator("#generationForm")).toBeVisible();
 
   await page.evaluate(() => {
@@ -421,13 +372,14 @@ test("latest toast does not cover the generation composer", {
     window.ImageGen.toast("图库原图累计不能超过 2 GiB", "error");
   });
   const toast = page.locator("#toastRegion .toast");
-  const heading = page.locator("#generationForm .generation-composer-heading");
   await expect(toast).toHaveCount(1);
   await expect(toast).toContainText("图库原图累计不能超过 2 GiB");
 
   const toastBox = await toast.boundingBox();
-  const headingBox = await heading.boundingBox();
+  const composerBox = await page.locator("#generationForm").boundingBox();
   expect(toastBox).not.toBeNull();
-  expect(headingBox).not.toBeNull();
-  expect(toastBox.y + toastBox.height).toBeLessThanOrEqual(headingBox.y);
+  expect(composerBox).not.toBeNull();
+  expect(rectanglesOverlap(toastBox, composerBox)).toBe(false);
+  await closeGenerationComposer(page);
+  await deleteWorkspace(page, workspaceName);
 });

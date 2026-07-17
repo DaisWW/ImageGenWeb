@@ -13,7 +13,7 @@ from imagegen.models import (
     utcnow,
 )
 from imagegen.services import ServiceError
-from imagegen.services.conversation_prompts import CHAT_SYSTEM_PROMPT
+from imagegen.services.conversations.prompts import CHAT_SYSTEM_PROMPT
 from tests.support.platform import (
     PlatformTestCase,
 )
@@ -137,7 +137,7 @@ class TestAuthAndWorkspaces(PlatformTestCase):
         self.assertIn("不得把已经能识别的问题留到后续轮次", CHAT_SYSTEM_PROMPT)
         self.assertIn("1A 2C 3B", CHAT_SYSTEM_PROMPT)
         self.assertIn("其他（请自定义）", CHAT_SYSTEM_PROMPT)
-        self.assertIn("点击「总结需求」生成最终提示词", CHAT_SYSTEM_PROMPT)
+        self.assertIn("确认后在同一次回复中直接整理最终提示词", CHAT_SYSTEM_PROMPT)
         self.assertNotIn("公司内部 AI 视觉创作工作台的需求顾问", CHAT_SYSTEM_PROMPT)
 
     def test_image_workspace_chat_uses_static_image_guidance(self):
@@ -422,17 +422,26 @@ class TestAuthAndWorkspaces(PlatformTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.services.workspaces.list(self.user.id), [])
 
-    def test_custom_size_workspace_setting_persists(self):
+    def test_workspace_settings_persist(self):
         workspace = self.create_workspace()
         client = self.user_client()
+        reference_ids = ["a" * 32, "b" * 32]
 
         response = client.patch(
             f"/api/workspaces/{workspace.id}",
-            json={"settings": {"size": "1280x720"}},
+            json={
+                "settings": {
+                    "size": "1280x720",
+                    "mode": "img2img",
+                    "reference_ids": reference_ids,
+                }
+            },
         )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["workspace"]["settings"]["size"], "1280x720")
+        self.assertEqual(response.json["workspace"]["settings"]["reference_ids"], reference_ids)
         workspaces = client.get("/api/workspaces").json["workspaces"]
         restored = next(item for item in workspaces if item["id"] == workspace.id)
         self.assertEqual(restored["settings"]["size"], "1280x720")
+        self.assertEqual(restored["settings"]["reference_ids"], reference_ids)

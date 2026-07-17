@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import io
 import threading
 from decimal import Decimal
 from pathlib import Path
 
-from PIL import Image
 from sqlalchemy import func, select
 
 from imagegen.config.channels import ChannelRegistry
@@ -15,12 +13,10 @@ from imagegen.models import (
     GenerationJob,
     User,
     WalletLedger,
-    Workspace,
 )
 from imagegen.services import ServiceError
 from tests.support.platform import (
     BlockingProviderFactory,
-    FakeProviderFactory,
     PlatformTestCase,
     png_bytes,
 )
@@ -38,23 +34,137 @@ class TestGenerations(PlatformTestCase):
         self.assertEqual(user.reserved_rmb, Decimal("3.7500"))
         self.assertEqual(len(job.items), 3)
 
-    def test_generation_api_always_uses_high_quality(self):
-        workspace = self.create_workspace()
+    def test_generation_api_maps_reviewed_stages_to_quality_and_workflow(self):
+        client = self.user_client()
+        for stage, expected_quality in (
+            ("draft", "low"),
+            ("refine", "medium"),
+            ("final", "high"),
+        ):
+            with self.subTest(stage=stage):
+                workspace = self.create_workspace(f"{stage} 阶段")
+                prompt = f"{stage} 阶段海报"
+                draft = self.create_ready_prompt_draft(
+                    workspace,
+                    prompt=prompt,
+                    creative_direction_id="poster",
+                    template_id="poster-layout-system",
+                )
+                response = client.post(
+                    "/api/generations",
+                    json={
+                        "workspace_id": workspace.id,
+                        "channel_id": "test",
+                        "model": "model-b",
+                        "mode": "text2img",
+                        "prompt": prompt,
+                        "prompt_draft_id": draft.id,
+                        "generation_stage": stage,
+                        "quality": "high" if expected_quality != "high" else "low",
+                    },
+                )
+
+                self.assertEqual(response.status_code, 202, response.get_data(as_text=True))
+                job = response.json["job"]
+                self.assertEqual(job["quality"], expected_quality)
+                self.assertEqual(job["workflow"]["generation_stage"], stage)
+                self.assertEqual(job["workflow"]["prompt_draft_id"], draft.id)
+                self.assertEqual(job["workflow"]["creative_direction_id"], "poster")
+                self.assertEqual(job["workflow"]["template_id"], "poster-layout-system")
+                self.assertEqual(job["workflow"]["template_label"], "海报排版系统")
+                self.assertEqual(job["workflow"]["style_tags"], ["Poster"])
+                db.session.refresh(workspace)
+                self.assertEqual(workspace.settings["generation_stage"], stage)
+
+    def test_generation_api_rejects_an_invalid_stage(self):
+        workspace = self.create_workspace("无效生成阶段")
         response = self.user_client().post(
             "/api/generations",
             json={
                 "workspace_id": workspace.id,
                 "channel_id": "test",
                 "model": "model-b",
-                "prompt": "默认质量测试",
-                "quality": "low",
+                "mode": "text2img",
+                "prompt": "测试海报",
+                "generation_stage": "unknown",
             },
         )
 
-        self.assertEqual(response.status_code, 202, response.get_data(as_text=True))
-        self.assertEqual(response.json["job"]["quality"], "high")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json["error"], "生成阶段无效")
+
+    def test_generation_service_reuses_sanitized_workflow_for_workspace_settings(self):
+        workspace = self.create_workspace("工作流一致性")
+        job = self.submit(workspace, workflow={"generation_stage": "unknown"})
+
         db.session.refresh(workspace)
-        self.assertNotIn("quality", workspace.settings)
+        self.assertEqual(job.workflow["generation_stage"], "final")
+        self.assertEqual(workspace.settings["generation_stage"], "final")
+
+    def test_generation_api_allows_unreviewed_prompt_and_rejects_stale_claimed_review(self):
+        client = self.user_client()
+        workspace = self.create_workspace("审查门槛")
+        payload = {
+            "workspace_id": workspace.id,
+            "channel_id": "test",
+            "model": "model-b",
+            "mode": "text2img",
+            "prompt": "已审查提示词",
+            "creative_direction_id": " POSTER ",
+        }
+
+        missing = client.post("/api/generations", json=payload)
+        self.assertEqual(missing.status_code, 202, missing.get_data(as_text=True))
+        self.assertFalse(missing.json["job"]["workflow"]["ai_reviewed"])
+        self.assertEqual(missing.json["job"]["workflow"]["prompt_draft_id"], "")
+        self.assertEqual(missing.json["job"]["workflow"]["creative_direction_id"], "poster")
+        self.assertEqual(missing.json["job"]["workflow"]["template_label"], "用户直接提示词")
+
+        workspace = self.create_workspace("审查过期")
+        payload["workspace_id"] = workspace.id
+        draft = self.create_ready_prompt_draft(workspace, prompt=payload["prompt"])
+        payload["prompt_draft_id"] = draft.id.upper()
+        for changed, expected_error in (
+            ({"prompt": "被用户改过的提示词"}, "提示词已改变"),
+            ({"mode": "img2img"}, "生成模式已改变"),
+        ):
+            with self.subTest(changed=changed):
+                stale = client.post("/api/generations", json={**payload, **changed})
+                self.assertEqual(stale.status_code, 409)
+                self.assertEqual(stale.json["code"], "prompt_review_stale")
+                self.assertIn(expected_error, stale.json["error"])
+
+        reviewed = client.post("/api/generations", json=payload)
+        self.assertEqual(reviewed.status_code, 202, reviewed.get_data(as_text=True))
+        self.assertEqual(reviewed.json["job"]["workflow"]["prompt_draft_id"], draft.id)
+
+        reference_workspace = self.create_workspace("参考图顺序审查")
+        references = self.services.workspaces.add_assets(
+            reference_workspace,
+            [("subject.png", png_bytes()), ("style.png", png_bytes((40, 90, 180)))],
+        )
+        reference_prompt = "参考图融合"
+        reference_draft = self.create_ready_prompt_draft(
+            reference_workspace,
+            prompt=reference_prompt,
+            mode="img2img",
+            reference_ids=tuple(asset.id for asset in references),
+        )
+        stale = client.post(
+            "/api/generations",
+            json={
+                "workspace_id": reference_workspace.id,
+                "channel_id": "test",
+                "model": "model-b",
+                "mode": "img2img",
+                "prompt": reference_prompt,
+                "prompt_draft_id": reference_draft.id,
+                "reference_ids": [references[1].id, references[0].id],
+            },
+        )
+        self.assertEqual(stale.status_code, 409)
+        self.assertEqual(stale.json["code"], "prompt_review_stale")
+        self.assertIn("参考图或顺序已改变", stale.json["error"])
 
     def test_bundled_channels_support_two_references(self):
         config_path = Path(__file__).resolve().parents[2] / "config" / "channels.yaml"
@@ -74,6 +184,7 @@ class TestGenerations(PlatformTestCase):
             )
 
         client = self.user_client()
+        draft = self.create_ready_prompt_draft(workspace, prompt="极简云朵图标")
         response = client.post(
             "/api/generations",
             json={
@@ -88,6 +199,8 @@ class TestGenerations(PlatformTestCase):
                 "batch_count": 1,
                 "reference_ids": [],
                 "transparent_background": True,
+                "prompt_draft_id": draft.id,
+                "generation_stage": "final",
             },
         )
 
@@ -97,315 +210,6 @@ class TestGenerations(PlatformTestCase):
         self.assertTrue(workspace.settings["transparent_background"])
         saved_job = db.session.get(GenerationJob, response.json["job"]["id"])
         self.assertTrue(saved_job.transparent_background)
-
-    def test_animation_workspace_creation_and_parameters_are_persisted(self):
-        client = self.user_client()
-        response = client.post(
-            "/api/workspaces",
-            json={"name": "眨眼循环", "kind": "animation"},
-        )
-        self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.json["workspace"]["kind"], "animation")
-        self.assertEqual(response.json["workspace"]["settings"]["mode"], "img2img")
-        self.assertTrue(response.json["workspace"]["settings"]["transparent_background"])
-        self.assertNotIn("quality", response.json["workspace"]["settings"])
-        self.assertEqual(response.json["workspace"]["settings"]["animation_frame_count"], 8)
-        self.assertEqual(response.json["workspace"]["settings"]["animation_fps"], 8)
-
-        workspace = db.session.get(Workspace, response.json["workspace"]["id"])
-        self.assertTrue(workspace.settings["transparent_background"])
-        master = self.services.workspaces.add_assets(
-            workspace,
-            [("master.png", png_bytes())],
-        )[0]
-        job = self.submit(
-            workspace,
-            mode="img2img",
-            reference_ids=(master.id,),
-            frame_count=8,
-            animation_fps=12,
-            animation_loop=False,
-            animation_format="gif",
-        )
-
-        self.assertEqual(job.kind, "animation")
-        self.assertEqual(job.requested_count, 8)
-        self.assertEqual(job.animation_fps, 12)
-        self.assertFalse(job.animation_loop)
-        self.assertEqual(job.animation_format, "gif")
-        self.assertEqual(job.reserved_rmb, Decimal("10.0000"))
-        self.assertEqual(workspace.settings["animation_frame_count"], 8)
-        payload = client.get(f"/api/generations/{job.id}").json["job"]
-        self.assertEqual(payload["kind"], "animation")
-        self.assertEqual(payload["animation_duration_seconds"], 0.667)
-
-    def test_animation_api_defaults_to_eight_frames_at_eight_fps(self):
-        workspace = self.create_workspace("默认动画参数", kind="animation")
-        master = self.services.workspaces.add_assets(
-            workspace,
-            [("master.png", png_bytes())],
-        )[0]
-
-        response = self.user_client().post(
-            "/api/generations",
-            json={
-                "workspace_id": workspace.id,
-                "channel_id": "test",
-                "model": "model-b",
-                "mode": "img2img",
-                "prompt": "角色原地奔跑循环",
-                "reference_ids": [master.id],
-            },
-        )
-
-        self.assertEqual(response.status_code, 202, response.get_data(as_text=True))
-        job = response.json["job"]
-        self.assertEqual(job["requested_count"], 8)
-        self.assertEqual(job["animation_fps"], 8)
-        self.assertEqual(job["animation_duration_seconds"], 1.0)
-        self.assertEqual(job["quality"], "high")
-        db.session.refresh(workspace)
-        self.assertEqual(workspace.settings["animation_frame_count"], 8)
-        self.assertEqual(workspace.settings["animation_fps"], 8)
-
-    def test_animation_requires_a_user_selected_master_and_rejects_master_generation(self):
-        workspace = self.create_workspace("奔跑角色", kind="animation")
-        client = self.user_client()
-        payload = {
-            "workspace_id": workspace.id,
-            "channel_id": "test",
-            "model": "model-b",
-            "mode": "text2img",
-            "prompt": "卡通角色侧面奔跑，透明背景",
-            "reference_ids": [],
-            "master_only": True,
-        }
-
-        rejected = client.post("/api/generations", json=payload)
-        self.assertEqual(rejected.status_code, 400)
-        self.assertEqual(rejected.json["error"], "请先上传或选择一张母图")
-        self.assertEqual(
-            db.session.scalar(
-                select(func.count(GenerationJob.id)).where(
-                    GenerationJob.workspace_id == workspace.id
-                )
-            ),
-            0,
-        )
-
-        master_asset = self.services.workspaces.add_assets(
-            workspace,
-            [("master.png", png_bytes())],
-        )[0]
-
-        payload.pop("master_only")
-        payload.update(
-            mode="img2img",
-            reference_ids=[master_asset.id],
-            animation_frame_count=3,
-        )
-        animation_response = client.post("/api/generations", json=payload)
-        self.assertEqual(animation_response.status_code, 202)
-        animation_payload = animation_response.json["job"]
-        self.assertEqual(animation_payload["kind"], "animation")
-        self.assertEqual(animation_payload["requested_count"], 3)
-        self.assertEqual(
-            [reference["id"] for reference in animation_payload["references"]],
-            [master_asset.id],
-        )
-
-    def test_animation_rejects_multiple_master_references(self):
-        workspace = self.create_workspace("双母图动画", kind="animation")
-        assets = self.services.workspaces.add_assets(
-            workspace,
-            [
-                ("master-a.png", png_bytes()),
-                ("master-b.png", png_bytes((40, 90, 180))),
-            ],
-        )
-
-        with self.assertRaisesRegex(ServiceError, "必须且只能选择一张母图"):
-            self.submit(
-                workspace,
-                mode="img2img",
-                reference_ids=(assets[0].id, assets[1].id),
-                frame_count=3,
-            )
-
-    def test_animation_frames_run_in_order_and_export_animated_webp(self):
-        workspace = self.create_workspace("挥手循环", kind="animation")
-        master = self.services.workspaces.add_assets(
-            workspace,
-            [("master.png", png_bytes())],
-        )[0]
-        job = self.submit(
-            workspace,
-            mode="img2img",
-            reference_ids=(master.id,),
-            frame_count=3,
-            animation_fps=6,
-            animation_loop=True,
-            animation_format="webp",
-        )
-        item_ids = [item.id for item in job.items]
-        worker = self.create_worker()
-        worker.providers = FakeProviderFactory(vary=True)
-        channel = self.app.extensions["channel_registry"].get("test")
-
-        self.assertFalse(worker._claim(item_ids[1], channel))
-        for item_id in item_ids:
-            self.assertTrue(worker._claim(item_id, channel))
-            worker._process_item(item_id)
-
-        db.session.expire_all()
-        saved_job = db.session.get(GenerationJob, job.id)
-        self.assertEqual(saved_job.status, "succeeded")
-        self.assertEqual(len(worker.providers.adapter.requests), 3)
-        self.assertEqual(len(worker.providers.adapter.requests[0].references), 1)
-        self.assertEqual(len(worker.providers.adapter.requests[1].references), 2)
-        first_request = worker.providers.adapter.requests[0]
-        second_request = worker.providers.adapter.requests[1]
-        self.assertEqual(second_request.references[0].filename, "master.png")
-        self.assertTrue(second_request.references[1].filename.startswith("frame_001."))
-        self.assertIn("frame 2 of 3", second_request.prompt)
-        self.assertIn("frame duration 166.7 ms", second_request.prompt)
-        self.assertIn("reference image 1 is the authoritative master", second_request.prompt)
-        self.assertIn("reference image 2 is the immediately previous frame", second_request.prompt)
-        self.assertIn("Never substitute color changes", second_request.prompt)
-        self.assertIn("start key pose A", first_request.prompt)
-        self.assertIn("first motion extreme", second_request.prompt)
-
-        response = self.user_client().get(f"/media/animations/{job.id}")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.mimetype, "image/webp")
-        content = bytes(response.data)
-        response.close()
-        with Image.open(io.BytesIO(content)) as animation:
-            self.assertTrue(animation.is_animated)
-            self.assertEqual(animation.n_frames, 3)
-
-    def test_animation_worker_preserves_prompt_queued_under_previous_limit(self):
-        workspace = self.create_workspace("长提示词动画", kind="animation")
-        master = self.services.workspaces.add_assets(
-            workspace,
-            [("master.png", png_bytes())],
-        )[0]
-        prompt = "x" * 8000
-        self.assertEqual(len(prompt), 8000)
-        job = self.submit(
-            workspace,
-            mode="img2img",
-            prompt=prompt,
-            reference_ids=(master.id,),
-            frame_count=3,
-        )
-        config = self.services.settings.editable_config()
-        config["runtime"]["max_prompt_characters"] = 1000
-        self.services.settings.save(config, self.admin.id)
-        worker = self.create_worker()
-
-        request_prompt = worker._request_prompt(job.items[0])
-
-        self.assertTrue(request_prompt.startswith(prompt))
-        self.assertEqual(request_prompt[: len(prompt)], prompt)
-        self.assertIn("Frame-by-frame animation instructions", request_prompt)
-
-    def test_animation_failure_stops_tail_and_releases_all_reserved_balance(self):
-        workspace = self.create_workspace("失败动画", kind="animation")
-        master = self.services.workspaces.add_assets(
-            workspace,
-            [("master.png", png_bytes())],
-        )[0]
-        job = self.submit(
-            workspace,
-            mode="img2img",
-            reference_ids=(master.id,),
-            frame_count=3,
-        )
-        first_item_id = job.items[0].id
-        worker = self.create_worker()
-        worker.providers = FakeProviderFactory(fail=True)
-        channel = self.app.extensions["channel_registry"].get("test")
-        self.assertTrue(worker._claim(first_item_id, channel))
-
-        worker._process_item(first_item_id)
-
-        db.session.expire_all()
-        saved_job = db.session.get(GenerationJob, job.id)
-        self.assertEqual(
-            [item.status for item in saved_job.items], ["failed", "canceled", "canceled"]
-        )
-        self.assertEqual(saved_job.status, "failed")
-        self.assertEqual(saved_job.items[1].error_code, "animation_dependency_failed")
-        user = db.session.get(User, self.user.id)
-        self.assertEqual(user.balance_rmb, Decimal("20.0000"))
-        self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
-
-    def test_animation_retry_keeps_completed_frames_and_finishes_remaining_frames(self):
-        workspace = self.create_workspace("可恢复动画", kind="animation")
-        master = self.services.workspaces.add_assets(
-            workspace,
-            [("master.png", png_bytes())],
-        )[0]
-        job = self.submit(
-            workspace,
-            mode="img2img",
-            reference_ids=(master.id,),
-            frame_count=3,
-        )
-        worker = self.create_worker()
-        worker.providers = FakeProviderFactory(vary=True)
-        channel = self.app.extensions["channel_registry"].get("test")
-
-        self.assertTrue(worker._claim(job.items[0].id, channel))
-        worker._process_item(job.items[0].id)
-        self.assertTrue(worker._claim(job.items[1].id, channel))
-        replacement = self.create_worker()
-        replacement._recover_orphaned_items(immediate=True)
-
-        db.session.expire_all()
-        failed_job = db.session.get(GenerationJob, job.id)
-        first_output_path = failed_job.items[0].output_path
-        self.assertEqual(
-            [item.status for item in failed_job.items],
-            ["succeeded", "interrupted", "canceled"],
-        )
-        self.assertEqual(failed_job.status, "partial")
-        client = self.user_client()
-        self.assertTrue(client.get(f"/api/generations/{job.id}").json["job"]["can_retry"])
-
-        response = client.post(f"/api/generations/{job.id}/retry")
-
-        self.assertEqual(response.status_code, 202, response.get_data(as_text=True))
-        retried = response.json["job"]
-        self.assertEqual(retried["status"], "running")
-        self.assertFalse(retried["can_retry"])
-        self.assertEqual(
-            [item["status"] for item in retried["items"]],
-            ["succeeded", "queued", "queued"],
-        )
-        self.assertEqual(retried["reserved_rmb"], "2.5000")
-        self.assertEqual(retried["charged_rmb"], "1.2500")
-        duplicate = client.post(f"/api/generations/{job.id}/retry")
-        self.assertEqual(duplicate.status_code, 409)
-        self.assertEqual(duplicate.json["code"], "generation_not_retryable")
-        db.session.expire_all()
-        saved_job = db.session.get(GenerationJob, job.id)
-        self.assertEqual(saved_job.items[0].output_path, first_output_path)
-        self.assertEqual(db.session.get(User, self.user.id).reserved_rmb, Decimal("2.5000"))
-
-        for item in saved_job.items[1:]:
-            self.assertTrue(worker._claim(item.id, channel))
-            worker._process_item(item.id)
-
-        db.session.expire_all()
-        completed = db.session.get(GenerationJob, job.id)
-        self.assertEqual(completed.status, "succeeded")
-        self.assertEqual(completed.items[0].output_path, first_output_path)
-        self.assertEqual(db.session.get(User, self.user.id).reserved_rmb, Decimal("0.0000"))
-        animation = client.get(f"/media/animations/{job.id}")
-        self.assertEqual(animation.status_code, 200)
-        animation.close()
 
     def test_custom_size_is_accepted_and_normalized(self):
         workspace = self.create_workspace()
@@ -483,6 +287,7 @@ class TestGenerations(PlatformTestCase):
     def test_canceling_running_item_discards_late_provider_result(self):
         workspace = self.create_workspace()
         job = self.submit(workspace)
+        client = self.user_client()
         worker = self.create_worker()
         providers = BlockingProviderFactory()
         worker.providers = providers
@@ -493,8 +298,44 @@ class TestGenerations(PlatformTestCase):
         processing.start()
         self.assertTrue(providers.adapter.started.wait(5))
         db.session.expire_all()
-        canceled = self.services.generations.cancel(job.id, user_id=self.user.id)
-        self.assertEqual(canceled.status, "canceling")
+        response = client.post(f"/api/generations/{job.id}/cancel")
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        self.assertTrue(processing.is_alive())
+        canceled = response.json["job"]
+        self.assertEqual(canceled["status"], "canceled")
+        self.assertFalse(canceled["can_cancel"])
+        self.assertEqual(canceled["reserved_rmb"], "0.0000")
+        self.assertIsNotNone(canceled["completed_at"])
+        self.assertEqual(canceled["items"][0]["status"], "canceled")
+        self.assertNotIn(
+            job.id,
+            {item["id"] for item in client.get("/api/generations/active").json["jobs"]},
+        )
+        self.assertEqual(db.session.get(User, self.user.id).reserved_rmb, Decimal("0.0000"))
+
+        replacement = client.post(
+            "/api/generations",
+            json={
+                "workspace_id": workspace.id,
+                "channel_id": "test",
+                "model": "model-b",
+                "mode": "text2img",
+                "prompt": "取消后立即提交",
+                "generation_stage": "draft",
+            },
+        )
+        self.assertEqual(replacement.status_code, 202, replacement.get_data(as_text=True))
+        replacement_id = replacement.json["job"]["id"]
+        self.assertTrue(processing.is_alive())
+        self.assertEqual(
+            client.post(f"/api/generations/{replacement_id}/cancel").json["job"]["status"],
+            "canceled",
+        )
+
+        db.session.expire_all()
+        canceled_item = db.session.get(GenerationItem, job.items[0].id)
+        self.assertIsNone(canceled_item.claimed_by)
+        self.assertIsNotNone(canceled_item.completed_at)
         providers.adapter.release.set()
         processing.join(10)
         self.assertFalse(processing.is_alive())

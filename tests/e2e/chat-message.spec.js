@@ -104,7 +104,7 @@ test("chat delivery uses stable IDs and retries the same message", async ({ page
   await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
   await expect(userRow).not.toContainText("发送中");
   await expect(page.locator(".message-row.assistant.pending"))
-    .toContainText("正在等待 AI 回复");
+    .toContainText("正在确认需求并整理最终提示词");
   await expect(page.locator(".message-row.user", { hasText: content })).toHaveCount(1);
 
   releaseReply();

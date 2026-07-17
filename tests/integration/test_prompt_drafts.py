@@ -9,6 +9,12 @@ from imagegen.models import (
     ConversationMessage,
 )
 from imagegen.services import ServiceError
+from imagegen.services.creative import (
+    CREATIVE_DIRECTIONS,
+    PROMPT_TEMPLATES,
+    SCENE_TAG_LABELS,
+    STYLE_TAG_LABELS,
+)
 from tests.support.platform import (
     PlatformTestCase,
     png_bytes,
@@ -16,6 +22,72 @@ from tests.support.platform import (
 
 
 class TestPromptDrafts(PlatformTestCase):
+    def test_creative_catalog_keeps_all_source_dimensions(self):
+        self.assertEqual(len(CREATIVE_DIRECTIONS), 13)
+        self.assertEqual(len(STYLE_TAG_LABELS), 19)
+        self.assertEqual(len(SCENE_TAG_LABELS), 10)
+        self.assertEqual(len(PROMPT_TEMPLATES), 22)
+
+    def test_prompt_draft_auto_selects_catalog_template_and_preserves_locked_direction(self):
+        workspace = self.create_workspace("自动匹配海报")
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="做一张运动鞋新品发布海报，标题是 AIR ZERO。",
+        )
+        chat_system = self.chat_client.calls[-1]["system"]
+        self.assertIn("本次调用同时完成需求确认和最终提示词整理", chat_system)
+        self.assertIn("ui-screenshot-system", chat_system)
+        self.chat_client.prompt_draft_content = json.dumps(
+            {
+                "status": "ready",
+                "summary_zh": "运动鞋新品发布海报，标题 AIR ZERO。",
+                "prompt": '3:4 vertical poster with exact title "AIR ZERO".',
+                "creative_direction": "poster",
+                "template_id": "poster-layout-system",
+                "style_tags": ["Poster"],
+                "scene_tags": ["Commerce", "Social"],
+                "selection_reason": "交付物是商业发布海报，需要明确主视觉与标题层级。",
+                "brief": {
+                    "deliverable": "新品发布海报",
+                    "subject": "运动鞋",
+                    "exact_text": ["AIR ZERO"],
+                },
+                "hard_checks": ["标题必须逐字显示 AIR ZERO", "只出现一双主运动鞋"],
+                "quality_hint": "high",
+            },
+            ensure_ascii=False,
+        )
+
+        draft = self.services.conversations.create_prompt_draft(
+            workspace,
+            model_id="test-chat",
+            translate_to_english=True,
+            creative_direction_id="auto",
+        )
+
+        self.assertEqual(draft.payload["creative_direction"], "poster")
+        self.assertEqual(draft.payload["template_id"], "poster-layout-system")
+        self.assertEqual(draft.payload["template_label"], "海报排版系统")
+        self.assertEqual(draft.payload["style_labels"], ["海报"])
+        self.assertEqual(draft.payload["scene_labels"], ["商业", "社媒"])
+        self.assertIn("主视觉与标题层级", draft.payload["selection_reason"])
+        self.assertEqual(draft.payload["sources"][1]["url"], "https://gpt-image2.canghe.ai/")
+        system = self.chat_client.calls[-1]["system"]
+        self.assertIn("交付物分类 → 视觉风格 → 使用场景 → 最近模板", system)
+        self.assertIn("ui-screenshot-system", system)
+        self.assertIn("concept-product-breakdown", system)
+        self.assertIn("若用户从外部图库复制提示词", system)
+
+        locked = self.services.conversations.create_prompt_draft(
+            workspace,
+            model_id="test-chat",
+            translate_to_english=False,
+            creative_direction_id="product",
+        )
+        self.assertEqual(locked.payload["creative_direction"], "product")
+        self.assertEqual(locked.payload["template_id"], "custom")
+
     def test_prompt_translation_defaults_off_and_records_draft_duration(self):
         workspace = self.create_workspace()
         self.assertFalse(workspace.settings["translate_prompt"])
