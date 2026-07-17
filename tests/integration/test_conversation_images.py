@@ -8,6 +8,7 @@ from imagegen.extensions import db
 from imagegen.services import ServiceError
 from imagegen.storage import InvalidImageError
 from tests.support.platform import (
+    FakeProviderFactory,
     PlatformTestCase,
     png_bytes,
     png_bytes_with_dimensions,
@@ -15,6 +16,86 @@ from tests.support.platform import (
 
 
 class TestConversationImages(PlatformTestCase):
+    def test_historical_chat_images_are_sent_again_on_a_later_turn(self):
+        workspace = self.create_workspace("历史图片上下文")
+        content = png_bytes((220, 35, 45))
+        asset = self.services.workspaces.add_assets(workspace, [("history.png", content)])[0]
+        response = {
+            "status": "ready",
+            "summary_zh": "保留历史参考图的主体",
+            "prompt": "保留历史参考图的主体并调整背景",
+            "creative_direction": "other",
+            "template_id": "custom",
+            "style_tags": [],
+            "scene_tags": [],
+            "selection_reason": "测试历史图片上下文。",
+            "brief": {"deliverable": "图片"},
+            "hard_checks": ["主体保持"],
+            "quality_hint": "low",
+        }
+        self.chat_client.reply_content = json.dumps(response, ensure_ascii=False)
+
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="先参考这张图设计主体",
+            attachment_ids=(asset.id,),
+        )
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="现在只调整背景，主体保持不变",
+        )
+
+        follow_up_context = self.chat_client.calls[-1]["messages"]
+        historical_images = [
+            part
+            for message in follow_up_context
+            for part in (message.get("content") if isinstance(message.get("content"), list) else [])
+            if part.get("type") == "image_url"
+        ]
+        self.assertTrue(historical_images)
+        self.assertTrue(
+            historical_images[0]["image_url"]["url"].endswith(
+                base64.b64encode(content).decode("ascii")
+            )
+        )
+        self.assertIn("先参考这张图设计主体", json.dumps(follow_up_context, ensure_ascii=False))
+
+    def test_completed_generation_is_available_to_the_next_chat_turn(self):
+        workspace = self.create_workspace("生成结果上下文")
+        prompt = "红色背景上的几何海报"
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content=f"请生成：{prompt}",
+        )
+        job = self.submit(workspace, prompt=prompt)
+        worker = self.create_worker()
+        worker.providers = FakeProviderFactory()
+        channel = self.app.extensions["channel_registry"].get("test")
+        self.assertTrue(worker._claim(job.items[0].id, channel))
+        worker._process_item(job.items[0].id)
+
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="基于刚才的成品把文字放大",
+        )
+
+        follow_up_context = self.chat_client.calls[-1]["messages"]
+        serialized = json.dumps(follow_up_context, ensure_ascii=False)
+        self.assertIn(prompt, serialized)
+        self.assertIn("历史生成结果", serialized)
+        result_image = [
+            part
+            for message in follow_up_context
+            for part in (message.get("content") if isinstance(message.get("content"), list) else [])
+            if part.get("type") == "image_url"
+            and base64.b64encode(png_bytes()).decode("ascii") in part["image_url"]["url"]
+        ]
+        self.assertTrue(result_image)
+
     def test_chat_multiple_attachments_are_sent_persisted_and_cannot_cross_workspaces(self):
         workspace = self.create_workspace()
         other_workspace = self.create_workspace("其他工作站")

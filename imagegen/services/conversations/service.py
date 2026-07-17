@@ -44,7 +44,7 @@ class ConversationService:
         runtime_logs: RuntimeLogService,
         client: OpenAIChatClient | None = None,
     ):
-        context = ConversationContextManager(chat_models)
+        context = ConversationContextManager(chat_models, storage)
         self.dependencies = ConversationDependencies(
             chat_models=chat_models,
             storage=storage,
