@@ -355,45 +355,47 @@ class BlockingFirstChatClient:
 
 
 class FakeChatResponse:
-    ok = True
-    status_code = 200
-    headers = {"x-request-id": "chat-http-test"}
-
-    @staticmethod
-    def json():
-        return {
-            "choices": [{"message": {"content": "测试回复"}}],
-            "usage": {"prompt_tokens": 4, "completion_tokens": 2},
+    def __init__(self, *, status_code=200, payload=None, lines=None, headers=None):
+        self.status_code = status_code
+        self.ok = 200 <= status_code < 300
+        self.headers = headers or {
+            "x-request-id": "chat-http-test",
+            "content-type": "text/event-stream",
         }
+        self.payload = payload or {}
+        self.content = json.dumps(self.payload).encode("utf-8") if self.payload else b""
+        self.lines = lines or [
+            'data: {"type":"response.output_text.delta","delta":"测试"}',
+            "",
+            'data: {"type":"response.output_text.delta","delta":"回复"}',
+            "",
+            'data: {"type":"response.completed",',
+            'data: "response":{"id":"chat-http-test","status":"completed"},',
+            'data: "usage":{"input_tokens":4,"output_tokens":2}}',
+        ]
+        self.closed = False
+
+    def json(self):
+        return self.payload
+
+    def iter_lines(self, *, chunk_size=512, decode_unicode=False):
+        for line in self.lines:
+            yield line if decode_unicode else line.encode("utf-8")
+
+    def close(self):
+        self.closed = True
 
 
 class RecordingChatSession:
-    def __init__(self):
+    def __init__(self, responses=None):
         self.request = None
+        self.requests = []
+        self.responses = list(responses or [FakeChatResponse()])
 
     def post(self, url, **kwargs):
         self.request = {"url": url, **kwargs}
-        return FakeChatResponse()
-
-
-class UnrecognizedChatResponse:
-    ok = True
-    status_code = 200
-    headers = {"x-request-id": "chat-shape-test", "content-type": "application/json"}
-    content = b'{"output": [{"type": "message"}]}'
-
-    @staticmethod
-    def json():
-        return {
-            "id": "chat-shape-test",
-            "output": [{"type": "message", "content": "must-not-be-logged"}],
-            "authorization": "Bearer must-not-be-logged",
-        }
-
-
-class UnrecognizedChatSession:
-    def post(self, _url, **_kwargs):
-        return UnrecognizedChatResponse()
+        self.requests.append(self.request)
+        return self.responses.pop(0)
 
 
 class HoldingExecutor:

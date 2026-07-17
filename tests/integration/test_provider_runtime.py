@@ -4,6 +4,7 @@ import io
 import json
 from dataclasses import replace
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 from PIL import Image
 from sqlalchemy import func, select
@@ -15,7 +16,7 @@ from imagegen.integrations.images import (
     OpenAIImagesAdapter,
     ReferencePayload,
 )
-from imagegen.integrations.openai_chat import OpenAIChatClient
+from imagegen.integrations.openai_chat import OpenAIChatClient, OpenAIChatError
 from imagegen.models import (
     ConversationMessage,
     RuntimeLog,
@@ -29,7 +30,6 @@ from tests.support.platform import (
     RecordingChatSession,
     RecordingImageSession,
     RejectingTransparencySession,
-    UnrecognizedChatSession,
     png_bytes,
 )
 
@@ -145,8 +145,99 @@ class TestProviderAndRuntime(PlatformTestCase):
         )
         self.assertEqual(model.reasoning_effort, "max")
         self.assertEqual(model.public_dict()["reasoning_effort"], "max")
-        self.assertEqual(session.request["json"]["reasoning_effort"], "max")
+        self.assertEqual(session.request["url"], "https://chat.example/v1/responses")
+        self.assertEqual(session.request["headers"]["Accept"], "text/event-stream")
+        self.assertTrue(session.request["stream"])
+        self.assertTrue(session.request["json"]["stream"])
+        self.assertEqual(session.request["json"]["instructions"], "系统提示")
+        self.assertEqual(session.request["json"]["reasoning"], {"effort": "max"})
+        self.assertEqual(
+            session.request["json"]["input"],
+            [{"role": "user", "content": [{"type": "input_text", "text": "你好"}]}],
+        )
         self.assertEqual(result.content, "测试回复")
+        self.assertEqual(result.input_tokens, 4)
+        self.assertEqual(result.output_tokens, 2)
+        self.assertTrue(session.responses == [])
+
+    def test_chat_request_converts_image_parts_for_responses_api(self):
+        model = self.app.extensions["chat_model_registry"].get("test-chat")
+        session = RecordingChatSession()
+
+        OpenAIChatClient(session).complete(
+            model,
+            system="系统提示",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "分析图片"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,AAAA"},
+                        },
+                    ],
+                },
+                {"role": "assistant", "content": "已查看"},
+            ],
+        )
+
+        self.assertEqual(
+            session.request["json"]["input"][0]["content"],
+            [
+                {"type": "input_text", "text": "分析图片"},
+                {"type": "input_image", "image_url": "data:image/png;base64,AAAA"},
+            ],
+        )
+        self.assertEqual(
+            session.request["json"]["input"][1],
+            {
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "已查看"}],
+            },
+        )
+
+    def test_chat_retries_one_explicit_http_502(self):
+        model = self.app.extensions["chat_model_registry"].get("test-chat")
+        first = FakeChatResponse(
+            status_code=502,
+            payload={"error": {"message": "temporarily unavailable", "type": "upstream_error"}},
+            headers={"x-request-id": "first-502", "content-type": "application/json"},
+        )
+        second = FakeChatResponse()
+        session = RecordingChatSession([first, second])
+
+        with patch("imagegen.integrations.openai_chat.time.sleep") as sleep:
+            result = OpenAIChatClient(session).complete(
+                model,
+                system="系统提示",
+                messages=[{"role": "user", "content": "你好"}],
+            )
+
+        self.assertEqual(result.content, "测试回复")
+        self.assertEqual(len(session.requests), 2)
+        sleep.assert_called_once_with(0.5)
+        self.assertTrue(first.closed)
+        self.assertTrue(second.closed)
+
+    def test_chat_does_not_retry_non_502_errors(self):
+        model = self.app.extensions["chat_model_registry"].get("test-chat")
+        response = FakeChatResponse(
+            status_code=429,
+            payload={"error": {"message": "busy", "type": "rate_limit_error"}},
+            headers={"x-request-id": "rate-limit", "content-type": "application/json"},
+        )
+        session = RecordingChatSession([response])
+
+        with self.assertRaises(OpenAIChatError):
+            OpenAIChatClient(session).complete(
+                model,
+                system="系统提示",
+                messages=[{"role": "user", "content": "你好"}],
+            )
+
+        self.assertEqual(len(session.requests), 1)
+        self.assertTrue(response.closed)
 
     def test_chat_calls_create_runtime_logs_without_prompt_or_credentials(self):
         workspace = self.create_workspace()
@@ -193,7 +284,23 @@ class TestProviderAndRuntime(PlatformTestCase):
 
     def test_unrecognized_chat_response_returns_searchable_error_id(self):
         workspace = self.create_workspace()
-        chat = OpenAIChatClient(UnrecognizedChatSession())
+        chat = OpenAIChatClient(
+            RecordingChatSession(
+                [
+                    FakeChatResponse(
+                        headers={
+                            "x-request-id": "chat-shape-test",
+                            "content-type": "text/event-stream",
+                        },
+                        lines=[
+                            'data: {"type":"response.completed","response":{"id":"chat-shape-test",'
+                            '"status":"completed","output":[{"type":"message"}]}}',
+                            "",
+                        ],
+                    )
+                ]
+            )
+        )
         self.services.conversations.client = chat
 
         response = self.user_client().post(

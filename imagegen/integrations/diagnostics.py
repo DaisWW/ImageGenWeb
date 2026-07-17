@@ -13,7 +13,12 @@ def response_summary(response: Any, payload: Any = _MISSING) -> dict[str, Any]:
         "status_code": getattr(response, "status_code", None),
         "content_type": str(headers.get("content-type", ""))[:120],
     }
-    raw = getattr(response, "content", None)
+    raw = None
+    if getattr(response, "_content_consumed", True):
+        try:
+            raw = getattr(response, "content", None)
+        except RuntimeError:
+            pass
     if isinstance(raw, bytes):
         summary["body_bytes"] = len(raw)
         summary["body_sha256"] = hashlib.sha256(raw).hexdigest()
