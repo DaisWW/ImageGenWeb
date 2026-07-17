@@ -149,7 +149,8 @@ def send_conversation_message(workspace_id: str):
     workspace = owned_workspace(workspace_id)
     data = json_body()
     attachment_ids = data.get("attachment_ids", [])
-    if not isinstance(attachment_ids, list):
+    generation_reference_ids = data.get("generation_reference_ids", [])
+    if not isinstance(attachment_ids, list) or not isinstance(generation_reference_ids, list):
         raise ServiceError("参考图参数无效")
     conversations = services().conversations
     user_message, assistant_message = conversations.send(
@@ -157,6 +158,8 @@ def send_conversation_message(workspace_id: str):
         model_id=str(data.get("model_id", "")),
         content=str(data.get("content", "")),
         attachment_ids=tuple(str(item) for item in attachment_ids),
+        generation_reference_ids=tuple(str(item) for item in generation_reference_ids),
+        generation_mode=str(data.get("generation_mode", "")),
         message_id=str(data.get("message_id", "")),
     )
     return jsonify(
@@ -201,6 +204,7 @@ def create_prompt_draft(workspace_id: str):
         translate_to_english=json_bool(data.get("translate_to_english", False)),
         mode=str(data.get("mode", "")),
         reference_ids=tuple(str(item) for item in reference_ids),
+        creative_direction_id=str(data.get("creative_direction_id", "auto")),
     )
     return jsonify(
         message=conversation_message_dict(message),

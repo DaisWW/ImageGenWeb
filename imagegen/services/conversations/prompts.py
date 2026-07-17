@@ -1,27 +1,10 @@
 from collections.abc import Mapping
 
-from ..config.chat_models import DEFAULT_SYSTEM_PROMPTS
-from ..validation import as_bool
+from ...config.chat_models import DEFAULT_SYSTEM_PROMPTS
+from ...validation import as_bool
 
 CHAT_SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPTS["chat"]
 SUMMARY_SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPTS["summary"]
-
-
-def chat_system_prompt(
-    base_prompt: str,
-    workspace_prompt: str,
-    runtime_prompt: str = "",
-    generation_prompt: str = "",
-) -> str:
-    sections = [
-        base_prompt.strip(),
-        f"当前工作站的创作指导如下：\n{workspace_prompt.strip()}",
-    ]
-    if runtime_prompt.strip():
-        sections.append(f"本次任务的运行参数如下：\n{runtime_prompt.strip()}")
-    if generation_prompt.strip():
-        sections.append(generation_prompt.strip())
-    return "\n\n".join(sections)
 
 
 def generation_mode_prompt(
@@ -35,7 +18,14 @@ def generation_mode_prompt(
 所有沟通和提示词只针对帧动画；参考图 1 是身份、造型、配色、构图和镜头基准。"""
 
     count = max(0, int(reference_count))
-    normalized_mode = "img2img" if mode == "img2img" else "text2img"
+    normalized_mode = mode if mode in {"auto", "img2img"} else "text2img"
+    if normalized_mode == "auto" and count:
+        return f"""当前收到 {count} 张候选图片。它们会提供给你理解本轮需求，但不一定要作为最终生图输入。
+必须根据用户语义判断这些图片是否必须作为最终生图输入：
+- reference_usage="generation"：用户要求基于、仿照、延续、修改图片，或要求保持其中的主体身份、产品外形、姿态、构图、版式、材质、色彩、笔触或风格。
+- reference_usage="analysis_only"：用户只要求分析、描述、总结图片或提炼文字提示词，明确要求独立创作或不要把原图交给生图模型。
+如果用户在同一轮既上传图片又要求生成，且没有明确排除图片，优先使用 generation，避免静默丢失垫图。reference_reason 用一句中文说明依据。
+选择 generation 时，最终提示词必须使用“参考图 1/参考图 2……”明确每张图的作用、必须保留和必须改变；选择 analysis_only 时，最终提示词不得包含参考图编号或 img2img 指令。"""
     if normalized_mode == "img2img" or count:
         missing = (
             "当前尚未收到任何参考图，必须先要求用户上传或选择至少一张参考图，不能返回 ready。"

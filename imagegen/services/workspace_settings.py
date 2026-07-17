@@ -10,6 +10,10 @@ from .settings import RuntimeSettings
 ALLOWED_WORKSPACE_SETTING_KEYS = {
     "chat_model_id",
     "translate_prompt",
+    "creative_direction_id",
+    "prompt_draft_id",
+    "generation_stage",
+    "reference_ids",
     "mode",
     "prompt",
     "channel_id",
@@ -30,6 +34,9 @@ def default_workspace_settings(workspace_kind: str = "image") -> dict[str, Any]:
     return {
         "chat_model_id": "",
         "translate_prompt": False,
+        "creative_direction_id": "auto",
+        "prompt_draft_id": "",
+        "generation_stage": "draft",
         "mode": "img2img" if workspace_kind == "animation" else "text2img",
         "prompt": "",
         "channel_id": "",
@@ -57,6 +64,17 @@ def sanitize_workspace_settings(raw: Any, runtime: RuntimeSettings | None = None
     settings["prompt"] = str(settings["prompt"])[: runtime.max_prompt_characters]
     settings["chat_model_id"] = str(settings["chat_model_id"])[:64]
     settings["translate_prompt"] = as_bool(settings["translate_prompt"])
+    settings["creative_direction_id"] = str(settings["creative_direction_id"])[:40]
+    settings["prompt_draft_id"] = str(settings["prompt_draft_id"])[:32]
+    settings["generation_stage"] = str(settings["generation_stage"]).lower()
+    if settings["generation_stage"] not in {"draft", "refine", "final"}:
+        settings["generation_stage"] = "draft"
+    if "reference_ids" in raw:
+        if not isinstance(settings["reference_ids"], list):
+            raise ServiceError("垫图选择参数无效")
+        settings["reference_ids"] = [
+            str(item)[:32] for item in settings["reference_ids"][: runtime.max_assets_per_workspace]
+        ]
     settings["mode"] = str(settings["mode"])
     settings["channel_id"] = str(settings["channel_id"])[:64]
     settings["model"] = str(settings["model"])[:100]

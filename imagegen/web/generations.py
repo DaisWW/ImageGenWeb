@@ -7,8 +7,8 @@ from sqlalchemy import select
 from ..errors import ServiceError
 from ..extensions import db
 from ..models import Asset, Workspace
-from ..serializers import job_dict, job_status_dict, workspace_dict
-from ..services import SubmitGeneration
+from ..serializers import job_dict, job_status_dict
+from ..services import GenerationWorkflow, SubmitGeneration
 from ..storage import StorageError
 from . import web
 from .shared import (
@@ -56,23 +56,44 @@ def submit_generation():
         animation_fps = int(data.get("animation_fps", 8))
     except (TypeError, ValueError) as exc:
         raise ServiceError("生成数量、帧率或压缩质量无效") from exc
+    mode = str(data.get("mode", "text2img"))
+    prompt = str(data.get("prompt", ""))
+    ordered_reference_ids = tuple(str(item) for item in reference_ids)
+    application_services = services()
+    draft_id = str(data.get("prompt_draft_id", "")).strip()
+    draft = None
+    if draft_id:
+        draft = application_services.conversations.validate_generation_draft(
+            workspace,
+            draft_id=draft_id,
+            prompt=prompt,
+            mode=mode,
+            reference_ids=ordered_reference_ids if mode == "img2img" else (),
+        )
+    workflow = GenerationWorkflow.build(
+        stage=str(data.get("generation_stage", "draft")),
+        prompt_draft_id=draft_id,
+        draft=draft,
+        creative_direction_id=str(data.get("creative_direction_id", "auto")),
+    )
     generation_request = SubmitGeneration(
         channel_id=str(data.get("channel_id", "")),
         model=str(data.get("model", "")),
-        mode=str(data.get("mode", "text2img")),
-        prompt=str(data.get("prompt", "")),
+        mode=mode,
+        prompt=prompt,
         size=str(data.get("size", "1024x1024")),
         output_format=str(data.get("output_format", "png")),
         compression=compression,
         batch_count=batch_count,
-        reference_ids=tuple(str(item) for item in reference_ids),
+        reference_ids=ordered_reference_ids,
+        quality=workflow.quality,
+        workflow=workflow.metadata,
         transparent_background=json_bool(data.get("transparent_background", False)),
         frame_count=frame_count,
         animation_fps=animation_fps,
         animation_loop=json_bool(data.get("animation_loop", True)),
         animation_format=str(data.get("animation_format", "webp")).lower(),
     )
-    application_services = services()
     generation_service = application_services.generations
     with application_services.conversations.generation_submission(workspace):
         job = generation_service.submit(current_user.id, workspace, generation_request)
@@ -231,36 +252,3 @@ def output_thumbnail(item_id: str):
         mimetype="image/webp",
         conditional=True,
     )
-
-
-@web.post("/api/generation-items/<item_id>/reference")
-@login_required
-def reuse_generation_item(item_id: str):
-    item = accessible_item(item_id)
-    if not item.output_path:
-        raise ServiceError("生成结果不存在", status_code=404)
-    workspace = owned_workspace(item.job.workspace_id)
-    extension = image_extension(item.output_mime_type)
-    asset_name = f"result_{item.id}.{extension}"
-    existing = db.session.scalar(
-        select(Asset)
-        .where(
-            Asset.workspace_id == workspace.id,
-            Asset.original_name == asset_name,
-            Asset.deleted_at.is_(None),
-        )
-        .order_by(Asset.created_at)
-        .limit(1)
-    )
-    if existing is not None:
-        return jsonify(asset=workspace_dict(workspace, [existing])["assets"][0])
-    assets = services().workspaces.add_assets(
-        workspace,
-        [
-            (
-                asset_name,
-                storage().read_bytes(item.output_path),
-            )
-        ],
-    )
-    return jsonify(asset=workspace_dict(workspace, assets)["assets"][0]), 201

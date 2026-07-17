@@ -234,6 +234,7 @@ class GenerationJob(TimestampMixin, db.Model):
     model: Mapped[str] = mapped_column(db.String(100))
     size: Mapped[str] = mapped_column(db.String(20))
     quality: Mapped[str] = mapped_column(db.String(20))
+    workflow: Mapped[dict] = mapped_column(MutableDict.as_mutable(JSON_TYPE), default=dict)
     output_format: Mapped[str] = mapped_column(db.String(20))
     compression: Mapped[int]
     transparent_background: Mapped[bool] = mapped_column(default=False)
@@ -318,6 +319,7 @@ class GenerationItem(TimestampMixin, db.Model):
     output_byte_count: Mapped[int | None]
     output_width: Mapped[int | None]
     output_height: Mapped[int | None]
+    review: Mapped[dict] = mapped_column(MutableDict.as_mutable(JSON_TYPE), default=dict)
 
     job: Mapped[GenerationJob] = relationship(back_populates="items")
     user: Mapped[User] = relationship()

@@ -5,10 +5,10 @@ from typing import Any
 
 from sqlalchemy import select
 
-from ..config.chat_models import ChatModelConfig, ChatModelRegistry
-from ..extensions import db
-from ..integrations.openai_chat import OpenAIChatClient
-from ..models import ConversationMessage, ConversationState, Workspace
+from ...config.chat_models import ChatModelConfig, ChatModelRegistry
+from ...extensions import db
+from ...integrations.openai_chat import OpenAIChatClient
+from ...models import ConversationMessage, ConversationState, Workspace
 
 
 class ConversationContextManager:

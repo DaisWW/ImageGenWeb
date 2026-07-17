@@ -6,7 +6,7 @@ import os
 import shutil
 import uuid
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -116,15 +116,7 @@ class ImageStorage:
         relative = Path("users") / str(user_id) / "workspaces" / workspace_id / "references"
         relative /= f"{asset_id}.{inspected.extension}"
         self._atomic_write(relative, content)
-        return StoredImage(
-            relative_path=relative.as_posix(),
-            mime_type=inspected.mime_type,
-            extension=inspected.extension,
-            byte_count=inspected.byte_count,
-            width=inspected.width,
-            height=inspected.height,
-            sha256=inspected.sha256,
-        )
+        return replace(inspected, relative_path=relative.as_posix())
 
     def save_library_image(
         self,
@@ -136,25 +128,7 @@ class ImageStorage:
     ) -> StoredOutput:
         relative = Path("users") / str(user_id) / "library"
         relative /= f"{image_id}.{inspected.extension}"
-        thumbnail = relative.with_name(f"{image_id}.thumb.webp")
-        self._atomic_write(relative, content)
-        try:
-            self._atomic_write(thumbnail, self._thumbnail(content))
-        except Exception:
-            self.delete(relative.as_posix())
-            raise
-        return StoredOutput(
-            image=StoredImage(
-                relative_path=relative.as_posix(),
-                mime_type=inspected.mime_type,
-                extension=inspected.extension,
-                byte_count=inspected.byte_count,
-                width=inspected.width,
-                height=inspected.height,
-                sha256=inspected.sha256,
-            ),
-            thumbnail_path=thumbnail.as_posix(),
-        )
+        return self._save_with_thumbnail(relative, content, inspected)
 
     def save_output(
         self,
@@ -169,24 +143,23 @@ class ImageStorage:
         directory = Path("users") / str(user_id) / "workspaces" / workspace_id / "generations"
         directory /= job_id
         relative = directory / f"{item_id}.{inspected.extension}"
-        thumbnail = directory / f"{item_id}.thumb.webp"
+        return self._save_with_thumbnail(relative, content, inspected)
+
+    def _save_with_thumbnail(
+        self,
+        relative: Path,
+        content: bytes,
+        inspected: StoredImage,
+    ) -> StoredOutput:
+        thumbnail = relative.with_suffix(".thumb.webp")
         self._atomic_write(relative, content)
         try:
-            thumbnail_bytes = self._thumbnail(content)
-            self._atomic_write(thumbnail, thumbnail_bytes)
+            self._atomic_write(thumbnail, self._thumbnail(content))
         except Exception:
             self.delete(relative.as_posix())
             raise
         return StoredOutput(
-            image=StoredImage(
-                relative_path=relative.as_posix(),
-                mime_type=inspected.mime_type,
-                extension=inspected.extension,
-                byte_count=inspected.byte_count,
-                width=inspected.width,
-                height=inspected.height,
-                sha256=inspected.sha256,
-            ),
+            image=replace(inspected, relative_path=relative.as_posix()),
             thumbnail_path=thumbnail.as_posix(),
         )
 

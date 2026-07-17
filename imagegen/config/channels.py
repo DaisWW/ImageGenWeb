@@ -26,6 +26,16 @@ class ChannelCapabilities:
     sizes: tuple[str, ...]
     formats: tuple[str, ...]
 
+    def public_dict(self) -> dict[str, Any]:
+        return {
+            "modes": list(self.modes),
+            "max_reference_images": self.max_reference_images,
+            "max_reference_image_mb": self.max_reference_image_mb,
+            "max_reference_total_mb": self.max_reference_total_mb,
+            "sizes": list(self.sizes),
+            "formats": list(self.formats),
+        }
+
 
 @dataclass(frozen=True)
 class ChannelLimits:
@@ -81,14 +91,7 @@ class Channel:
             ],
             "default_model": self.default_model.identifier,
             "price_rmb": format(self.price_rmb, ".4f"),
-            "capabilities": {
-                "modes": list(self.capabilities.modes),
-                "max_reference_images": self.capabilities.max_reference_images,
-                "max_reference_image_mb": self.capabilities.max_reference_image_mb,
-                "max_reference_total_mb": self.capabilities.max_reference_total_mb,
-                "sizes": list(self.capabilities.sizes),
-                "formats": list(self.capabilities.formats),
-            },
+            "capabilities": self.capabilities.public_dict(),
             "limits": {"max_concurrency": self.limits.max_concurrency},
         }
 
@@ -110,14 +113,7 @@ class Channel:
                 for model in self.models
             ],
             "price_rmb": format(self.price_rmb, ".4f"),
-            "capabilities": {
-                "modes": list(self.capabilities.modes),
-                "max_reference_images": self.capabilities.max_reference_images,
-                "max_reference_image_mb": self.capabilities.max_reference_image_mb,
-                "max_reference_total_mb": self.capabilities.max_reference_total_mb,
-                "sizes": list(self.capabilities.sizes),
-                "formats": list(self.capabilities.formats),
-            },
+            "capabilities": self.capabilities.public_dict(),
             "limits": {
                 "max_concurrency": self.limits.max_concurrency,
                 "timeout_seconds": self.limits.timeout_seconds,

@@ -1,83 +1,31 @@
 from __future__ import annotations
 
-import math
-from collections.abc import Iterable
-from dataclasses import dataclass
 from datetime import timedelta, timezone
 from decimal import Decimal
-from statistics import fmean
 
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from ..config.channels import Channel, ChannelRegistry
-from ..errors import ServiceError
-from ..extensions import db
-from ..models import (
-    Asset,
+from ...config.channels import Channel, ChannelRegistry
+from ...errors import ServiceError
+from ...extensions import db
+from ...models import (
     GenerationItem,
     GenerationJob,
     GenerationQueueState,
     GenerationReference,
-    RuntimeLog,
     User,
     Workspace,
     utcnow,
 )
-from .billing import BillingService
-from .common import money, normalize_image_size
-from .settings import SystemSettingsService
-from .workspace_settings import sanitize_workspace_settings
-
-_DURATION_SAMPLE_LIMIT = 50
-_DURATION_SAMPLE_TARGET = 8
-_DURATION_TRIM_RATIO = 0.1
-_GENERATION_QUALITY = "high"
-
-
-def _duration_values(values: Iterable[Decimal | float | int | None]) -> list[float]:
-    durations = []
-    for value in values:
-        if value is None:
-            continue
-        duration = float(value)
-        if math.isfinite(duration) and duration > 0:
-            durations.append(duration)
-    return durations
-
-
-def _robust_duration_estimate(
-    samples: Iterable[Decimal | float | int | None], baseline: float
-) -> float:
-    ordered = sorted(_duration_values(samples))
-    if not ordered:
-        return baseline
-
-    sample_count = len(ordered)
-    trim_count = int(sample_count * _DURATION_TRIM_RATIO)
-    trimmed = ordered[trim_count:-trim_count] if trim_count else ordered
-    observed = fmean(trimmed)
-    confidence = min(1.0, sample_count / _DURATION_SAMPLE_TARGET)
-    return baseline + (observed - baseline) * confidence
-
-
-@dataclass(frozen=True)
-class SubmitGeneration:
-    channel_id: str
-    model: str
-    mode: str
-    prompt: str
-    size: str
-    output_format: str
-    compression: int
-    batch_count: int
-    reference_ids: tuple[str, ...]
-    transparent_background: bool = False
-    frame_count: int = 8
-    animation_fps: int = 8
-    animation_loop: bool = True
-    animation_format: str = "webp"
+from ..billing import BillingService
+from ..common import money
+from ..settings import SystemSettingsService
+from ..workspace_settings import sanitize_workspace_settings
+from .contracts import SubmitGeneration, sanitize_workflow
+from .estimates import GenerationDurationEstimator
+from .validation import GenerationRequestValidator
 
 
 class GenerationService:
@@ -90,6 +38,8 @@ class GenerationService:
         self.channels = channels
         self.billing = billing
         self.settings = settings
+        self.validator = GenerationRequestValidator(settings)
+        self.duration_estimator = GenerationDurationEstimator()
 
     def submit(
         self,
@@ -102,21 +52,10 @@ class GenerationService:
             selected_model = channel.get_model(request.model)
         except ValueError as exc:
             raise ServiceError(str(exc)) from exc
-        normalized_size = self._validate_request(channel, request, workspace.kind)
-        references = self._load_references(workspace, request.reference_ids)
-        if workspace.kind == "animation":
-            if not references:
-                raise ServiceError("请先上传或选择一张母图")
-            if request.mode != "img2img":
-                raise ServiceError("帧动画工作站只能使用指定母图生成帧动画")
-            if len(references) != 1:
-                raise ServiceError("帧动画任务必须且只能选择一张母图")
-            job_kind = "animation"
-            requested_count = request.frame_count
-        else:
-            job_kind = "image"
-            requested_count = request.batch_count
-        self._validate_references(channel, request.mode, references)
+        normalized_size = self.validator.validate_request(channel, request, workspace.kind)
+        references = self.validator.load_references(workspace, request.reference_ids)
+        job_kind, requested_count = self.validator.job_shape(workspace.kind, request, references)
+        self.validator.validate_references(channel, request.mode, references)
 
         user = self.billing.lock_user(user_id)
         if not user.is_active:
@@ -133,6 +72,7 @@ class GenerationService:
 
         reserved = money(channel.price_rmb * requested_count)
         self.billing.reserve(user, reserved)
+        workflow = sanitize_workflow(request.workflow)
         job = GenerationJob(
             user_id=user.id,
             workspace_id=workspace.id,
@@ -144,7 +84,8 @@ class GenerationService:
             prompt=request.prompt.strip(),
             model=selected_model.identifier,
             size=normalized_size,
-            quality=_GENERATION_QUALITY,
+            quality=request.quality,
+            workflow=workflow,
             output_format=request.output_format,
             compression=request.compression,
             transparent_background=request.transparent_background,
@@ -198,6 +139,9 @@ class GenerationService:
                 "animation_fps": request.animation_fps,
                 "animation_loop": request.animation_loop,
                 "animation_format": request.animation_format,
+                "generation_stage": workflow["generation_stage"],
+                "prompt_draft_id": workflow["prompt_draft_id"],
+                "creative_direction_id": workflow["creative_direction_id"],
             },
             self.settings.runtime(),
         )
@@ -218,14 +162,14 @@ class GenerationService:
         job.cancel_requested_at = now
         releasable = Decimal("0")
         for item in job.items:
-            if item.status == "queued":
-                item.status = "canceled"
-                item.cancel_requested_at = now
-                item.completed_at = now
-                releasable += money(job.price_per_image_rmb)
-            elif item.status == "running":
-                item.status = "canceling"
-                item.cancel_requested_at = now
+            if item.status not in {"queued", "running", "canceling"}:
+                continue
+            item.status = "canceled"
+            item.cancel_requested_at = now
+            item.completed_at = now
+            item.claimed_by = None
+            item.heartbeat_at = None
+            releasable += money(job.price_per_image_rmb)
         self.billing.release(user, job, releasable)
         self.refresh_job_status(job)
         db.session.commit()
@@ -377,21 +321,7 @@ class GenerationService:
         return {job_id: index + 1 for index, job_id in enumerate(queued_ids)}
 
     def estimate_seconds(self, job: GenerationJob, channel: Channel) -> Decimal:
-        samples = self._duration_samples(job, exact=True)
-        if len(samples) < _DURATION_SAMPLE_TARGET:
-            related = self._duration_samples(job, exact=False)
-            samples = (
-                related
-                if len(related) >= _DURATION_SAMPLE_TARGET
-                else max(related, self._runtime_duration_samples(job), key=len)
-            )
-
-        estimate = _robust_duration_estimate(
-            samples,
-            baseline=float(channel.limits.estimated_seconds),
-        )
-        estimate = min(max(estimate, 10.0), float(channel.limits.timeout_seconds))
-        return Decimal(str(round(estimate, 3)))
+        return self.duration_estimator.estimate_seconds(job, channel)
 
     def _ensure_workspace_generation_idle(self, workspace_id: str, workspace_kind: str) -> None:
         active_job = db.session.scalar(
@@ -470,50 +400,6 @@ class GenerationService:
             status_code=409,
         )
 
-    def _duration_samples(self, job: GenerationJob, *, exact: bool) -> list[float]:
-        kinds = (
-            ("image", "animation_master")
-            if job.kind in {"image", "animation_master"}
-            else (job.kind,)
-        )
-        query = (
-            select(GenerationItem.elapsed_seconds)
-            .join(GenerationJob)
-            .where(
-                GenerationItem.status == "succeeded",
-                GenerationItem.elapsed_seconds.is_not(None),
-                GenerationJob.channel_id == job.channel_id,
-                GenerationJob.model == job.model,
-                GenerationJob.kind.in_(kinds),
-                GenerationJob.mode == job.mode,
-            )
-            .order_by(GenerationItem.completed_at.desc())
-            .limit(_DURATION_SAMPLE_LIMIT)
-        )
-        if exact:
-            query = query.where(
-                GenerationJob.size == job.size,
-                GenerationJob.quality == job.quality,
-            )
-        return _duration_values(db.session.scalars(query))
-
-    @staticmethod
-    def _runtime_duration_samples(job: GenerationJob) -> list[float]:
-        query = (
-            select(RuntimeLog.elapsed_seconds)
-            .where(
-                RuntimeLog.category == "generation",
-                RuntimeLog.event == "generation.provider",
-                RuntimeLog.status == "success",
-                RuntimeLog.elapsed_seconds.is_not(None),
-                RuntimeLog.provider_id == job.channel_id,
-                RuntimeLog.model == job.model,
-            )
-            .order_by(RuntimeLog.created_at.desc())
-            .limit(_DURATION_SAMPLE_LIMIT)
-        )
-        return _duration_values(db.session.scalars(query))
-
     @staticmethod
     def refresh_job_status(job: GenerationJob) -> None:
         statuses = [item.status for item in job.items]
@@ -546,81 +432,3 @@ class GenerationService:
             else value.astimezone(timezone.utc),
             default=utcnow(),
         )
-
-    @staticmethod
-    def _load_references(workspace: Workspace, reference_ids: tuple[str, ...]) -> list[Asset]:
-        if len(reference_ids) != len(set(reference_ids)):
-            raise ServiceError("垫图不能重复")
-        if not reference_ids:
-            return []
-        assets = list(
-            db.session.scalars(
-                select(Asset).where(
-                    Asset.workspace_id == workspace.id,
-                    Asset.id.in_(reference_ids),
-                    Asset.deleted_at.is_(None),
-                )
-            )
-        )
-        by_id = {asset.id: asset for asset in assets}
-        if any(asset_id not in by_id for asset_id in reference_ids):
-            raise ServiceError("选择的垫图不存在")
-        return [by_id[asset_id] for asset_id in reference_ids]
-
-    def _validate_request(
-        self, channel: Channel, request: SubmitGeneration, workspace_kind: str
-    ) -> str:
-        runtime = self.settings.runtime()
-        if workspace_kind not in {"image", "animation"}:
-            raise ServiceError("工作站类型无效")
-        if request.mode not in channel.capabilities.modes:
-            raise ServiceError(f"{channel.label} 不支持当前生成模式")
-        prompt = request.prompt.strip()
-        if not prompt or len(prompt) > runtime.max_prompt_characters:
-            raise ServiceError(f"提示词长度必须在 1 到 {runtime.max_prompt_characters} 个字符之间")
-        normalized_size = normalize_image_size(request.size)
-        if request.output_format not in channel.capabilities.formats:
-            raise ServiceError(f"{channel.label} 不支持格式 {request.output_format}")
-        if request.transparent_background and request.output_format not in {"png", "webp"}:
-            raise ServiceError("透明背景仅支持 PNG 或 WebP 格式")
-        if not 0 <= request.compression <= 100:
-            raise ServiceError("压缩质量必须在 0 到 100 之间")
-        if not 1 <= request.batch_count <= runtime.max_batch_images:
-            raise ServiceError(f"单批生成张数必须在 1 到 {runtime.max_batch_images} 之间")
-        if not 2 <= request.frame_count <= runtime.max_animation_frames:
-            raise ServiceError(f"动画帧数必须在 2 到 {runtime.max_animation_frames} 之间")
-        if not 1 <= request.animation_fps <= runtime.max_animation_fps:
-            raise ServiceError(f"动画帧率必须在 1 到 {runtime.max_animation_fps} FPS 之间")
-        if request.animation_format not in {"webp", "gif"}:
-            raise ServiceError("动画导出格式仅支持 WebP 或 GIF")
-        return normalized_size
-
-    def _validate_references(self, channel: Channel, mode: str, references: list[Asset]) -> None:
-        if mode == "img2img" and not references:
-            raise ServiceError("垫图生图至少需要一张垫图")
-        if mode == "text2img" and references:
-            raise ServiceError("文生图任务不能携带垫图")
-        runtime = self.settings.runtime()
-        if any(asset.byte_count > runtime.max_attachment_bytes for asset in references):
-            raise ServiceError(f"单张参考图不能超过 {runtime.max_attachment_mb} MiB")
-        if sum(asset.byte_count for asset in references) > runtime.max_attachment_total_bytes:
-            raise ServiceError(f"参考图合计不能超过 {runtime.max_attachment_total_mb} MiB")
-        capabilities = channel.capabilities
-        if len(references) > capabilities.max_reference_images:
-            raise ServiceError(
-                f"{channel.label} 最多支持 {capabilities.max_reference_images} 张垫图"
-            )
-        if any(
-            asset.byte_count > capabilities.max_reference_image_mb * 1024 * 1024
-            for asset in references
-        ):
-            raise ServiceError(
-                f"{channel.label} 的单张垫图不能超过 {capabilities.max_reference_image_mb} MiB"
-            )
-        if (
-            sum(asset.byte_count for asset in references)
-            > capabilities.max_reference_total_mb * 1024 * 1024
-        ):
-            raise ServiceError(
-                f"{channel.label} 的垫图合计不能超过 {capabilities.max_reference_total_mb} MiB"
-            )

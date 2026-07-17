@@ -21,10 +21,19 @@ from .diagnostics import response_summary
 
 MAX_OUTPUT_BYTES = 50 * 1024 * 1024
 MAX_TRANSPARENCY_PIXELS = 40_000_000
+TRANSPARENT_BACKGROUND_SUFFIX = (
+    "\n\nTechnical output requirements for transparency: place the requested subject on a "
+    "genuinely transparent canvas. Do not draw or simulate a transparency checkerboard. "
+    "Preserve a clean, well-defined silhouette with smooth anti-aliased edges and fully "
+    "transparent pixels immediately outside it. Avoid unintended matte colors, halos, fringes, "
+    "glow, shadows, stray pixels, and semi-transparent specks around the contour."
+)
 TRANSPARENT_FALLBACK_SUFFIX = (
     "\n\nTechnical output requirement: render the subject on a perfectly uniform pure white "
-    "background (#FFFFFF) extending to every canvas edge. Do not add texture, gradients, "
-    "shadows, borders, scenery, or extra objects to the background."
+    "background (#FFFFFF) extending to every canvas edge. Do not draw or simulate a transparency "
+    "checkerboard. Keep a clean, well-defined silhouette with clear color separation from the "
+    "background. Do not add texture, gradients, halos, fringes, glow, shadows, stray pixels, "
+    "specks, borders, scenery, or extra objects around the subject or in the background."
 )
 
 
@@ -92,9 +101,12 @@ class OpenAIImagesAdapter:
     def generate(self, channel: Channel, request: GenerationRequest) -> ProviderResult:
         endpoint = "edits" if request.references else "generations"
         url = _api_endpoint(channel.base_url, f"images/{endpoint}")
+        prompt = request.prompt
+        if request.transparent_background:
+            prompt = f"{prompt.rstrip()}{TRANSPARENT_BACKGROUND_SUFFIX}"
         payload: dict[str, Any] = {
             "model": request.model,
-            "prompt": request.prompt,
+            "prompt": prompt,
             "n": 1,
             "size": request.size,
             "quality": request.quality,

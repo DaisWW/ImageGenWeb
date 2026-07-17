@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
@@ -10,6 +11,25 @@ MONEY_QUANTUM = Decimal("0.0001")
 IMAGE_SIZE_PATTERN = re.compile(r"^([1-9]\d{1,4})x([1-9]\d{1,4})$")
 IMAGE_DIMENSION_MIN = 64
 IMAGE_DIMENSION_MAX = 8192
+
+
+def parse_json_object(content: str) -> dict[str, Any] | None:
+    cleaned = content.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(
+            r"^```(?:json)?\s*|\s*```$",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+    start, end = cleaned.find("{"), cleaned.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        payload = json.loads(cleaned[start : end + 1])
+    except (TypeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def money(value: Decimal | str | int | float) -> Decimal:
