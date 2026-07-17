@@ -145,15 +145,10 @@ class TestImageSlicing(PlatformTestCase):
         analysis = response.json["analysis"]
         self.assertTrue(analysis["detected"])
         self.assertEqual((analysis["rows"], analysis["columns"]), (2, 3))
-        self.assertTrue(
-            {"margin_x", "margin_y", "gap_x", "gap_y"}.isdisjoint(analysis)
-        )
+        self.assertTrue({"margin_x", "margin_y", "gap_x", "gap_y"}.isdisjoint(analysis))
         self.assertEqual(len(analysis["boxes"]), 6)
         self.assertEqual(
-            [
-                (box["x"], box["y"], box["width"], box["height"])
-                for box in analysis["boxes"]
-            ],
+            [(box["x"], box["y"], box["width"], box["height"]) for box in analysis["boxes"]],
             [
                 (0, 0, 83, 69),
                 (83, 0, 82, 69),
@@ -249,9 +244,7 @@ class TestImageSlicing(PlatformTestCase):
         self.assertFalse(response.json["analysis"]["detected"])
 
     def test_export_downloads_selected_crops_as_png_zip(self):
-        _workspace, item = self._completed_item(
-            atlas_png_bytes(rows=2, columns=3, margin=0, gap=0)
-        )
+        _workspace, item = self._completed_item(atlas_png_bytes(rows=2, columns=3, margin=0, gap=0))
         boxes = [
             {"x": 0, "y": 0, "width": 72, "height": 56},
             {"x": 72, "y": 56, "width": 72, "height": 56},
@@ -269,9 +262,7 @@ class TestImageSlicing(PlatformTestCase):
                 self.assertEqual(crop.size, (72, 56))
 
     def test_export_can_save_to_library_or_use_one_slice_as_reference(self):
-        workspace, item = self._completed_item(
-            atlas_png_bytes(rows=2, columns=3, margin=0, gap=0)
-        )
+        workspace, item = self._completed_item(atlas_png_bytes(rows=2, columns=3, margin=0, gap=0))
         client = self.user_client()
         box = {"x": 0, "y": 0, "width": 72, "height": 56}
 
@@ -297,9 +288,7 @@ class TestImageSlicing(PlatformTestCase):
         self.assertEqual(workspace.id, item.job.workspace_id)
 
     def test_export_rejects_out_of_bounds_and_multiple_reference_slices(self):
-        _workspace, item = self._completed_item(
-            atlas_png_bytes(rows=2, columns=3, margin=0, gap=0)
-        )
+        _workspace, item = self._completed_item(atlas_png_bytes(rows=2, columns=3, margin=0, gap=0))
         client = self.user_client()
         invalid = client.post(
             f"/api/generation-items/{item.id}/slice-export",

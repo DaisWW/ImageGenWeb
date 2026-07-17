@@ -38,9 +38,7 @@ def analyze_image(path: str | Path, *, prompt: str = "") -> dict[str, object]:
     rows = y_layout.count
     columns = x_layout.count
     boxes = grid_boxes(width, height, rows=rows, columns=columns)
-    active_scores = [
-        layout.score for layout in (x_layout, y_layout) if layout.count > 1
-    ]
+    active_scores = [layout.score for layout in (x_layout, y_layout) if layout.count > 1]
     detected = len(boxes) > 1
     confidence_score = min(active_scores) if active_scores else 0.0
     confidence = (
@@ -82,9 +80,7 @@ def _detect_axis(image: Image.Image, *, axis: int, hinted_count: int | None) -> 
             boundary_edge.append(_window_max(edge, position, window))
 
         minimum_coverage = min(boundary_coverage)
-        required_coverage = (
-            MIN_HINTED_COVERAGE if hinted_count == count else MIN_VISUAL_COVERAGE
-        )
+        required_coverage = MIN_HINTED_COVERAGE if hinted_count == count else MIN_VISUAL_COVERAGE
         if minimum_coverage < required_coverage:
             continue
 
@@ -124,8 +120,7 @@ def _detect_periodic_axis(profile: list[float]) -> AxisLayout:
             continue
         edges = [round(length * index / count) for index in range(count + 1)]
         segment_activity = [
-            _range_average(smoothed, edges[index], edges[index + 1])
-            for index in range(count)
+            _range_average(smoothed, edges[index], edges[index + 1]) for index in range(count)
         ]
         average_segment = sum(segment_activity) / len(segment_activity)
         uniformity = min(segment_activity) / max(average_segment, 1e-6)
@@ -185,8 +180,7 @@ def _window_max(values: list[float], position: int, radius: int) -> float:
 
 def _smooth_profile(values: list[float], *, radius: int) -> list[float]:
     return [
-        _range_average(values, index - radius, index + radius + 1)
-        for index in range(len(values))
+        _range_average(values, index - radius, index + radius + 1) for index in range(len(values))
     ]
 
 

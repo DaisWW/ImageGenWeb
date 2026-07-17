@@ -245,9 +245,7 @@ def _sse_payloads(response: requests.Response):
     lines: list[str] = []
     for raw_line in response.iter_lines(chunk_size=1, decode_unicode=False):
         line = (
-            raw_line.decode("utf-8", "replace")
-            if isinstance(raw_line, bytes)
-            else str(raw_line)
+            raw_line.decode("utf-8", "replace") if isinstance(raw_line, bytes) else str(raw_line)
         ).rstrip("\r\n")
         if line.startswith("data:"):
             lines.append(line[5:].lstrip())
