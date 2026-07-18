@@ -394,6 +394,11 @@ test("smart slicer detects, adjusts, selects and exports atlas tiles", {
 
   await page.reload();
   await page.locator("[data-item-id=\"" + itemId + "\"]").click();
+  await expect(page.locator(".image-dialog-preview"))
+    .toHaveCSS("background-image", /conic-gradient/);
+  await expect(page.locator(".image-dialog-preview"))
+    .toHaveCSS("padding", /^(12|16)px$/);
+  await expect(page.locator("#detailImage")).toHaveCSS("outline-style", "solid");
   await page.locator("#detailSlice").click();
   await firstAnalysisStarted;
 
@@ -413,6 +418,8 @@ test("smart slicer detects, adjusts, selects and exports atlas tiles", {
   await page.locator("#detailSlice").click();
 
   await expect(page.locator("#sliceDialog")).toBeVisible();
+  await expect(page.locator("#sliceCanvas"))
+    .toHaveCSS("background-image", /conic-gradient/);
   await expect(page.locator("#slicePreviewTitle")).toHaveText("2 行 × 3 列");
   await expect(page.locator("#sliceConfidence")).toHaveText("高置信度");
   await expect(page.locator("#sliceOverlay .slice-box")).toHaveCount(6);
@@ -421,6 +428,7 @@ test("smart slicer detects, adjusts, selects and exports atlas tiles", {
   await expect(page.locator("#sliceMarginX, #sliceMarginY, #sliceGapX, #sliceGapY"))
     .toHaveCount(0);
   await expect(page.locator("#sliceReuse")).toBeDisabled();
+  await expect(page.locator("#sliceDialog")).toHaveCSS("overflow-y", "hidden");
 
   await page.locator("#sliceColumns").fill("2");
   await expect(page.locator("#sliceOverlay .slice-box")).toHaveCount(4);

@@ -259,7 +259,6 @@
 }
 
 .output-tile.has-transparency,
-.image-dialog-preview.has-transparency,
 .transparent-background-swatch {
   --checkerboard-dark: #d4d8d6;
   --checkerboard-light: #f2f4f3;

@@ -183,14 +183,15 @@
 }
 
 .slice-modal {
-  width: min(97vw, 1320px);
-  max-width: min(97vw, 1320px);
+  width: min(98vw, 1420px);
+  max-width: min(98vw, 1420px);
+  overflow: hidden;
 }
 
 .slice-dialog-layout {
   display: grid;
-  height: min(90vh, 860px);
-  grid-template-columns: minmax(0, 1fr) 390px;
+  height: min(94vh, 980px);
+  grid-template-columns: minmax(0, 1fr) 420px;
 }
 
 .slice-preview-pane {
@@ -258,13 +259,25 @@
 }
 
 .slice-canvas {
+  --preview-checker-dark: #20252a;
+  --preview-checker-light: #3a4147;
   position: relative;
-  width: min(100%, calc((90vh - 105px) * var(--slice-ratio, 1)));
-  max-height: calc(90vh - 105px);
+  width: min(100%, calc((min(94vh, 980px) - 105px) * var(--slice-ratio, 1)));
+  max-height: calc(min(94vh, 980px) - 105px);
   aspect-ratio: var(--slice-ratio, 1);
   overflow: hidden;
-  background: #020303;
-  box-shadow: 0 0 0 1px var(--line-strong), 0 14px 36px rgb(0 0 0 / 38%);
+  background:
+    conic-gradient(
+      var(--preview-checker-dark) 25%,
+      var(--preview-checker-light) 0 50%,
+      var(--preview-checker-dark) 0 75%,
+      var(--preview-checker-light) 0
+    )
+    0 0 / 20px 20px;
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 42%),
+    0 0 0 2px rgb(0 0 0 / 58%),
+    0 14px 36px rgb(0 0 0 / 38%);
 }
 
 .slice-canvas.loading::after {

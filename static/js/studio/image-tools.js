@@ -16,8 +16,6 @@
       this.detailItemId = item.id;
       this.detailJobId = job.id;
       this.el.detailImage.src = item.image_url;
-      this.el.detailImage.closest(".image-dialog-preview")
-        ?.classList.toggle("has-transparency", job.transparent_background === true);
       this.prepareImageReveal(this.el.detailImage);
       this.el.detailPrompt.textContent = job.prompt;
       const transparentLabel = job.transparent_background ? " · 透明背景" : "";
