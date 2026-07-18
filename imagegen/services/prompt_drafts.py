@@ -68,7 +68,7 @@ ready 时还必须完成一次交付前审查：
 - template_id 必须是目录中的一个模板 ID；确实没有近似模板时使用 custom。style_tags、scene_tags 必须从目录值中选择，selection_reason 用一句中文解释匹配依据。
 - brief 必须把模糊会话压缩成交付物、用途、主体、构图、风格、精确文字、参考图计划、保持项、改变项和禁止项。没有的内容使用空字符串或空数组，不得臆造。
 - hard_checks 只列能从最终图片判断的 2～6 个硬门槛，例如精确文字、主体数量、必要元素、参考图身份、非目标区域保持和禁止额外内容。
-- quality_hint 只能是 low、medium 或 high；它表示当前提示词首次试生成的建议，最终成品可由用户切换 high。
+- quality_hint 只能是 low、medium 或 high；它表示当前提示词首次试生成的建议，生成时沿用工作站保存的阶段。
 只输出一个 JSON 对象，不要 Markdown，不要额外说明，并严格使用以下两种格式之一：
 {{"status":"needs_clarification","questions":["问题 1","问题 2"],"creative_direction":"poster"}}
 {{"status":"ready","summary_zh":"中文需求确认","prompt":"最终生图提示词","reference_usage":"generation","reference_reason":"用户要求保持参考图主体并修改背景。","creative_direction":"poster","template_id":"poster-layout-system","style_tags":["Poster"],"scene_tags":["Commerce"],"selection_reason":"交付物是商业海报，需明确版式与文字层级。","brief":{{"deliverable":"交付物","intended_use":"用途与受众","subject":"主体","composition":"构图与画幅","style":"媒介、材质、光线与配色","exact_text":["必须逐字出现的文字"],"reference_plan":[{{"image_number":1,"role":"职责","preserve":["保持项"],"change":["改变项"]}}],"preserve":["全局保持项"],"change":["全局改变项"],"avoid":["禁止项"]}},"hard_checks":["可从成品判断的硬门槛"],"quality_hint":"low"}}"""

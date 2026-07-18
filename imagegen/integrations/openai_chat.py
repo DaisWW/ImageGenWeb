@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -56,6 +57,7 @@ class OpenAIChatClient:
         max_output_tokens: int | None = None,
     ) -> ChatCompletion:
         started = time.monotonic()
+        deadline = started + float(model.timeout_seconds)
         payload = {
             "model": model.model,
             "instructions": system,
@@ -69,6 +71,9 @@ class OpenAIChatClient:
         for attempt in range(2):
             response = None
             try:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise _timeout_error(started)
                 response = self.session.post(
                     _endpoint(model.base_url),
                     headers={
@@ -77,26 +82,30 @@ class OpenAIChatClient:
                         "Authorization": f"Bearer {model.api_key}",
                     },
                     json=payload,
-                    timeout=model.timeout_seconds,
+                    timeout=remaining,
                     stream=True,
                 )
+                if time.monotonic() >= deadline:
+                    raise _timeout_error(started, response=response)
                 if response.status_code == 502 and attempt == 0:
                     response.close()
                     response = None
-                    time.sleep(0.5)
+                    time.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
                     continue
                 if not response.ok:
                     self._raise_upstream(response, elapsed_seconds=_elapsed(started))
-                return self._stream_completion(response, started=started)
+                return self._stream_completion(response, started=started, deadline=deadline)
             except requests.Timeout as exc:
-                raise OpenAIChatError(
-                    "聊天模型响应超时",
-                    code="chat_timeout",
-                    status_code=504,
-                    elapsed_seconds=_elapsed(started),
-                    details={"exception_type": exc.__class__.__name__},
+                raise _timeout_error(
+                    started,
+                    exception_type=exc.__class__.__name__,
                 ) from exc
             except requests.RequestException as exc:
+                if time.monotonic() >= deadline:
+                    raise _timeout_error(
+                        started,
+                        exception_type=exc.__class__.__name__,
+                    ) from exc
                 raise OpenAIChatError(
                     "无法连接聊天模型",
                     code="chat_connection_error",
@@ -110,52 +119,80 @@ class OpenAIChatClient:
         raise AssertionError("unreachable")
 
     @staticmethod
-    def _stream_completion(response: requests.Response, *, started: float) -> ChatCompletion:
+    def _stream_completion(
+        response: requests.Response,
+        *,
+        started: float,
+        deadline: float,
+    ) -> ChatCompletion:
         text_parts: list[str] = []
         terminal: dict[str, Any] | None = None
         completed: dict[str, Any] | None = None
         invalid_event_count = 0
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise _timeout_error(started, response=response)
+        timer = threading.Timer(remaining, _close_response, args=(response,))
+        timer.daemon = True
+        timer.start()
 
-        for data in _sse_payloads(response):
-            try:
-                event = json.loads(data)
-            except ValueError:
-                invalid_event_count += 1
-                continue
-            if not isinstance(event, dict):
-                continue
-            event_type = str(event.get("type", "")).strip()
-            if event_type == "response.output_text.delta":
-                delta = event.get("delta")
-                if isinstance(delta, str):
-                    text_parts.append(delta)
-                continue
-            if event_type not in {
-                "response.completed",
-                "response.done",
-                "response.failed",
-                "response.incomplete",
-                "response.cancelled",
-                "response.canceled",
-            }:
-                continue
-            terminal = event
-            response_payload = event.get("response")
-            completed = response_payload if isinstance(response_payload, dict) else {}
-            if event_type not in {"response.completed", "response.done"}:
-                error = completed.get("error") or event.get("error")
-                detail = str(error.get("message", "")).strip() if isinstance(error, dict) else ""
-                raise OpenAIChatError(
-                    detail or "聊天服务未能完成响应",
-                    code="chat_upstream_error",
-                    request_id=_request_id(response, completed),
-                    upstream_status=response.status_code,
-                    elapsed_seconds=_elapsed(started),
-                    details=response_summary(response, completed),
-                )
-            break
+        try:
+            for data in _sse_payloads(response, deadline=deadline):
+                if time.monotonic() >= deadline:
+                    raise requests.Timeout("聊天模型响应超过总超时限制")
+                try:
+                    event = json.loads(data)
+                except ValueError:
+                    invalid_event_count += 1
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                event_type = str(event.get("type", "")).strip()
+                if event_type == "response.output_text.delta":
+                    delta = event.get("delta")
+                    if isinstance(delta, str):
+                        text_parts.append(delta)
+                    continue
+                if event_type not in {
+                    "response.completed",
+                    "response.done",
+                    "response.failed",
+                    "response.incomplete",
+                    "response.cancelled",
+                    "response.canceled",
+                }:
+                    continue
+                terminal = event
+                response_payload = event.get("response")
+                completed = response_payload if isinstance(response_payload, dict) else {}
+                if event_type not in {"response.completed", "response.done"}:
+                    error = completed.get("error") or event.get("error")
+                    detail = (
+                        str(error.get("message", "")).strip() if isinstance(error, dict) else ""
+                    )
+                    raise OpenAIChatError(
+                        detail or "聊天服务未能完成响应",
+                        code="chat_upstream_error",
+                        request_id=_request_id(response, completed),
+                        upstream_status=response.status_code,
+                        elapsed_seconds=_elapsed(started),
+                        details=response_summary(response, completed),
+                    )
+                break
+        except (requests.RequestException, OSError, ValueError) as exc:
+            if time.monotonic() >= deadline:
+                raise _timeout_error(
+                    started,
+                    response=response,
+                    exception_type=exc.__class__.__name__,
+                ) from exc
+            raise
+        finally:
+            timer.cancel()
 
         if completed is None:
+            if time.monotonic() >= deadline:
+                raise _timeout_error(started, response=response)
             raise OpenAIChatError(
                 "聊天服务流式响应未正常结束",
                 request_id=_request_id(response),
@@ -168,6 +205,8 @@ class OpenAIChatClient:
                 },
             )
 
+        if time.monotonic() >= deadline:
+            raise _timeout_error(started, response=response)
         content = "".join(text_parts).strip() or _response_output_text(completed).strip()
         if not content:
             raise OpenAIChatError(
@@ -241,9 +280,11 @@ def _responses_message(message: dict[str, Any]) -> dict[str, Any]:
     return {"role": role, "content": parts}
 
 
-def _sse_payloads(response: requests.Response):
+def _sse_payloads(response: requests.Response, *, deadline: float):
     lines: list[str] = []
     for raw_line in response.iter_lines(chunk_size=1, decode_unicode=False):
+        if time.monotonic() >= deadline:
+            raise requests.Timeout("聊天模型响应超过总超时限制")
         line = (
             raw_line.decode("utf-8", "replace") if isinstance(raw_line, bytes) else str(raw_line)
         ).rstrip("\r\n")
@@ -253,6 +294,8 @@ def _sse_payloads(response: requests.Response):
             payload = _flush_sse_data(lines)
             if payload:
                 yield payload
+    if time.monotonic() >= deadline:
+        raise requests.Timeout("聊天模型响应超过总超时限制")
     payload = _flush_sse_data(lines)
     if payload:
         yield payload
@@ -297,3 +340,27 @@ def _optional_int(value: Any) -> int | None:
 
 def _elapsed(started: float) -> float:
     return round(time.monotonic() - started, 3)
+
+
+def _close_response(response: requests.Response) -> None:
+    try:
+        response.close()
+    except Exception:
+        pass
+
+
+def _timeout_error(
+    started: float,
+    *,
+    response: requests.Response | None = None,
+    exception_type: str = "ChatDeadlineExceeded",
+) -> OpenAIChatError:
+    return OpenAIChatError(
+        "聊天模型响应超时",
+        code="chat_timeout",
+        status_code=504,
+        request_id=_request_id(response) if response is not None else "",
+        upstream_status=response.status_code if response is not None else None,
+        elapsed_seconds=_elapsed(started),
+        details={"exception_type": exception_type},
+    )

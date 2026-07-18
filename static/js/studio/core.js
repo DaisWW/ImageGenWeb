@@ -95,18 +95,19 @@
       this.chatDrafts = new Map();
       this.chatOperations = new Map();
       this.outgoingMessages = new Map();
+      this.canceledChatOperationIds = new Map();
+      this.generationSubmissions = new Map();
+      this.cancelingJobs = new Set();
       this.saveTimer = null;
       this.promptCounterTimer = null;
-      this.workspaceSkeletonTimer = null;
       this.composerCloseTimer = null;
       this.workspaceLoadSequence = 0;
-      this.workspaceLoading = false;
       this.workspaceTransition = null;
       this.reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
       this.loadingJobWorkspaces = new Map();
       this.loadingMessageWorkspaces = new Map();
       this.workspaceJobs = new Map();
-      this.loadingWorkspaceJobs = null;
+      this.loadingWorkspaceJobs = new Map();
       this.referenceUploads = new Map();
       this.referenceUploadQueues = new Map();
       this.referenceUploadSequence = 0;
@@ -119,7 +120,6 @@
       this.chatReferencePickerOpen = false;
       this.detailItemId = null;
       this.detailJobId = null;
-      this.detailReviewSuggestion = "";
       this.sliceItemId = null;
       this.sliceAnalysis = null;
       this.sliceBoxes = [];
@@ -178,6 +178,18 @@
       }, 15000);
     }
 
+    async runSingleFlight(registry, key, load) {
+      const active = registry.get(key);
+      if (active) return active;
+      const request = load();
+      registry.set(key, request);
+      try {
+        return await request;
+      } finally {
+        if (registry.get(key) === request) registry.delete(key);
+      }
+    }
+
     cacheElements() {
       const byId = (id) => document.getElementById(id);
       this.el = {
@@ -208,7 +220,6 @@
         workspaceDeleteName: byId("workspaceDeleteName"),
         conversationView: byId("conversationView"),
         conversationScroll: byId("conversationScroll"),
-        conversationLoading: byId("conversationLoading"),
         conversationEmpty: byId("conversationEmpty"),
         conversationEmptyLabel: byId("conversationEmptyLabel"),
         messageList: byId("messageList"),
@@ -234,7 +245,6 @@
         modeSwitch: byId("modeSwitch"),
         channelSelect: byId("channelSelect"),
         modelSelect: byId("modelSelect"),
-        qualityStageSwitch: byId("qualityStageSwitch"),
         sizeInput: byId("sizeInput"),
         sizeOptions: byId("sizeOptions"),
         formatSelect: byId("formatSelect"),
@@ -256,6 +266,7 @@
         referenceList: byId("referenceList"),
         referenceLimit: byId("referenceLimit"),
         promptInput: byId("promptInput"),
+        promptCopyButton: byId("promptCopyButton"),
         promptCounter: byId("promptCounter"),
         priceEstimateLabel: byId("priceEstimateLabel"),
         priceEstimate: byId("priceEstimate"),
@@ -267,15 +278,8 @@
         detailList: byId("detailList"),
         detailPrompt: byId("detailPrompt"),
         detailReferences: byId("detailReferences"),
-        detailReview: byId("detailReview"),
-        detailReviewVerdict: byId("detailReviewVerdict"),
-        detailReviewScores: byId("detailReviewScores"),
-        detailReviewChecks: byId("detailReviewChecks"),
-        detailReviewSuggestion: byId("detailReviewSuggestion"),
         detailSlice: byId("detailSlice"),
         detailSaveLibrary: byId("detailSaveLibrary"),
-        detailRunReview: byId("detailRunReview"),
-        detailApplyReview: byId("detailApplyReview"),
         detailReuse: byId("detailReuse"),
         detailReuseLabel: byId("detailReuseLabel"),
         detailDownload: byId("detailDownload"),
@@ -338,15 +342,15 @@
       }
     }
 
-    async loadRuntimeSettings(notify = true) {
+    async loadRuntimeSettings(notify = true, options = {}) {
       try {
-        const data = await UI.api("/api/runtime-settings");
+        const data = await UI.api("/api/runtime-settings", options);
         const revision = data.revision || "";
         if (revision && revision === this.runtimeRevision) return;
         this.runtimeRevision = revision;
         this.applyRuntimeSettings(data.settings, data.history_retention_days);
       } catch (error) {
-        if (notify) UI.toast(error.message, "error");
+        if (notify && error?.name !== "AbortError") UI.toast(error.message, "error");
       }
     }
 
@@ -373,9 +377,17 @@
       document.addEventListener("keydown", (event) => this.handleWorkspaceShortcut(event));
       document.addEventListener("keydown", (event) => {
         if (event.key === "Escape" && !this.el.generationForm.hidden
-          && !document.querySelector("dialog[open]")) this.setComposerMode("chat");
+          && !document.querySelector("dialog[open]")
+          && !this.generationSubmissions.get(this.activeWorkspace?.id)) {
+          this.setComposerMode("chat");
+        }
       });
       this.el.chatForm.addEventListener("submit", (event) => this.sendChatMessage(event));
+      this.el.chatSendButton.addEventListener("click", (event) => {
+        if (!this.workspaceChatBusy()) return;
+        event.preventDefault();
+        this.cancelChatOperation();
+      });
       this.el.chatInput.addEventListener("keydown", (event) => {
         if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
           event.preventDefault();
@@ -393,11 +405,20 @@
         this.updatePromptReviewState();
       });
       this.el.translatePrompt.addEventListener("change", () => this.settingChanged());
-      this.el.directGenerationButton.addEventListener("click", () => this.openGenerationComposer());
-      this.el.animationParametersButton.addEventListener("click", () => this.openGenerationComposer());
+      [this.el.directGenerationButton, this.el.animationParametersButton].forEach((button) => {
+        button.addEventListener("click", () => this.openGenerationComposer());
+      });
       this.el.chatReferenceButton.addEventListener("click", () => this.toggleChatReferences());
       this.el.chatReferenceList.addEventListener("click", (event) => this.handleChatReferenceClick(event));
       this.el.messageList.addEventListener("click", (event) => {
+        const cancelChatButton = event.target.closest("[data-cancel-chat]");
+        if (cancelChatButton) {
+          this.cancelChatOperation(
+            cancelChatButton.dataset.cancelWorkspace,
+            cancelChatButton.dataset.cancelOperation,
+          );
+          return;
+        }
         const retrySendButton = event.target.closest("[data-retry-send]");
         if (retrySendButton) {
           this.retryFailedChatMessage(retrySendButton.dataset.retrySend);
@@ -415,21 +436,21 @@
         }
         this.handleJobClick(event);
       });
-      this.el.generationBackdrop.addEventListener("click", () => this.setComposerMode("chat"));
-      this.el.generationBackButton.addEventListener("click", () => this.setComposerMode("chat"));
-      this.el.generationForm.addEventListener("animationend", (event) => {
-        this.finishComposerClose(event);
+      [this.el.generationBackdrop, this.el.generationBackButton].forEach((button) => {
+        button.addEventListener("click", () => {
+          if (!this.generationSubmissions.get(this.activeWorkspace?.id)) {
+            this.setComposerMode("chat");
+          }
+        });
       });
-      this.el.generationForm.addEventListener("animationcancel", (event) => {
-        this.finishComposerClose(event);
+      ["animationend", "animationcancel"].forEach((eventName) => {
+        this.el.generationForm.addEventListener(eventName, (event) => {
+          this.finishComposerClose(event);
+        });
       });
       this.el.modeSwitch.addEventListener("click", (event) => {
         const button = event.target.closest("[data-mode]");
         if (button && !button.disabled) this.setMode(button.dataset.mode, true);
-      });
-      this.el.qualityStageSwitch.addEventListener("click", (event) => {
-        const button = event.target.closest("[data-generation-stage]");
-        if (button) this.setGenerationStage(button.dataset.generationStage, true);
       });
       this.el.channelSelect.addEventListener("change", () => {
         this.applyChannel(null, true);
@@ -465,6 +486,7 @@
         this.settingChanged();
         this.updatePromptReviewState();
       });
+      this.el.promptCopyButton.addEventListener("click", () => this.copyPrompt());
       this.el.referenceAdd.addEventListener("click", () => this.openReferencePicker("generation"));
       this.el.referenceLibrary.addEventListener("click", () => this.openLibrary("generation"));
       this.el.referenceInput.addEventListener("change", () => {
@@ -474,10 +496,6 @@
       this.el.generationForm.addEventListener("submit", (event) => this.submitGeneration(event));
       this.el.detailSlice.addEventListener("click", () => this.openSliceTool());
       this.el.detailSaveLibrary.addEventListener("click", () => this.saveDetailToLibrary());
-      this.el.detailRunReview.addEventListener("click", () => this.runDetailReview());
-      this.el.detailApplyReview.addEventListener("click", () => {
-        this.reuseDetailImage(this.detailReviewSuggestion);
-      });
       this.el.detailReuse.addEventListener("click", () => this.reuseDetailImage());
       this.el.sliceLayoutFields.addEventListener("input", () => this.rebuildSliceGrid());
       this.el.sliceOverlay.addEventListener("click", (event) => this.handleSliceSelection(event));

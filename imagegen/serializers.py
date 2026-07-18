@@ -258,7 +258,6 @@ def item_dict(item: GenerationItem, *, now: datetime, admin: bool = False) -> di
         "download_url": url_for("web.output_file", item_id=item.id, download=1)
         if item.output_path
         else None,
-        "review": item.review or {},
     }
     if admin:
         result.update(

@@ -95,8 +95,15 @@ def submit_generation():
         animation_format=str(data.get("animation_format", "webp")).lower(),
     )
     generation_service = application_services.generations
-    with application_services.conversations.generation_submission(workspace):
+    operation_id = str(data.get("operation_id", "")).strip().lower()
+    with application_services.conversations.generation_submission(
+        workspace,
+        operation_id=operation_id,
+    ) as operation:
         job = generation_service.submit(current_user.id, workspace, generation_request)
+        if operation.cancel_event.is_set():
+            generation_service.cancel(job.id, user_id=current_user.id)
+            operation.ensure_active()
     return jsonify(job=_job_payload(generation_service, job)), 202
 
 

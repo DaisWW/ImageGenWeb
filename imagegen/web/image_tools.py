@@ -61,17 +61,6 @@ def reuse_generation_item(item_id: str):
     return jsonify(asset=workspace_dict(workspace, assets)["assets"][0]), 201
 
 
-@web.post("/api/generation-items/<item_id>/review")
-@login_required
-def review_generation_item(item_id: str):
-    item = accessible_item(item_id)
-    review = services().conversations.review_generation_item(
-        item,
-        model_id=str(json_body().get("model_id", "")),
-    )
-    return jsonify(review=review)
-
-
 @web.post("/api/generation-items/<item_id>/slice-analysis")
 @login_required
 def analyze_generation_item_slices(item_id: str):

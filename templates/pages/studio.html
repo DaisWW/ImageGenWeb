@@ -46,10 +46,6 @@
 
       <section class="workspace-view conversation-view active" id="conversationView">
         <div class="conversation-scroll" id="conversationScroll">
-          <div class="conversation-loading" id="conversationLoading" role="status" aria-label="正在加载工作站" hidden>
-            <div class="conversation-skeleton assistant"><span></span><div><i></i><i></i><i></i></div></div>
-            <div class="conversation-skeleton user"><span></span><div><i></i><i></i></div></div>
-          </div>
           <div class="conversation-empty" id="conversationEmpty">
             <span class="empty-mark brand-empty-mark"><img src="{{ url_for('static', filename='assets/brand-mark-v2.png') }}" alt=""></span>
             <strong id="conversationEmptyLabel">开始一段新对话</strong>
@@ -109,11 +105,6 @@
             </label>
             <label class="compact-field channel-field"><span>渠道</span><select id="channelSelect" required></select></label>
             <label class="compact-field model-field"><span>模型</span><select id="modelSelect" required></select></label>
-            <div class="quality-stage-switch" id="qualityStageSwitch" data-stage="draft" aria-label="生成阶段">
-              <button type="button" class="active" data-generation-stage="draft" aria-pressed="true" title="Low 质量探索">草稿</button>
-              <button type="button" data-generation-stage="refine" aria-pressed="false" title="Medium 质量精修">精修</button>
-              <button type="button" data-generation-stage="final" aria-pressed="false" title="High 质量成品">成品</button>
-            </div>
             <label class="compact-field"><span>尺寸</span><input id="sizeInput" list="sizeOptions" maxlength="20" placeholder="1024x1024" autocomplete="off" required><datalist id="sizeOptions"></datalist></label>
             <label class="compact-field"><span id="frameFormatLabel">格式</span><select id="formatSelect"></select></label>
             <label class="compact-field number-field" id="imageCountControl"><span>张数</span><input id="batchCount" type="number" min="1" max="{{ runtime_settings.max_batch_images }}" value="1"></label>
@@ -134,11 +125,12 @@
           </div>
 
           <div class="prompt-row">
-            <label class="prompt-field">
-              <span class="sr-only">提示词</span>
+            <div class="prompt-field">
+              <label class="sr-only" for="promptInput">提示词</label>
               <textarea id="promptInput" maxlength="{{ runtime_settings.max_prompt_characters }}" rows="3" placeholder="输入画面描述..." required></textarea>
+              <button class="icon-button prompt-copy-button" type="button" id="promptCopyButton" title="复制提示词" aria-label="复制提示词"><i data-lucide="copy"></i></button>
               <span class="prompt-counter" id="promptCounter">0 / {{ runtime_settings.max_prompt_characters }}</span>
-            </label>
+            </div>
             <div class="submit-block">
               <div class="price-summary">
                 <span id="priceEstimateLabel">预计总价</span>
@@ -216,17 +208,9 @@
       <dl class="detail-list" id="detailList"></dl>
       <div class="detail-prompt"><span>提示词</span><p id="detailPrompt"></p></div>
       <div class="detail-references" id="detailReferences"></div>
-      <section class="detail-review" id="detailReview">
-        <header><span>AI 验收</span><strong id="detailReviewVerdict">尚未验收</strong></header>
-        <div class="detail-review-scores" id="detailReviewScores" hidden></div>
-        <ul id="detailReviewChecks" hidden></ul>
-        <p id="detailReviewSuggestion" hidden></p>
-      </section>
       <div class="detail-actions">
         <button class="button secondary" type="button" id="detailSlice"><i data-lucide="scan-line"></i>智能切图</button>
         <button class="button secondary" type="button" id="detailSaveLibrary"><i data-lucide="bookmark-plus"></i>存入图库</button>
-        <button class="button secondary" type="button" id="detailRunReview"><i data-lucide="scan-search"></i>AI 验收</button>
-        <button class="button secondary" type="button" id="detailApplyReview" hidden><i data-lucide="wrench"></i>按建议精修</button>
         <button class="button secondary" type="button" id="detailReuse"><i data-lucide="image-plus"></i><span id="detailReuseLabel">基于此图继续</span></button>
         <a class="button primary" id="detailDownload" download><i data-lucide="download"></i>下载原图</a>
       </div>

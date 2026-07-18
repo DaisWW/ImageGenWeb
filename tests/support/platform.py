@@ -225,7 +225,6 @@ class FakeChatClient:
         self.calls = []
         self.reply_content = ""
         self.prompt_draft_content = ""
-        self.image_review_content = ""
 
     def complete(self, model, *, system, messages, max_output_tokens=None):
         self.calls.append(
@@ -239,33 +238,6 @@ class FakeChatClient:
         )
         if "工作站生成一个简短、具体的标题" in system:
             content = "红发蓝眼中年男性角色"
-        elif "生产图片验收员" in system:
-            content = self.image_review_content or json.dumps(
-                {
-                    "verdict": "pass",
-                    "hard_checks": [
-                        {
-                            "id": "instruction_following",
-                            "label": "整体指令遵循",
-                            "passed": True,
-                            "evidence": "结果符合整体要求",
-                        },
-                        *(
-                            {
-                                "id": f"criterion_{index}",
-                                "label": f"硬门槛 {index}",
-                                "passed": True,
-                                "evidence": "图片中可见",
-                            }
-                            for index in range(1, 7)
-                        ),
-                    ],
-                    "scores": {"composition": 4.5, "visual_quality": 4.3, "usability": 4.4},
-                    "findings": [],
-                    "suggested_edit": "",
-                },
-                ensure_ascii=False,
-            )
         elif "对话行为规则如下" in system:
             content = self.reply_content or json.dumps(
                 {

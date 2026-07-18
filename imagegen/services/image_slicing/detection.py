@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from statistics import median
 
 from PIL import Image, ImageOps
 
@@ -11,6 +12,8 @@ from .models import ANALYSIS_MAX_SIDE, AxisLayout
 MIN_VISUAL_COVERAGE = 0.35
 MIN_HINTED_COVERAGE = 0.18
 PROMPT_FALLBACK_SCORE = 0.50
+MIN_BOUNDARY_CONTRAST = 1.25
+MIN_VISIBLE_RATIO_FOR_VISUAL_DETECTION = 0.55
 MIN_PERIODIC_SCORE = 0.45
 MIN_PERIODIC_ACTIVITY = 0.006
 MAX_PERIODIC_BOUNDARY_RATIO = 0.72
@@ -26,9 +29,20 @@ def analyze_image(path: str | Path, *, prompt: str = "") -> dict[str, object]:
         sample.load()
 
     hint = _grid_hint(prompt)
-    x_layout = _detect_axis(sample, axis=0, hinted_count=hint[1] if hint else None)
-    y_layout = _detect_axis(sample, axis=1, hinted_count=hint[0] if hint else None)
-    if hint:
+    sparse_transparency = _has_sparse_transparency(sample)
+    x_layout = _detect_axis(
+        sample,
+        axis=0,
+        hinted_count=hint[1] if hint else None,
+        sparse_transparency=sparse_transparency,
+    )
+    y_layout = _detect_axis(
+        sample,
+        axis=1,
+        hinted_count=hint[0] if hint else None,
+        sparse_transparency=sparse_transparency,
+    )
+    if hint and not sparse_transparency:
         hinted_rows, hinted_columns = hint
         if x_layout.count == 1:
             x_layout = AxisLayout(count=hinted_columns, score=PROMPT_FALLBACK_SCORE)
@@ -63,7 +77,19 @@ def analyze_image(path: str | Path, *, prompt: str = "") -> dict[str, object]:
     }
 
 
-def _detect_axis(image: Image.Image, *, axis: int, hinted_count: int | None) -> AxisLayout:
+def _detect_axis(
+    image: Image.Image,
+    *,
+    axis: int,
+    hinted_count: int | None,
+    sparse_transparency: bool = False,
+) -> AxisLayout:
+    background_layout = _background_axis_layout(image, axis=axis)
+    if background_layout is not None:
+        return background_layout
+    if sparse_transparency:
+        return AxisLayout(count=1, score=0.0)
+
     edge, coverage = _axis_profiles(image, axis)
     length = len(edge)
     window = max(3, round(length * 0.015))
@@ -86,6 +112,12 @@ def _detect_axis(image: Image.Image, *, axis: int, hinted_count: int | None) -> 
 
         average_coverage = sum(boundary_coverage) / len(boundary_coverage)
         minimum_edge = min(boundary_edge)
+        interior_edge = _cell_interior_median(edge, length=length, count=count)
+        interior_coverage = _cell_interior_median(coverage, length=length, count=count)
+        edge_contrast = minimum_edge / max(0.02, interior_edge)
+        coverage_contrast = minimum_coverage / max(0.08, interior_coverage)
+        if hinted_count != count and max(edge_contrast, coverage_contrast) < MIN_BOUNDARY_CONTRAST:
+            continue
         divisibility_bonus = 0.05 if length % count == 0 else 0.0
         hint_bonus = 0.08 if hinted_count == count else 0.0
         score = (
@@ -103,6 +135,82 @@ def _detect_axis(image: Image.Image, *, axis: int, hinted_count: int | None) -> 
     if periodic.score > best.score:
         best = periodic
     return best
+
+
+def _background_axis_layout(image: Image.Image, *, axis: int) -> AxisLayout | None:
+    """Infer repeated cells from full-transparent runs."""
+    if "A" not in image.getbands():
+        return None
+    alpha = image.getchannel("A")
+    if alpha.getextrema()[0] >= 255:
+        return None
+
+    pixels = alpha.load()
+    width, height = image.size
+    length = width if axis == 0 else height
+    cross = height if axis == 0 else width
+
+    background_coverage = [
+        sum(_axis_pixel(pixels, axis, position, other) < 48 for other in range(cross)) / cross
+        for position in range(length)
+    ]
+    runs = _true_runs([value >= 0.94 for value in background_coverage])
+    if not runs or (len(runs) == 1 and runs[0] == (0, length)):
+        return None
+    start_run = runs[0] if runs[0][0] == 0 else None
+    end_run = runs[-1] if runs[-1][1] == length else None
+    inner_runs = [run for run in runs if run is not start_run and run is not end_run]
+    if not 1 <= len(inner_runs) <= 7:
+        return None
+
+    gap_widths = [end - start for start, end in inner_runs]
+    centers = [(start + end) / 2 for start, end in inner_runs]
+    intervals = [right - left for left, right in zip(centers, centers[1:])]
+    consistency = min(_consistency(gap_widths), _consistency(intervals))
+    if consistency < 0.50:
+        return None
+    return AxisLayout(count=len(inner_runs) + 1, score=0.75 + consistency * 0.25)
+
+
+def _true_runs(values: list[bool]) -> list[tuple[int, int]]:
+    runs = []
+    start = None
+    for index, value in enumerate([*values, False]):
+        if value and start is None:
+            start = index
+        elif not value and start is not None:
+            runs.append((start, index))
+            start = None
+    return runs
+
+
+def _has_sparse_transparency(image: Image.Image) -> bool:
+    if "A" not in image.getbands() or image.getchannel("A").getextrema()[0] >= 255:
+        return False
+    pixels = image.load()
+    width, height = image.size
+    visible = sum(pixels[x, y][3] >= 32 for y in range(height) for x in range(width))
+    return visible / max(1, width * height) < MIN_VISIBLE_RATIO_FOR_VISUAL_DETECTION
+
+
+def _cell_interior_median(values: list[float], *, length: int, count: int) -> float:
+    cell_width = length / count
+    return median(
+        _range_average(
+            values,
+            round(index * cell_width + cell_width * 0.20),
+            round(index * cell_width + cell_width * 0.80),
+        )
+        for index in range(count)
+    )
+
+
+def _consistency(values: list[float]) -> float:
+    if len(values) < 2:
+        return 1.0
+    average = sum(values) / len(values)
+    spread = max(values) - min(values)
+    return 1.0 - min(1.0, spread / max(average, 1.0))
 
 
 def _detect_periodic_axis(profile: list[float]) -> AxisLayout:
@@ -151,15 +259,15 @@ def _axis_profiles(image: Image.Image, axis: int) -> tuple[list[float], list[flo
     edge = [0.0] * length
     coverage = [0.0] * length
 
-    def pixel(position: int, other: int) -> tuple[int, int, int, int]:
-        return pixels[position, other] if axis == 0 else pixels[other, position]
-
     for position in range(1, length):
         edge_total = 0.0
         strong = 0
         soft = 0
         for other in range(cross):
-            difference = _pixel_distance(pixel(position, other), pixel(position - 1, other))
+            difference = _pixel_distance(
+                _axis_pixel(pixels, axis, position, other),
+                _axis_pixel(pixels, axis, position - 1, other),
+            )
             edge_total += difference
             strong += difference >= 0.075
             soft += difference >= 0.025
@@ -168,7 +276,19 @@ def _axis_profiles(image: Image.Image, axis: int) -> tuple[list[float], list[flo
     return edge, coverage
 
 
+def _axis_pixel(pixels, axis: int, position: int, other: int):
+    return pixels[position, other] if axis == 0 else pixels[other, position]
+
+
 def _pixel_distance(first: tuple[int, ...], second: tuple[int, ...]) -> float:
+    if len(first) >= 4 and len(second) >= 4:
+        first_alpha = first[3] / 255
+        second_alpha = second[3] / 255
+        first_rgb = [channel * first_alpha for channel in first[:3]]
+        second_rgb = [channel * second_alpha for channel in second[:3]]
+        color_distance = sum(abs(left - right) for left, right in zip(first_rgb, second_rgb))
+        alpha_distance = abs(first[3] - second[3])
+        return (color_distance + alpha_distance) / (4 * 255)
     return sum(abs(left - right) for left, right in zip(first, second)) / (len(first) * 255)
 
 

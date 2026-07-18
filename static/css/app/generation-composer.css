@@ -454,6 +454,15 @@
   line-height: 1.55;
 }
 
+.prompt-copy-button {
+  position: absolute;
+  z-index: 1;
+  top: 8px;
+  right: 8px;
+  width: 30px;
+  height: 30px;
+}
+
 .prompt-counter {
   position: absolute;
   right: 10px;

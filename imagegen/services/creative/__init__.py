@@ -11,7 +11,6 @@ from .directions import CREATIVE_DIRECTIONS
 from .models import CreativeDirection, PromptTemplate
 from .sources import (
     AWESOME_REPOSITORY,
-    COOKBOOK_EVALS,
     COOKBOOK_GUIDE,
     GALLERY_URL,
     PROMPT_CRAFT_GUIDANCE,
@@ -22,7 +21,6 @@ from .templates import PROMPT_TEMPLATES, SCENE_TAG_LABELS, STYLE_TAG_LABELS
 
 __all__ = [
     "AWESOME_REPOSITORY",
-    "COOKBOOK_EVALS",
     "COOKBOOK_GUIDE",
     "CREATIVE_DIRECTIONS",
     "CreativeDirection",

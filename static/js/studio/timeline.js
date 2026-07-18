@@ -13,9 +13,7 @@
   Object.assign(StudioApp.prototype, {
     async loadMessages(workspaceId = this.activeWorkspace?.id) {
       if (!workspaceId) return;
-      const existing = this.loadingMessageWorkspaces.get(workspaceId);
-      if (existing) return existing;
-      const request = (async () => {
+      return this.runSingleFlight(this.loadingMessageWorkspaces, workspaceId, async () => {
         try {
           const data = await UI.api(`/api/workspaces/${workspaceId}/messages?limit=200`);
           const operationChanged = this.syncServerChatOperation(
@@ -23,11 +21,25 @@
             data.conversation_operation,
           );
           if (operationChanged) this.renderWorkspaceList();
-          const nextMessages = data.messages || [];
+          const canceledOutgoingIds = new Set(
+            [...this.outgoingMessages.values()]
+              .filter((message) => (
+                message.workspace_id === workspaceId && message.delivery_state === "canceled"
+              ))
+              .map((message) => message.id),
+          );
+          const nextMessages = (data.messages || []).filter((message) => (
+            !canceledOutgoingIds.has(message.id)
+            && !canceledOutgoingIds.has(message.payload?.reply_to_message_id)
+          ));
           const serverMessageIds = new Set(nextMessages.map((message) => message.id));
           let outgoingChanged = false;
           for (const [id, message] of this.outgoingMessages) {
-            if (message.workspace_id === workspaceId && serverMessageIds.has(id)) {
+            if (
+              message.workspace_id === workspaceId
+              && serverMessageIds.has(id)
+              && message.delivery_state !== "canceled"
+            ) {
               this.outgoingMessages.delete(id);
               outgoingChanged = true;
             }
@@ -48,15 +60,7 @@
         } catch (error) {
           UI.toast(error.message, "error");
         }
-      })();
-      this.loadingMessageWorkspaces.set(workspaceId, request);
-      try {
-        return await request;
-      } finally {
-        if (this.loadingMessageWorkspaces.get(workspaceId) === request) {
-          this.loadingMessageWorkspaces.delete(workspaceId);
-        }
-      }
+      });
     },
 
     renderMessages() {
@@ -109,14 +113,16 @@
             content: operation.label,
             created_at: operation.started_at || null,
             provider_label: this.el.chatModelSelect.selectedOptions[0]?.textContent || "",
+            workspace_id: workspaceId,
+            operation_id: operation.operation_id || operation.message_id || "",
           },
         });
       }
       const timelineChanged = this.reconcileTimeline(timeline);
-      setHidden(this.el.conversationEmpty, this.workspaceLoading || timeline.length > 0);
+      setHidden(this.el.conversationEmpty, timeline.length > 0);
       this.renderContextStatus();
       this.updateInteractionState();
-      if (!this.workspaceLoading && keepAtBottom && timelineChanged) this.scrollConversation();
+      if (keepAtBottom && timelineChanged) this.scrollConversation();
     },
 
     reconcileTimeline(timeline) {
@@ -164,7 +170,7 @@
             if (previousStatus !== entry.value.status) layoutChanged = true;
           }
         } else {
-          const state = `${entry.value.kind || "message"}:${entry.value.delivery_state || "stored"}`;
+          const state = `${entry.value.kind || "message"}:${entry.value.delivery_state || "stored"}:${entry.value.operation_id || ""}`;
           if (!node || node.dataset.messageState !== state) {
             const replacement = this.messageCard(entry.value);
             if (node) node.replaceWith(replacement);
@@ -220,6 +226,17 @@
       }
     },
 
+    chatCancelButton(message, label) {
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "button ghost small message-cancel-button";
+      cancel.dataset.cancelChat = "";
+      cancel.dataset.cancelWorkspace = message.workspace_id || this.activeWorkspace?.id || "";
+      cancel.dataset.cancelOperation = message.operation_id || "";
+      cancel.innerHTML = `<i data-lucide="square"></i>${label}`;
+      return cancel;
+    },
+
     messageCard(message) {
       const row = document.createElement("article");
       row.className = [
@@ -228,7 +245,7 @@
         message.kind || "message",
         message.delivery_state || "",
       ].filter(Boolean).join(" ");
-      row.dataset.messageState = `${message.kind || "message"}:${message.delivery_state || "stored"}`;
+      row.dataset.messageState = `${message.kind || "message"}:${message.delivery_state || "stored"}:${message.operation_id || ""}`;
       if (message.id) row.dataset.messageId = message.id;
 
       const avatar = document.createElement("span");
@@ -251,6 +268,7 @@
       const timing = document.createElement("span");
       const timingParts = [];
       if (message.delivery_state === "sending") timingParts.push("发送中");
+      else if (message.delivery_state === "canceled") timingParts.push("已取消");
       else if (message.delivery_state === "failed") timingParts.push("发送失败");
       else if (message.created_at) timingParts.push(UI.dateTime(message.created_at));
       if (message.role === "assistant" && Number.isFinite(Number(message.elapsed_seconds))) {
@@ -265,7 +283,7 @@
         pending.className = "message-pending";
         pending.innerHTML = '<span class="message-pending-dots" aria-hidden="true"><i></i><i></i><i></i></span><span></span>';
         pending.lastElementChild.textContent = message.content || "正在等待 AI 回复";
-        card.append(pending);
+        card.append(pending, this.chatCancelButton(message, "取消等待"));
       } else if (message.kind === "prompt_draft") {
         card.append(this.promptDraftContent(message));
       } else {
@@ -289,6 +307,17 @@
           retry.title = message.delivery_error || "消息发送失败，点击重试";
           retry.innerHTML = '<i data-lucide="circle-alert"></i><span>重试发送</span>';
           card.append(retry);
+        }
+        if (message.delivery_state === "canceled") {
+          const retry = document.createElement("button");
+          retry.type = "button";
+          retry.className = "button ghost small";
+          retry.dataset.retrySend = message.id;
+          retry.innerHTML = '<i data-lucide="refresh-cw"></i><span>重新发送</span>';
+          card.append(retry);
+        }
+        if (message.delivery_state === "sending" && message.operation_id) {
+          card.append(this.chatCancelButton(message, "取消发送"));
         }
       }
 

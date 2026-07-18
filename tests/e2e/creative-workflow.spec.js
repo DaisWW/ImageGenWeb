@@ -122,10 +122,7 @@ test("AI automatically prepares a gallery template before generation", {
   await expect(page.locator("#generationForm")).toBeVisible();
   await expect(page.locator("#promptReviewStatus")).toContainText("最终提示词已就绪");
   await expect(page.locator("#creativeDirectionSelect")).toHaveValue("auto");
-  await expect(page.locator("#qualityStageSwitch")).toHaveAttribute("data-stage", "draft");
-  await expect(page.locator("#generateButton")).toBeEnabled();
-  await page.locator('[data-generation-stage="final"]').click();
-  await expect(page.locator("#qualityStageSwitch")).toHaveAttribute("data-stage", "final");
+  await expect(page.getByRole("button", { name: "草稿", exact: true })).toHaveCount(0);
   await expect(page.locator("#generateButton")).toBeEnabled();
 
   const toast = page.locator("#toastRegion .toast");

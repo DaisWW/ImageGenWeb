@@ -12,15 +12,19 @@
   } = window.ImageGenStudio;
 
   Object.assign(StudioApp.prototype, {
+    libraryTargetLabel() {
+      return this.libraryTarget === "chat"
+        ? "随消息发送"
+        : this.isAnimationWorkspace() ? "设为母图" : "设为垫图";
+    },
+
     async openLibrary(target = "") {
-      if (!this.activeWorkspace || this.workspaceLoading) return;
+      if (!this.activeWorkspace) return;
       this.libraryTarget = target || (
         this.isAnimationWorkspace() || !this.el.generationForm.hidden ? "generation" : "chat"
       );
       this.librarySelection.clear();
-      this.el.libraryTargetLabel.textContent = this.libraryTarget === "chat"
-        ? "随消息发送"
-        : this.isAnimationWorkspace() ? "设为母图" : "设为垫图";
+      this.el.libraryTargetLabel.textContent = this.libraryTargetLabel();
       this.renderLibrary();
       UI.openDialog(this.el.libraryDialog);
       if (this.libraryImages === null) await this.loadLibraryImages();
@@ -72,9 +76,7 @@
       );
       setDisabled(this.el.libraryLoadMoreButton, this.libraryLoading || this.libraryBusy);
       this.el.libraryLoadMoreButton.classList.toggle("loading", this.libraryLoading && !unloaded);
-      const action = this.libraryTarget === "chat"
-        ? "随消息发送"
-        : this.isAnimationWorkspace() ? "设为母图" : "设为垫图";
+      const action = this.libraryTargetLabel();
       const disabled = this.libraryBusy ? " disabled" : "";
       this.el.libraryGrid.innerHTML = images.map((entry) => {
         const id = UI.escapeHtml(entry.id);
@@ -147,7 +149,14 @@
       } else {
         this.librarySelection.delete(imageId);
       }
-      this.renderLibrary();
+      const selected = this.librarySelection.has(imageId);
+      const image = this.libraryImages?.find((entry) => entry.id === imageId);
+      const selectTitle = `${selected ? "取消选择" : "选择"} ${image?.name || "图片"}`;
+      input.checked = selected;
+      input.setAttribute("aria-label", selectTitle);
+      input.closest(".library-select")?.setAttribute("title", selectTitle);
+      input.closest(".library-card")?.classList.toggle("selected", selected);
+      this.updateLibrarySelectionUI();
     },
 
     selectAllLibraryImages() {
@@ -264,7 +273,7 @@
         return;
       }
       const use = event.target.closest("[data-use-library-image]");
-      if (use) await this.useLibraryImage(use.dataset.useLibraryImage, use);
+      if (use && !use.disabled) await this.useLibraryImages([use.dataset.useLibraryImage]);
     },
 
     async importLibraryAsset(workspace, imageId) {
@@ -280,7 +289,7 @@
     },
 
     async useLibraryImages(imageIds) {
-      if (!this.activeWorkspace || this.workspaceLoading || this.referenceUploadPending
+      if (!this.activeWorkspace || this.referenceUploadPending
         || this.workspaceChatBusy() || this.workspaceHasActiveJob() || this.libraryBusy) {
         UI.toast("当前工作站忙碌，请稍后选择图片", "error");
         return;
@@ -318,6 +327,11 @@
         this.libraryBusy = false;
       }
 
+      if (this.activeWorkspace?.id !== workspace.id) {
+        this.librarySelection.clear();
+        this.renderLibrary();
+        return;
+      }
       if (!imported.length) {
         this.renderLibrary();
         UI.toast(failures[0]?.message || "图库图片导入失败", "error");
@@ -325,8 +339,6 @@
       }
       this.librarySelection.clear();
       this.renderWorkspaceList();
-      this.renderReferences();
-      this.renderChatReferences();
       UI.closeDialog(this.el.libraryDialog);
       if (target === "chat") {
         this.chatReferencePickerOpen = true;
@@ -338,10 +350,13 @@
           "success",
         );
       } else {
-        this.setMode("img2img", true);
-        this.renderReferences();
-        if (this.el.generationForm.hidden) this.openGenerationComposer([...selection]);
-        else this.el.promptInput.focus();
+        if (this.el.generationForm.hidden) {
+          this.openGenerationComposer([...selection]);
+        } else {
+          this.setMode("img2img", true);
+          this.renderReferences();
+          this.el.promptInput.focus();
+        }
         UI.toast(
           workspace.kind === "animation"
             ? "已设为母图"
@@ -350,11 +365,6 @@
         );
       }
       if (failures.length) UI.toast(`有 ${failures.length} 张图片导入失败`, "error");
-    },
-
-    async useLibraryImage(imageId, button) {
-      if (button?.disabled) return;
-      await this.useLibraryImages([imageId]);
     },
 
     async saveLibrarySource(source, button) {

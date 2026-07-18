@@ -20,6 +20,7 @@ async function createWorkspace(page, name, kind = "image") {
 
 async function deleteWorkspace(page, name) {
   const workspace = page.locator("#workspaceList .workspace-item", { hasText: name });
+  await workspace.hover();
   await workspace.locator("[data-delete-workspace]").click();
   await expect(page.locator("#workspaceDeleteDialog")).toBeVisible();
   await page.locator('#workspaceDeleteForm button[type="submit"]').click();

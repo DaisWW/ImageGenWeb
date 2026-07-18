@@ -11,13 +11,12 @@ test("image detail keeps its reference through multi-turn refinement", async ({
   const workspaceId = await page.locator("#workspaceList .workspace-item.active")
     .getAttribute("data-workspace-id");
   const createdAt = new Date().toISOString();
-  const jobId = "e2e-reviewed-job";
-  const itemId = "e2e-reviewed-item";
+  const jobId = "e2e-detail-job";
+  const itemId = "e2e-detail-item";
   const imageUrl = "/static/assets/brand-mark-v2.png";
-  const suggestion = "只改变背景为纯白色；必须保持主体、构图和文字不变。";
   const referenceAsset = {
-    id: "e2e-review-reference",
-    name: "review-result.png",
+    id: "e2e-result-reference",
+    name: "result.png",
     url: imageUrl,
     thumbnail_url: imageUrl,
     mime_type: "image/png",
@@ -86,7 +85,6 @@ test("image detail keeps its reference through multi-turn refinement", async ({
       image_url: imageUrl,
       thumbnail_url: imageUrl,
       download_url: imageUrl,
-      review: {},
     }],
     animation_url: null,
     animation_download_url: null,
@@ -117,22 +115,6 @@ test("image detail keeps its reference through multi-turn refinement", async ({
     }
     await route.continue();
   });
-  await page.route(`**/api/generation-items/${itemId}/review`, (route) => route.fulfill({
-    json: {
-      review: {
-        verdict: "revise",
-        hard_checks: [{
-          id: "criterion_1",
-          label: "背景必须为纯白色",
-          passed: false,
-          evidence: "背景仍有灰色纹理",
-        }],
-        scores: { composition: 4.2, visual_quality: 4.0, usability: 3.1 },
-        findings: ["背景不符合交付要求"],
-        suggested_edit: suggestion,
-      },
-    },
-  }));
   await page.route(`**/api/generation-items/${itemId}/reference`, (route) => route.fulfill({
     status: 201,
     json: { asset: referenceAsset },
@@ -220,16 +202,9 @@ test("image detail keeps its reference through multi-turn refinement", async ({
   await page.locator(`[data-item-id="${itemId}"]`).click();
   await expect(page.locator("#imageDialog")).toBeVisible();
   await expect(page.locator("#detailList")).toContainText("商品商业视觉");
-  await page.locator("#detailRunReview").click();
-
-  await expect(page.locator("#detailReviewVerdict")).toHaveText("需要精修");
-  await expect(page.locator("#detailReviewChecks")).toContainText("背景必须为纯白色");
-  await expect(page.locator("#detailReviewSuggestion")).toHaveText(suggestion);
-  await expect(page.locator("#detailApplyReview")).toBeVisible();
-  await page.locator("#detailApplyReview").click();
-
+  await page.locator("#detailReuse").click();
   await expect(page.locator("#imageDialog")).toBeHidden();
-  await expect(page.locator("#chatInput")).toHaveValue(suggestion);
+  await expect(page.locator("#chatInput")).toHaveValue("请基于这张图继续调整：");
   await expect(page.locator("#chatReferenceCount")).toHaveText("1");
 
   await page.locator("#chatForm").evaluate((form) => form.requestSubmit());
@@ -313,7 +288,6 @@ test("smart slicer detects, adjusts, selects and exports atlas tiles", {
       image_url: imageUrl,
       thumbnail_url: imageUrl,
       download_url: imageUrl,
-      review: {},
     }],
     animation_url: null,
     animation_download_url: null,
@@ -428,7 +402,23 @@ test("smart slicer detects, adjusts, selects and exports atlas tiles", {
   await expect(page.locator("#sliceMarginX, #sliceMarginY, #sliceGapX, #sliceGapY"))
     .toHaveCount(0);
   await expect(page.locator("#sliceReuse")).toBeDisabled();
-  await expect(page.locator("#sliceDialog")).toHaveCSS("overflow-y", "hidden");
+
+  await page.locator("#sliceRows").fill("8");
+  await page.locator("#sliceColumns").fill("8");
+  await expect(page.locator("#sliceList .slice-list-item")).toHaveCount(64);
+  const scrollOverflow = await page.locator("#sliceDialog").evaluate((dialog) => {
+    const layout = dialog.querySelector(".slice-dialog-layout");
+    const list = dialog.querySelector("#sliceList");
+    return {
+      dialog: dialog.scrollHeight - dialog.clientHeight,
+      layout: layout.scrollHeight - layout.clientHeight,
+      list: list.scrollHeight - list.clientHeight,
+    };
+  });
+  expect(scrollOverflow.dialog).toBeLessThanOrEqual(1);
+  expect(scrollOverflow.layout).toBeLessThanOrEqual(1);
+  expect(scrollOverflow.list).toBeGreaterThan(1);
+  await page.locator("#sliceReset").click();
 
   await page.locator("#sliceColumns").fill("2");
   await expect(page.locator("#sliceOverlay .slice-box")).toHaveCount(4);

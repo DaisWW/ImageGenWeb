@@ -4,13 +4,40 @@
   const {
     StudioApp,
     UI,
-    STATUS,
     REFERENCE_IMAGE_TYPES,
     REFERENCE_IMAGE_EXTENSION,
-    setAttribute,
   } = window.ImageGenStudio;
 
   Object.assign(StudioApp.prototype, {
+    referenceUploadCard(pending, target = "generation") {
+      const chat = target === "chat";
+      const card = document.createElement(chat ? "span" : "div");
+      card.className = chat
+        ? "chat-reference-item reference-upload-card"
+        : "reference-card reference-upload-card";
+      const preview = document.createElement(chat ? "span" : "div");
+      preview.className = `${chat ? "chat-reference-card" : "reference-toggle"} reference-upload-preview is-${pending.state}`;
+      const image = document.createElement("img");
+      image.src = pending.previewUrl;
+      image.alt = pending.file.name || "待上传图片";
+      image.decoding = "async";
+      const status = document.createElement("span");
+      status.className = "reference-upload-status";
+      status.title = pending.state === "canceling" ? "正在取消" : "正在上传";
+      status.innerHTML = '<i data-lucide="loader-circle"></i>';
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = `reference-remove${chat ? " chat-reference-remove" : ""}`;
+      cancel.dataset.cancelReferenceUpload = pending.id;
+      cancel.disabled = pending.state === "canceling";
+      cancel.title = pending.state === "canceling" ? "正在取消" : "取消上传";
+      cancel.setAttribute("aria-label", cancel.title);
+      cancel.innerHTML = '<i data-lucide="x"></i>';
+      preview.append(image, status);
+      card.append(preview, cancel);
+      return card;
+    },
+
     renderChatReferences() {
       const assets = this.activeWorkspace?.assets || [];
       const uploads = this.pendingReferenceUploads();
@@ -74,31 +101,7 @@
         card.append(toggle, this.librarySaveButton(asset), remove);
         return card;
       });
-      const uploadCards = uploads.map((pending) => {
-        const card = document.createElement("span");
-        card.className = "chat-reference-item reference-upload-card";
-        const preview = document.createElement("span");
-        preview.className = `chat-reference-card reference-upload-preview is-${pending.state}`;
-        const image = document.createElement("img");
-        image.src = pending.previewUrl;
-        image.alt = pending.file.name || "待上传图片";
-        image.decoding = "async";
-        const status = document.createElement("span");
-        status.className = "reference-upload-status";
-        status.title = pending.state === "canceling" ? "正在取消" : "正在上传";
-        status.innerHTML = '<i data-lucide="loader-circle"></i>';
-        const cancel = document.createElement("button");
-        cancel.type = "button";
-        cancel.className = "reference-remove chat-reference-remove";
-        cancel.dataset.cancelReferenceUpload = pending.id;
-        cancel.disabled = pending.state === "canceling";
-        cancel.title = pending.state === "canceling" ? "正在取消" : "取消上传";
-        cancel.setAttribute("aria-label", cancel.title);
-        cancel.innerHTML = '<i data-lucide="x"></i>';
-        preview.append(image, status);
-        card.append(preview, cancel);
-        return card;
-      });
+      const uploadCards = uploads.map((pending) => this.referenceUploadCard(pending, "chat"));
       this.el.chatReferenceList.replaceChildren(
         ...(pickerOpen ? [upload, library] : []),
         ...cards,
@@ -118,8 +121,8 @@
         await this.saveLibrarySource({ asset_id: save.dataset.saveLibraryAsset }, save);
         return;
       }
-      if (this.workspaceLoading || this.workspaceChatBusy()
-        || this.workspaceHasActiveJob() || this.referenceUploadPending) return;
+      if (this.workspaceChatBusy() || this.workspaceHasActiveJob()
+        || this.referenceUploadPending) return;
       const library = event.target.closest("[data-open-library]");
       if (library) {
         this.openLibrary("chat");
@@ -181,31 +184,7 @@
           card.append(toggle, this.librarySaveButton(asset), remove);
           return card;
         }),
-        ...uploads.map((pending) => {
-          const card = document.createElement("div");
-          card.className = "reference-card reference-upload-card";
-          const preview = document.createElement("div");
-          preview.className = `reference-toggle reference-upload-preview is-${pending.state}`;
-          const image = document.createElement("img");
-          image.src = pending.previewUrl;
-          image.alt = pending.file.name || "待上传图片";
-          image.decoding = "async";
-          const status = document.createElement("span");
-          status.className = "reference-upload-status";
-          status.title = pending.state === "canceling" ? "正在取消" : "正在上传";
-          status.innerHTML = '<i data-lucide="loader-circle"></i>';
-          const cancel = document.createElement("button");
-          cancel.type = "button";
-          cancel.className = "reference-remove";
-          cancel.dataset.cancelReferenceUpload = pending.id;
-          cancel.disabled = pending.state === "canceling";
-          cancel.title = pending.state === "canceling" ? "正在取消" : "取消上传";
-          cancel.setAttribute("aria-label", cancel.title);
-          cancel.innerHTML = '<i data-lucide="x"></i>';
-          preview.append(image, status);
-          card.append(preview, cancel);
-          return card;
-        }),
+        ...uploads.map((pending) => this.referenceUploadCard(pending)),
       );
       UI.icons(this.el.referenceList);
       if (this.isAnimationWorkspace() && this.el.modeSwitch.dataset.mode !== "img2img") {
@@ -219,7 +198,7 @@
     uploadReferences(files, target) {
       this.el.referenceInput.value = "";
       const workspace = this.activeWorkspace;
-      if (!files.length || !workspace || this.workspaceLoading || this.referenceUploadPending) return;
+      if (!files.length || !workspace || this.referenceUploadPending) return;
       const images = files.filter((file) => (
         REFERENCE_IMAGE_TYPES.has(file.type.toLowerCase())
         || REFERENCE_IMAGE_EXTENSION.test(file.name)
@@ -367,7 +346,7 @@
         await this.saveLibrarySource({ asset_id: save.dataset.saveLibraryAsset }, save);
         return;
       }
-      if (this.workspaceLoading || this.referenceUploadPending) return;
+      if (this.referenceUploadPending) return;
       const remove = event.target.closest("[data-reference-remove]");
       if (remove) {
         await this.removeReference(remove.dataset.referenceRemove);
@@ -397,8 +376,7 @@
     },
 
     async removeReference(id) {
-      if (this.workspaceLoading || !this.activeWorkspace
-        || this.workspaceChatBusy() || this.workspaceHasActiveJob()) return;
+      if (!this.activeWorkspace || this.workspaceChatBusy() || this.workspaceHasActiveJob()) return;
       const referenceName = this.isAnimationWorkspace() ? "母图" : "垫图";
       if (!window.confirm(`从工作站删除这张${referenceName}？历史消息和任务中的引用仍会保留。`)) return;
       const workspace = this.activeWorkspace;

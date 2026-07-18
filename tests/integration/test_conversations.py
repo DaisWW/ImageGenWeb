@@ -4,6 +4,7 @@ import json
 import threading
 from contextlib import ExitStack
 from datetime import datetime
+from unittest.mock import patch
 
 from imagegen.extensions import db
 from imagegen.models import (
@@ -200,6 +201,74 @@ class TestConversations(PlatformTestCase):
         self.assertFalse(thread.is_alive())
         self.assertEqual(errors, [])
         self.assertFalse(conversations.operation_state(workspace.id)["busy"])
+
+    def test_chat_cancel_releases_operation_and_discards_late_reply(self):
+        workspace = self.create_workspace("可取消对话")
+        client = BlockingFirstChatClient()
+        conversations = self.services.conversations
+        conversations.client = client
+        errors = []
+
+        def send_blocking_message():
+            with self.app.app_context():
+                thread_workspace = db.session.get(Workspace, workspace.id)
+                try:
+                    conversations.send(
+                        thread_workspace,
+                        model_id="test-chat",
+                        content="取消这条消息",
+                        message_id="a" * 32,
+                        operation_id="b" * 32,
+                    )
+                except Exception as exc:  # pragma: no cover - assertions below inspect it
+                    errors.append(exc)
+
+        thread = threading.Thread(target=send_blocking_message)
+        thread.start()
+        try:
+            self.assertTrue(client.started.wait(5))
+            self.assertTrue(conversations.operation_state(workspace.id)["busy"])
+            response = self.user_client().post(
+                f"/api/workspaces/{workspace.id}/messages/{'b' * 32}/cancel"
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertFalse(conversations.operation_state(workspace.id)["busy"])
+        finally:
+            client.release.set()
+            thread.join(10)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(getattr(errors[0], "code", ""), "conversation_canceled")
+        messages = (
+            self.user_client().get(f"/api/workspaces/{workspace.id}/messages").json["messages"]
+        )
+        self.assertEqual([message["role"] for message in messages], ["user"])
+        _user_message, assistant_message = conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="取消这条消息",
+            message_id="a" * 32,
+            operation_id="c" * 32,
+        )
+        self.assertEqual(assistant_message.role, "assistant")
+
+    def test_chat_cancel_tombstone_accepts_zero_timestamp(self):
+        workspace = self.create_workspace("零时间取消")
+        conversations = self.services.conversations
+
+        with patch("imagegen.services.conversations.operations.monotonic", return_value=0.0):
+            self.assertFalse(conversations.cancel_operation(workspace.id, "d" * 32))
+            with self.assertRaises(ServiceError) as raised:
+                with conversations.operations.workspace_operation(
+                    workspace,
+                    "reply",
+                    "等待回复",
+                    operation_id="d" * 32,
+                ):
+                    pass
+
+        self.assertEqual(raised.exception.code, "conversation_canceled")
 
     def test_generation_api_holds_workspace_operation_while_submitting(self):
         workspace = self.create_workspace("生成互斥工作站")

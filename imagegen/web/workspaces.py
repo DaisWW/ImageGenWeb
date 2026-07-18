@@ -161,6 +161,7 @@ def send_conversation_message(workspace_id: str):
         generation_reference_ids=tuple(str(item) for item in generation_reference_ids),
         generation_mode=str(data.get("generation_mode", "")),
         message_id=str(data.get("message_id", "")),
+        operation_id=str(data.get("operation_id", "")),
     )
     return jsonify(
         messages=[
@@ -182,11 +183,21 @@ def retry_conversation_message(workspace_id: str, message_id: str):
         workspace,
         error_message_id=message_id,
         model_id=str(data.get("model_id", "")),
+        operation_id=str(data.get("operation_id", "")),
     )
     return jsonify(
         message=conversation_message_dict(message),
         context=conversations.state_dict(workspace),
     ), 201
+
+
+@web.post("/api/workspaces/<workspace_id>/messages/<operation_id>/cancel")
+@web.post("/api/workspaces/<workspace_id>/operations/<operation_id>/cancel")
+@login_required
+def cancel_workspace_operation(workspace_id: str, operation_id: str):
+    workspace = owned_workspace(workspace_id)
+    canceled = services().conversations.cancel_operation(workspace.id, operation_id)
+    return jsonify(canceled=True, operation_id=operation_id, active=canceled)
 
 
 @web.post("/api/workspaces/<workspace_id>/prompt-drafts")

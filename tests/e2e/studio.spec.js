@@ -11,6 +11,14 @@ const {
   uploadLibraryImage,
 } = require("./fixtures");
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 test("deleting the last workspace leaves the workspace list empty", {
   tag: "@responsive",
 }, async ({ page }) => {
@@ -65,12 +73,9 @@ test("new workspace is interactive while history is delayed", async ({ studioPag
     });
   });
 
-  let releaseLoads;
-  const loadsReleased = new Promise((resolve) => {
-    releaseLoads = resolve;
-  });
+  const loads = deferred();
   await page.route("**/api/workspaces/*/messages?*", async (route) => {
-    await loadsReleased;
+    await loads.promise;
     await route.continue();
   });
 
@@ -84,9 +89,74 @@ test("new workspace is interactive while history is delayed", async ({ studioPag
       return window.__workspaceLockTransitions;
     })).toBe(0);
   } finally {
-    releaseLoads();
+    loads.resolve();
   }
 
+  await deleteWorkspace(page, name);
+});
+
+test("switching workspaces stays interactive and pending chat remains cancelable", async ({
+  studioPage: page,
+}) => {
+  const initial = page.locator("#workspaceList .workspace-item.active");
+  const initialId = await initial.getAttribute("data-workspace-id");
+  const initialName = await initial.locator(".workspace-copy strong").textContent();
+  const name = `E2E-Switch-Delayed-${Date.now()}`;
+  await createWorkspace(page, name);
+  const createdId = await page.locator("#workspaceList .workspace-item.active")
+    .getAttribute("data-workspace-id");
+  const operationId = "b".repeat(32);
+  const loads = deferred();
+  let canceled = false;
+  await page.route(`**/api/workspaces/${initialId}/messages?*`, async (route) => {
+    await loads.promise;
+    await route.fulfill({
+      json: {
+        messages: [],
+        total: 0,
+        has_more: false,
+        context: null,
+        conversation_operation: canceled
+          ? { busy: false }
+          : {
+            busy: true,
+            kind: "reply",
+            label: "正在确认需求并整理最终提示词",
+            operation_id: operationId,
+            started_at: new Date().toISOString(),
+          },
+      },
+    });
+  });
+  await page.route(
+    `**/api/workspaces/${initialId}/operations/${operationId}/cancel`,
+    async (route) => {
+      canceled = true;
+      await route.fulfill({ json: { ok: true } });
+    },
+  );
+
+  try {
+    await page.locator(`[data-workspace-id="${initialId}"] [data-select-workspace]`).click();
+    await expect(page.locator("#workspaceTitle")).toHaveText(initialName);
+    await expect(page.locator("#chatInput")).toBeEditable({ timeout: 1000 });
+  } finally {
+    loads.resolve();
+  }
+
+  await expect(page.locator(".message-row.assistant.pending")).toContainText(
+    "正在确认需求并整理最终提示词",
+  );
+  const cancelRequest = page.waitForResponse((response) => (
+    response.request().method() === "POST"
+      && new URL(response.url()).pathname
+        === `/api/workspaces/${initialId}/operations/${operationId}/cancel`
+  ));
+  await page.locator(".message-row.assistant.pending [data-cancel-chat]").click();
+  await cancelRequest;
+  await expect(page.locator("#chatInput")).toBeEditable();
+
+  await page.locator(`[data-workspace-id="${createdId}"] [data-select-workspace]`).click();
   await deleteWorkspace(page, name);
 });
 
@@ -136,6 +206,16 @@ test("direct generation bypasses AI conversation", { tag: "@responsive" }, async
   await expect(page.locator("#generationForm")).toBeVisible();
   await expect(page.locator("#promptInput"))
     .toHaveValue("一张雨夜霓虹街道的电影感照片");
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async (value) => { window.__copiedPrompt = value; } },
+    });
+  });
+  await page.locator("#promptCopyButton").click();
+  await expect(page.locator("#toastRegion .toast")).toContainText("提示词已复制");
+  await expect.poll(() => page.evaluate(() => window.__copiedPrompt))
+    .toBe("一张雨夜霓虹街道的电影感照片");
   await expect(page.locator("#promptReviewStatus")).toContainText("可直接编辑提示词");
   await page.locator('#modeSwitch [data-mode="text2img"]').click();
   await settingsSaved;

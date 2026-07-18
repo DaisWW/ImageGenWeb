@@ -4,7 +4,6 @@
   const {
     StudioApp,
     UI,
-    STATUS,
     TERMINAL,
     ACTIVE_POLL_INTERVAL,
     IDLE_POLL_INTERVAL,
@@ -12,8 +11,12 @@
   } = window.ImageGenStudio;
 
   Object.assign(StudioApp.prototype, {
+    activeGenerationJobs() {
+      return this.jobs.filter((job) => ["running", "canceling"].includes(job.status));
+    },
+
     updateMetrics() {
-      const running = this.jobs.filter((job) => ["running", "canceling"].includes(job.status));
+      const running = this.activeGenerationJobs();
       const queued = this.jobs.filter((job) => job.status === "queued");
       setText(this.el.runningMetric, running.length);
       setText(this.el.queueMetric, queued.length);
@@ -29,7 +32,7 @@
     },
 
     updateEtaMetric() {
-      const running = this.jobs.filter((job) => ["running", "canceling"].includes(job.status));
+      const running = this.activeGenerationJobs();
       const ends = running.map((job) => job.estimated_end_at).filter(Boolean).sort();
       const latestEnd = ends.at(-1);
       setText(this.el.etaMetric, latestEnd ? UI.timeOnly(latestEnd) : "--:--");
@@ -46,9 +49,9 @@
       }
     },
 
-    async loadChannels(notify = true) {
+    async loadChannels(notify = true, options = {}) {
       try {
-        const data = await UI.api("/api/channels");
+        const data = await UI.api("/api/channels", options);
         const initialized = Boolean(this.channelVersion);
         const changed = initialized && this.channelVersion !== data.version;
         this.channelVersion = data.version;
@@ -59,7 +62,7 @@
         this.applyChannel(previous, false);
         if (changed && notify) UI.toast("渠道与模型配置已更新", "success");
       } catch (error) {
-        if (notify) UI.toast(error.message, "error");
+        if (notify && error?.name !== "AbortError") UI.toast(error.message, "error");
       }
     },
 
@@ -88,8 +91,13 @@
         const hadActiveWorkspace = this.workspaceJobs.size > 0;
         await this.loadWorkspaceJobs();
         const selectedIsActive = this.workspaceJobs.has(this.activeWorkspace?.id);
-        const requests = [...this.chatOperations]
-          .map(([workspaceId]) => this.loadMessages(workspaceId));
+        const messageWorkspaceIds = new Set([
+          ...this.chatOperations.keys(),
+          ...this.canceledChatOperationIds.keys(),
+        ]);
+        const requests = [...messageWorkspaceIds].map((workspaceId) => (
+          this.loadMessages(workspaceId)
+        ));
         if (selectedWasActive || selectedIsActive) requests.push(this.loadJobs());
         if (hadActiveWorkspace || this.workspaceJobs.size > 0 || selectedWasActive) {
           requests.push(this.refreshBalance());
@@ -104,6 +112,8 @@
       if (document.hidden) return IDLE_POLL_INTERVAL;
       const active = this.workspaceJobs.size > 0
         || this.chatOperations.size > 0
+        || this.canceledChatOperationIds.size > 0
+        || this.generationSubmissions.size > 0
         || this.jobs.some((job) => !TERMINAL.has(job.status));
       return active ? ACTIVE_POLL_INTERVAL : IDLE_POLL_INTERVAL;
     },

@@ -4,7 +4,6 @@
   const {
     StudioApp,
     UI,
-    STATUS,
     setText,
     setHidden,
     setDisabled,
@@ -45,7 +44,6 @@
         ? `<span>垫图</span><div>${job.references.map((asset) => `<img src="${asset.url}" alt="${UI.escapeHtml(asset.name)}" decoding="async">`).join("")}</div>`
         : "";
       this.el.detailReferences.querySelectorAll("img").forEach((image) => this.prepareImageReveal(image));
-      this.renderDetailReview(item.review || {});
       this.el.detailReuseLabel.textContent = this.isAnimationWorkspace() ? "设为母图" : "基于此图继续";
       this.el.detailDownload.href = item.download_url;
       UI.openDialog(this.el.imageDialog);
@@ -250,6 +248,7 @@
       const boxes = this.selectedSliceBoxes();
       if (!this.sliceItemId || !boxes.length || this.sliceBusy) return;
       if (action === "reference" && boxes.length !== 1) return;
+      const workspace = this.activeWorkspace;
       this.sliceBusy = true;
       this.renderSlices();
       try {
@@ -267,7 +266,7 @@
           UI.toast("已将 " + boxes.length + " 个切片存入图库", "success");
           return;
         }
-        if (data.asset) await this.applySliceReference(data.asset);
+        if (data.asset) await this.applySliceReference(data.asset, workspace);
       } catch (error) {
         UI.toast(error.message, "error");
       } finally {
@@ -276,9 +275,17 @@
       }
     },
 
-    async applySliceReference(asset) {
-      const workspace = this.activeWorkspace;
-      if (!workspace) return;
+    async applyReferenceAsset(
+      asset,
+      {
+        workspace = this.activeWorkspace,
+        dialog,
+        prompt = "请基于这张图继续调整：",
+        animationToast = "已设为母图，可以调整帧动画参数",
+        imageToast = "",
+      },
+    ) {
+      if (!workspace || !asset || this.activeWorkspace?.id !== workspace.id) return;
       if (!workspace.assets.some((entry) => entry.id === asset.id)) {
         workspace.assets.push(asset);
       }
@@ -290,11 +297,12 @@
         this.setMode("img2img", false);
         this.renderReferences();
         this.settingChanged();
-        await this.flushSettings();
-        UI.closeDialog(this.el.sliceDialog);
+        await this.flushSettings(workspace.id);
+        if (this.activeWorkspace?.id !== workspace.id) return;
+        UI.closeDialog(dialog);
         this.setComposerMode("generation");
         this.el.promptInput.focus();
-        UI.toast("已将切片设为母图", "success");
+        if (animationToast) UI.toast(animationToast, "success");
         return;
       }
       const chatSelection = this.currentChatSelection(workspace.id);
@@ -309,10 +317,20 @@
       this.renderReferences();
       this.settingChanged();
       this.setComposerMode("chat");
-      this.el.chatInput.value = "请基于这个切片继续调整：";
-      UI.closeDialog(this.el.sliceDialog);
+      this.el.chatInput.value = prompt;
+      UI.closeDialog(dialog);
       this.el.chatInput.focus();
-      UI.toast("已选择切片，可以继续调整", "success");
+      if (imageToast) UI.toast(imageToast, "success");
+    },
+
+    async applySliceReference(asset, workspace = this.activeWorkspace) {
+      await this.applyReferenceAsset(asset, {
+        workspace,
+        dialog: this.el.sliceDialog,
+        prompt: "请基于这个切片继续调整：",
+        animationToast: "已将切片设为母图",
+        imageToast: "已选择切片，可以继续调整",
+      });
     },
 
     async downloadSlices(boxes) {
@@ -346,115 +364,19 @@
       URL.revokeObjectURL(url);
     },
 
-    renderDetailReview(review) {
-      const verdict = review?.verdict || "";
-      this.detailReviewSuggestion = review?.suggested_edit || "";
-      this.el.detailReview.classList.toggle("is-pass", verdict === "pass");
-      this.el.detailReview.classList.toggle("is-revise", verdict === "revise");
-      setText(
-        this.el.detailReviewVerdict,
-        verdict === "pass" ? "通过" : verdict === "revise" ? "需要精修" : "尚未验收",
-      );
-      const scores = review?.scores || {};
-      const hasReview = ["pass", "revise"].includes(verdict);
-      setHidden(this.el.detailReviewScores, !hasReview);
-      if (hasReview) {
-        this.el.detailReviewScores.innerHTML = [
-          ["构图", scores.composition],
-          ["画质", scores.visual_quality],
-          ["可用", scores.usability],
-        ].map(([label, value]) => (
-          `<span>${label}<strong>${Number(value || 0).toFixed(1)}</strong></span>`
-        )).join("");
-      } else {
-        this.el.detailReviewScores.replaceChildren();
-      }
-      const checks = [...(review?.hard_checks || [])];
-      (review?.findings || []).forEach((finding, index) => {
-        checks.push({ id: `finding_${index}`, label: finding, passed: false, evidence: "" });
-      });
-      setHidden(this.el.detailReviewChecks, !checks.length);
-      this.el.detailReviewChecks.replaceChildren(...checks.map((check) => {
-        const item = document.createElement("li");
-        item.classList.toggle("passed", check.passed === true);
-        item.textContent = check.evidence ? `${check.label}：${check.evidence}` : check.label;
-        return item;
-      }));
-      setHidden(this.el.detailReviewSuggestion, !this.detailReviewSuggestion);
-      setText(this.el.detailReviewSuggestion, this.detailReviewSuggestion);
-      setHidden(this.el.detailApplyReview, !this.detailReviewSuggestion);
-      this.el.detailRunReview.innerHTML = hasReview
-        ? '<i data-lucide="refresh-cw"></i>重新验收'
-        : '<i data-lucide="scan-search"></i>AI 验收';
-      UI.icons(this.el.detailRunReview);
-    },
-
-    async runDetailReview() {
-      const job = this.jobs.find((entry) => entry.id === this.detailJobId);
-      const item = job?.items.find((entry) => entry.id === this.detailItemId);
-      const modelId = this.el.chatModelSelect.value;
-      if (!item || !modelId || this.el.detailRunReview.disabled) return;
-      this.el.detailRunReview.disabled = true;
-      this.el.detailRunReview.innerHTML = '<i data-lucide="loader-circle"></i>正在验收';
-      UI.icons(this.el.detailRunReview);
-      try {
-        const data = await UI.api(`/api/generation-items/${item.id}/review`, {
-          method: "POST",
-          body: { model_id: modelId },
-        });
-        item.review = data.review;
-        this.renderDetailReview(data.review);
-        UI.toast(data.review.verdict === "pass" ? "AI 验收通过" : "AI 已给出精修建议", "success");
-      } catch (error) {
-        UI.toast(error.message, "error");
-        this.renderDetailReview(item.review || {});
-      } finally {
-        this.el.detailRunReview.disabled = false;
-      }
-    },
-
-    async reuseDetailImage(suggestedText = "") {
+    async reuseDetailImage() {
       if (!this.detailItemId || !this.activeWorkspace) return;
-      const workspace = this.activeWorkspace;
       const itemId = this.detailItemId;
+      const workspace = this.activeWorkspace;
       this.el.detailReuse.disabled = true;
       try {
         const data = await UI.api(`/api/generation-items/${itemId}/reference`, {
           method: "POST",
         });
-        if (!workspace.assets.some((asset) => asset.id === data.asset.id)) {
-          workspace.assets.push(data.asset);
-        }
-        this.renderWorkspaceList();
-        if (workspace.kind === "animation" && this.activeWorkspace?.id === workspace.id) {
-          const selection = this.currentSelection(workspace.id);
-          selection.clear();
-          selection.add(data.asset.id);
-          this.setMode("img2img", false);
-          this.renderReferences();
-          this.settingChanged();
-          await this.flushSettings();
-          UI.closeDialog(this.el.imageDialog);
-          this.setComposerMode("generation");
-          this.el.promptInput.focus();
-          UI.toast("已设为母图，可以调整帧动画参数", "success");
-        } else if (this.activeWorkspace?.id === workspace.id) {
-          const chatSelection = this.currentChatSelection(workspace.id);
-          chatSelection.clear();
-          chatSelection.add(data.asset.id);
-          const generationSelection = this.currentSelection(workspace.id);
-          generationSelection.clear();
-          generationSelection.add(data.asset.id);
-          this.setMode("img2img", false);
-          this.chatReferencePickerOpen = true;
-          this.renderChatReferences();
-          this.renderReferences();
-          this.settingChanged();
-          this.setComposerMode("chat");
-          this.el.chatInput.value = suggestedText || "请基于这张图继续调整：";
-          UI.closeDialog(this.el.imageDialog);
-          this.el.chatInput.focus();
-        }
+        await this.applyReferenceAsset(data.asset, {
+          workspace,
+          dialog: this.el.imageDialog,
+        });
       } catch (error) {
         UI.toast(error.message, "error");
       } finally {

@@ -64,6 +64,18 @@ def transparent_atlas_png_bytes() -> bytes:
     return output.getvalue()
 
 
+def transparent_object_row_png_bytes() -> bytes:
+    image = Image.effect_noise((512, 512), 100).convert("RGBA")
+    image.putalpha(0)
+    draw = ImageDraw.Draw(image)
+    for center in (85, 256, 427):
+        draw.ellipse((center - 70, 100, center + 70, 400), fill=(180, 140, 90, 255))
+        draw.ellipse((center - 38, 155, center + 38, 250), fill=(235, 220, 180, 255))
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
+
+
 def dense_icon_atlas_png_bytes(*, rows=8, columns=8, cell=48) -> bytes:
     image = Image.new("RGB", (columns * cell, rows * cell), (2, 2, 3))
     draw = ImageDraw.Draw(image)
@@ -224,6 +236,17 @@ class TestImageSlicing(PlatformTestCase):
         self.assertEqual((analysis["rows"], analysis["columns"]), (2, 2))
         self.assertTrue(all(box["width"] == 89 for box in analysis["boxes"]))
         self.assertTrue(all(box["height"] == 65 for box in analysis["boxes"]))
+
+    def test_analysis_ignores_hidden_rgb_noise_in_transparent_object_row(self):
+        _workspace, item = self._completed_item(
+            transparent_object_row_png_bytes(),
+            prompt="三个横向排列的独立物体，优先保证 64 格数量、8×8 结构",
+        )
+        response = self.user_client().post(f"/api/generation-items/{item.id}/slice-analysis")
+
+        analysis = response.json["analysis"]
+        self.assertTrue(analysis["detected"])
+        self.assertEqual((analysis["rows"], analysis["columns"]), (1, 3))
 
     def test_plain_image_is_not_reported_as_detected_atlas(self):
         _workspace, item = self._completed_item(png_bytes(), prompt="一张完整人物肖像")

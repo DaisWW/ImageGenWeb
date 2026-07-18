@@ -4,7 +4,6 @@
   const {
     StudioApp,
     UI,
-    STATUS,
     TERMINAL,
     ACTIVE_POLL_INTERVAL,
     setText,
@@ -21,8 +20,7 @@
 
     async sendChatMessage(event) {
       event.preventDefault();
-      if (this.workspaceLoading || !this.activeWorkspace
-        || this.workspaceChatBusy() || this.workspaceHasActiveJob()) return;
+      if (!this.activeWorkspace || this.workspaceChatBusy() || this.workspaceHasActiveJob()) return;
       if (this.referenceUploadPending) {
         UI.toast("请等待图片上传完成或取消上传", "info");
         return;
@@ -86,7 +84,7 @@
 
     async retryFailedChatMessage(messageId) {
       const message = this.outgoingMessages.get(messageId);
-      if (!message || message.delivery_state !== "failed"
+      if (!message || !["failed", "canceled"].includes(message.delivery_state)
         || this.activeWorkspace?.id !== message.workspace_id
         || this.workspaceChatBusy() || this.workspaceHasActiveJob()) return;
       await this.submitOutgoingMessage(message);
@@ -96,41 +94,53 @@
       message.delivery_state = "sending";
       message.delivery_error = "";
       this.outgoingMessages.set(message.id, message);
-      this.startLocalChatOperation(message.workspace_id, "reply", "正在确认需求并整理最终提示词");
-      let failure = null;
-      try {
-        await this.flushSettings(message.workspace_id);
-        const data = await UI.api(`/api/workspaces/${message.workspace_id}/messages`, {
+      const result = await this.runChatOperation(
+        message.workspace_id,
+        "正在确认需求并整理最终提示词",
+        message.id,
+        (operation) => UI.api(`/api/workspaces/${message.workspace_id}/messages`, {
           method: "POST",
           body: {
             message_id: message.id,
+            operation_id: operation.operation_id,
             model_id: message.model_id,
             content: message.content,
             attachment_ids: message.attachment_ids,
             generation_mode: message.generation_mode,
             generation_reference_ids: message.generation_reference_ids,
           },
-        });
+          signal: operation.controller.signal,
+        }),
+      );
+      const { operation, data, failure, canceled } = result;
+      if (canceled) {
+        const stillOwnMessage = message.operation_id === operation.operation_id
+          || this.chatOperations.get(message.workspace_id) === operation;
+        if (stillOwnMessage) {
+          message.delivery_state = "canceled";
+          message.delivery_error = "";
+          message.operation_id = "";
+          if (this.activeWorkspace?.id === message.workspace_id) this.renderMessages();
+        }
+        return;
+      }
+      if (!failure) {
+        if (!data) return;
         this.outgoingMessages.delete(message.id);
         if (this.activeWorkspace?.id === message.workspace_id) {
-          this.messages = [...new Map(
-            [...this.messages, ...data.messages].map((item) => [item.id, item]),
-          ).values()];
-          this.conversationContext = data.context;
+          this.mergeConversationMessages(data.messages, data.context);
+          this.renderMessages();
         }
         const workspace = this.workspaces.find((item) => item.id === message.workspace_id);
         if (workspace && data.workspace) {
           Object.assign(workspace, data.workspace);
-          if (workspace === this.activeWorkspace) this.el.workspaceTitle.textContent = workspace.name;
+          if (workspace === this.activeWorkspace) {
+            this.el.workspaceTitle.textContent = workspace.name;
+          }
           this.renderWorkspaceList();
         }
-      } catch (error) {
-        failure = error;
-      } finally {
-        await this.finishLocalChatOperation(message.workspace_id);
+        return;
       }
-      if (!failure) return;
-      await this.loadMessages(message.workspace_id);
       const outgoing = this.outgoingMessages.get(message.id);
       if (!outgoing) return;
       outgoing.delivery_state = "failed";
@@ -139,39 +149,36 @@
     },
 
     async retryChatMessage(errorMessageId) {
-      if (this.workspaceLoading || !this.activeWorkspace
-        || this.workspaceChatBusy() || this.workspaceHasActiveJob()) return;
+      if (!this.activeWorkspace || this.workspaceChatBusy() || this.workspaceHasActiveJob()) return;
       const workspaceId = this.activeWorkspace.id;
       const modelId = this.el.chatModelSelect.value;
       if (!modelId) {
         UI.toast("管理员尚未配置可用的对话模型", "error");
         return;
       }
-      this.startLocalChatOperation(workspaceId, "reply", "正在重新确认需求");
-      let failure = null;
-      try {
-        await this.flushSettings();
-        if (this.activeWorkspace?.id !== workspaceId) return;
-        const data = await UI.api(
-          `/api/workspaces/${workspaceId}/messages/${errorMessageId}/retry`,
-          { method: "POST", body: { model_id: modelId } },
-        );
-        if (this.activeWorkspace?.id === workspaceId) {
-          this.messages = [...new Map(
-            [...this.messages, data.message].map((message) => [message.id, message]),
-          ).values()];
-          this.conversationContext = data.context;
-        }
-      } catch (error) {
-        failure = error;
-      } finally {
-        await this.finishLocalChatOperation(workspaceId, failure);
+      const result = await this.runChatOperation(
+        workspaceId,
+        "正在重新确认需求",
+        errorMessageId,
+        (operation) => {
+          if (this.activeWorkspace?.id !== workspaceId) return null;
+          return UI.api(`/api/workspaces/${workspaceId}/messages/${errorMessageId}/retry`, {
+            method: "POST",
+            body: { model_id: modelId, operation_id: operation.operation_id },
+            signal: operation.controller.signal,
+          });
+        },
+      );
+      const { data, canceled } = result;
+      if (data && this.activeWorkspace?.id === workspaceId) {
+        this.mergeConversationMessages([data.message], data.context);
+        this.renderMessages();
       }
+      if (canceled && this.activeWorkspace?.id === workspaceId) this.renderMessages();
     },
 
     openGenerationComposer(referenceIds = null) {
-      if (this.workspaceLoading || !this.activeWorkspace
-        || this.workspaceChatBusy() || this.workspaceHasActiveJob()
+      if (!this.activeWorkspace || this.workspaceChatBusy() || this.workspaceHasActiveJob()
         || this.referenceUploadPending) return;
       const hadReviewedDraft = Boolean(this.activeWorkspace.settings.prompt_draft_id);
       this.activeWorkspace.settings.prompt_draft_id = "";
@@ -225,7 +232,9 @@
         this.el.creativeDirectionSelect.value || "auto"
       );
       const stageByQuality = { low: "draft", medium: "refine", high: "final" };
-      this.setGenerationStage(stageByQuality[message.payload.quality_hint] || "draft", false);
+      this.activeWorkspace.settings.generation_stage = (
+        stageByQuality[message.payload.quality_hint] || "draft"
+      );
       const omitted = this.showGenerationComposer(prompt, message.payload.reference_ids || []);
       this.updatePromptReviewState();
       if (omitted > 0) {
@@ -238,39 +247,140 @@
       return Boolean(workspaceId && this.chatOperations.has(workspaceId));
     },
 
-    startLocalChatOperation(workspaceId, kind, label) {
-      this.chatOperations.set(workspaceId, {
+    isChatOperationCanceled(operation, error = null) {
+      return operation.canceled
+        || error?.name === "AbortError"
+        || error?.code === "conversation_canceled";
+    },
+
+    async runChatOperation(workspaceId, label, messageId, request) {
+      const operation = this.startLocalChatOperation(workspaceId, label, messageId);
+      let data = null;
+      let failure = null;
+      let canceled = false;
+      try {
+        await this.flushSettings(workspaceId, { signal: operation.controller.signal });
+        if (!operation.canceled) {
+          data = await request(operation);
+          if (operation.canceled) {
+            canceled = true;
+            this.requestOperationCancellation(workspaceId, operation.operation_id);
+          }
+        }
+      } catch (error) {
+        canceled = this.isChatOperationCanceled(operation, error);
+        if (!canceled) failure = error;
+      } finally {
+        await this.finishLocalChatOperation(workspaceId, failure, operation);
+      }
+      return {
+        operation,
+        data,
+        failure,
+        canceled: canceled || this.isChatOperationCanceled(operation),
+      };
+    },
+
+    mergeConversationMessages(messages, context) {
+      this.messages = [...new Map(
+        [...this.messages, ...messages].map((message) => [message.id, message]),
+      ).values()];
+      this.conversationContext = context;
+    },
+
+    startLocalChatOperation(workspaceId, label, messageId = "") {
+      const operation = {
         busy: true,
-        kind,
+        kind: "reply",
         label,
         started_at: new Date().toISOString(),
+        operation_id: this.newMessageId(),
+        message_id: messageId,
+        controller: new AbortController(),
         local: true,
-      });
+        canceled: false,
+      };
+      const message = messageId ? this.outgoingMessages.get(messageId) : null;
+      if (message) message.operation_id = operation.operation_id;
+      this.chatOperations.set(workspaceId, operation);
       this.renderWorkspaceList();
       if (this.activeWorkspace?.id === workspaceId) this.renderMessages();
       this.schedulePoll(ACTIVE_POLL_INTERVAL);
+      return operation;
     },
 
-    async finishLocalChatOperation(workspaceId, failure = null) {
-      if (this.chatOperations.get(workspaceId)?.local) {
+    async finishLocalChatOperation(workspaceId, failure, operation) {
+      if (this.chatOperations.get(workspaceId) === operation) {
         this.chatOperations.delete(workspaceId);
       }
       this.renderWorkspaceList();
       if (this.activeWorkspace?.id === workspaceId) this.renderMessages();
-      if (!failure) return;
+      if (!failure || operation?.canceled) return;
       UI.toast(failure.message, "error");
       await this.loadMessages(workspaceId);
+    },
+
+    requestOperationCancellation(workspaceId, operationId) {
+      if (!workspaceId || !operationId) return;
+      UI.api(`/api/workspaces/${workspaceId}/operations/${operationId}/cancel`, {
+        method: "POST",
+        keepalive: true,
+      }).catch(() => {});
+      this.schedulePoll(0);
+    },
+
+    cancelChatOperation(workspaceId = this.activeWorkspace?.id, operationId = "") {
+      if (!workspaceId) return;
+      const operation = this.chatOperations.get(workspaceId);
+      const targetId = operationId || operation?.operation_id || operation?.message_id;
+      if (!targetId) return;
+      const operationIds = [operation?.operation_id, operation?.message_id].filter(Boolean);
+      if (operation && operationIds.length && !operationIds.includes(targetId)) return;
+      if (operation) {
+        operation.canceled = true;
+        operation.controller?.abort();
+        if (this.chatOperations.get(workspaceId) === operation) {
+          this.chatOperations.delete(workspaceId);
+        }
+        const message = operation.message_id
+          ? this.outgoingMessages.get(operation.message_id)
+          : null;
+        if (message) {
+          message.delivery_state = "canceled";
+          message.delivery_error = "";
+          message.operation_id = "";
+        }
+      }
+      let canceled = this.canceledChatOperationIds.get(workspaceId);
+      if (!canceled) {
+        canceled = new Set();
+        this.canceledChatOperationIds.set(workspaceId, canceled);
+      }
+      canceled.add(targetId);
+      operationIds.forEach((id) => canceled.add(id));
+      this.requestOperationCancellation(workspaceId, targetId);
+      this.renderWorkspaceList();
+      if (this.activeWorkspace?.id === workspaceId) this.renderMessages();
     },
 
     syncServerChatOperation(workspaceId, operation) {
       const previous = this.chatOperations.get(workspaceId);
       if (previous?.local) return false;
+      const canceled = this.canceledChatOperationIds.get(workspaceId);
+      if (operation?.busy && canceled?.size) {
+        if (!operation.operation_id || canceled.has(operation.operation_id)) return false;
+      }
+      if (!operation?.busy && canceled?.size) {
+        this.canceledChatOperationIds.delete(workspaceId);
+      }
       const next = operation?.busy ? { ...operation, local: false } : null;
       const unchanged = Boolean(previous) === Boolean(next)
         && (!next || (
           previous.kind === next.kind
           && previous.label === next.label
           && previous.started_at === next.started_at
+          && previous.operation_id === next.operation_id
+          && previous.message_id === next.message_id
         ));
       if (unchanged) return false;
       if (operation?.busy) {
@@ -281,8 +391,23 @@
       return true;
     },
 
-    workspaceHasActiveJob() {
-      return this.jobs.some((job) => !TERMINAL.has(job.status));
+    workspaceHasActiveJob(workspaceId = this.activeWorkspace?.id) {
+      if (!workspaceId) return false;
+      return this.workspaceJobs.has(workspaceId)
+        || (
+          workspaceId === this.activeWorkspace?.id
+          && this.jobs.some((job) => !TERMINAL.has(job.status))
+        );
+    },
+
+    setActionIcon(button, iconName, state) {
+      if (!button || button.dataset.actionState === state) return;
+      button.dataset.actionState = state;
+      button.querySelector("svg[data-lucide], i[data-lucide]")?.remove();
+      const icon = document.createElement("i");
+      icon.dataset.lucide = iconName;
+      button.prepend(icon);
+      UI.icons(button);
     },
 
     updateInteractionState() {
@@ -290,12 +415,27 @@
       const generationBusy = this.workspaceHasActiveJob();
       const operation = this.chatOperations.get(this.activeWorkspace?.id);
       const chatBusy = Boolean(operation);
-      const locked = noWorkspace || this.workspaceLoading || generationBusy || chatBusy;
+      const generationSubmission = this.generationSubmissions.get(this.activeWorkspace?.id);
+      const submissionBusy = Boolean(generationSubmission);
+      const locked = noWorkspace || generationBusy || chatBusy || submissionBusy;
       const referenceUploading = this.referenceUploadPending;
       const hasModel = Boolean(this.el.chatModelSelect.value);
       setDisabled(this.el.chatInput, locked);
-      setDisabled(this.el.chatSendButton, locked || referenceUploading || !hasModel);
-      const sendTitle = referenceUploading ? "等待图片上传完成" : "发送消息";
+      const chatCanCancel = chatBusy && !generationBusy && !submissionBusy;
+      setDisabled(
+        this.el.chatSendButton,
+        noWorkspace || generationBusy || submissionBusy
+          || referenceUploading || (!chatCanCancel && !hasModel),
+      );
+      this.el.chatSendButton.type = chatCanCancel ? "button" : "submit";
+      this.setActionIcon(
+        this.el.chatSendButton,
+        chatCanCancel ? "square" : "arrow-up",
+        chatCanCancel ? "cancel" : "send",
+      );
+      const sendTitle = chatCanCancel
+        ? "取消等待"
+        : referenceUploading ? "等待图片上传完成" : "发送消息";
       setAttribute(this.el.chatSendButton, "title", sendTitle);
       setAttribute(this.el.chatSendButton, "aria-label", sendTitle);
       setDisabled(this.el.chatModelSelect, locked || !hasModel);
@@ -313,21 +453,29 @@
       );
       setDisabled(
         this.el.generateButton,
-        locked || referenceUploading || !this.currentChannel()
-          || missingAnimationMaster,
+        submissionBusy
+          ? false
+          : locked || referenceUploading || !this.currentChannel() || missingAnimationMaster,
       );
-      const generateTitle = missingAnimationMaster ? "请先添加并选择一张母图" : "";
+      this.setActionIcon(
+        this.el.generateButton,
+        submissionBusy ? "square" : "sparkles",
+        submissionBusy ? "cancel" : "generate",
+      );
+      setText(this.el.generateButtonLabel, submissionBusy ? "取消生成" : (
+        this.isAnimationWorkspace() ? "开始生成帧" : "开始生成"
+      ));
+      const generateTitle = submissionBusy
+        ? "取消生成"
+        : missingAnimationMaster ? "请先添加并选择一张母图" : "";
       setAttribute(this.el.generateButton, "title", generateTitle);
-      this.el.qualityStageSwitch.querySelectorAll("button").forEach((button) => {
-        setDisabled(button, locked);
-      });
-      setDisabled(this.el.generationBackButton, this.workspaceLoading);
+      setDisabled(this.el.generationBackButton, submissionBusy);
       setDisabled(
         this.el.referenceAdd,
-        this.workspaceLoading || referenceUploading
+        referenceUploading
           || (this.activeWorkspace?.assets.length || 0) >= this.limits.max_assets_per_workspace,
       );
-      setDisabled(this.el.referenceLibrary, this.workspaceLoading || referenceUploading);
+      setDisabled(this.el.referenceLibrary, referenceUploading);
       setDisabled(this.el.clearWorkspaceButton, locked || referenceUploading);
       setDisabled(this.el.libraryButton, noWorkspace);
       this.el.workspaceList.querySelectorAll("[data-delete-workspace]").forEach((button) => {
@@ -336,11 +484,23 @@
           && (locked || referenceUploading);
         setDisabled(button, this.chatOperations.has(workspaceId) || activeLocked);
       });
-      this.el.messageList.querySelectorAll("[data-retry-message]").forEach((button) => {
+      this.el.messageList.querySelectorAll("[data-retry-message], [data-retry-send]").forEach((button) => {
         setDisabled(button, locked || !hasModel);
       });
-      this.el.messageList.querySelectorAll("[data-retry-send]").forEach((button) => {
-        setDisabled(button, locked || !hasModel);
+      this.el.messageList.querySelectorAll("[data-cancel-chat]").forEach((button) => {
+        const buttonWorkspace = button.dataset.cancelWorkspace || this.activeWorkspace?.id;
+        const buttonOperation = button.dataset.cancelOperation;
+        const activeOperation = this.chatOperations.get(buttonWorkspace);
+        const activeOperationIds = [
+          activeOperation?.operation_id,
+          activeOperation?.message_id,
+        ].filter(Boolean);
+        setDisabled(
+          button,
+          !activeOperation && !buttonOperation
+            || Boolean(activeOperation && buttonOperation
+              && !activeOperationIds.includes(buttonOperation)),
+        );
       });
       this.el.messageList.querySelectorAll("[data-use-prompt-draft]").forEach((button) => {
         setDisabled(button, locked);
@@ -348,11 +508,10 @@
       this.el.messageList.querySelectorAll("[data-retry-job]").forEach((button) => {
         setDisabled(button, locked);
       });
-      const placeholder = this.workspaceLoading
-        ? "正在加载工作站..."
-        : noWorkspace ? "暂无工作站"
+      const placeholder = noWorkspace ? "暂无工作站"
         : generationBusy
         ? "当前生成完成前不能继续对话，可在生成记录中取消任务"
+        : submissionBusy ? "正在提交生成，可立即取消"
         : chatBusy ? `${operation.label}，可切换到其他工作站继续`
         : this.isAnimationWorkspace() ? "描述画面、动作和循环方式..." : "描述你想生成的画面...";
       if (this.el.chatInput.placeholder !== placeholder) this.el.chatInput.placeholder = placeholder;
@@ -382,20 +541,19 @@
     },
 
     toggleChatReferences() {
-      if (this.workspaceLoading || this.workspaceChatBusy() || this.workspaceHasActiveJob()) return;
+      if (this.workspaceChatBusy() || this.workspaceHasActiveJob()) return;
       this.chatReferencePickerOpen = !this.chatReferencePickerOpen;
       this.renderChatReferences();
     },
 
     openReferencePicker(target) {
-      if (this.workspaceLoading || this.referenceUploadPending) return;
+      if (this.referenceUploadPending) return;
       this.uploadTarget = target;
       this.el.referenceInput.click();
     },
 
     chatCanAcceptImages() {
       return Boolean(this.activeWorkspace)
-        && !this.workspaceLoading
         && !this.workspaceChatBusy()
         && !this.workspaceHasActiveJob()
         && !this.referenceUploadPending;

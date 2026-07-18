@@ -318,6 +318,7 @@
       if (!workspace || workspace === this.activeWorkspace) return;
       const selection = ++this.workspaceLoadSequence;
       if (this.activeWorkspace) {
+        this.cancelGenerationSubmission?.(this.activeWorkspace.id);
         this.chatDrafts.set(this.activeWorkspace.id, this.el.chatInput.value);
         await this.flushSettings();
         if (selection !== this.workspaceLoadSequence) return;
@@ -330,7 +331,6 @@
       this.messages = [];
       this.conversationContext = null;
       this.chatReferencePickerOpen = false;
-      this.setWorkspaceLoading(!knownEmpty, selection);
       this.el.chatInput.value = this.chatDrafts.get(workspace.id) || "";
       this.renderWorkspaceList();
       this.el.workspaceTitle.textContent = workspace.name;
@@ -341,12 +341,14 @@
       this.renderMessages();
       this.setComposerMode("chat");
       this.animateWorkspaceIn();
-      if (!knownEmpty) await Promise.all([this.loadJobs(), this.loadMessages()]);
-      if (selection !== this.workspaceLoadSequence) return;
-      if (!knownEmpty) {
-        this.setWorkspaceLoading(false, selection);
-        this.scrollConversation(true);
-      }
+      if (knownEmpty) return;
+      void Promise.all([
+        this.loadJobs(workspace.id),
+        this.loadMessages(workspace.id),
+      ]).then(() => {
+        if (selection === this.workspaceLoadSequence
+          && this.activeWorkspace?.id === workspace.id) this.scrollConversation(true);
+      });
     },
 
     loadLastWorkspaceId() {
@@ -368,7 +370,7 @@
     },
 
     showEmptyWorkspace() {
-      const selection = ++this.workspaceLoadSequence;
+      this.workspaceLoadSequence += 1;
       this.activeWorkspace = null;
       this.saveLastWorkspaceId(null);
       this.jobs = [];
@@ -377,39 +379,8 @@
       this.el.workspaceTitle.textContent = "暂无工作站";
       this.renderWorkspaceList();
       this.setComposerMode("chat");
-      this.setWorkspaceLoading(false, selection);
-      this.updateMetrics();
-    },
-
-    setWorkspaceLoading(loading, selection) {
-      window.clearTimeout(this.workspaceSkeletonTimer);
-      this.workspaceLoading = loading;
-      this.el.conversationLoading.hidden = true;
-      this.el.conversationScroll.toggleAttribute("aria-busy", loading);
-      this.el.messageList.hidden = loading;
-      if (loading) {
-        this.updateInteractionState();
-        this.el.conversationEmpty.hidden = true;
-        this.workspaceSkeletonTimer = window.setTimeout(() => {
-          if (this.workspaceLoading && selection === this.workspaceLoadSequence) {
-            this.el.conversationLoading.hidden = false;
-          }
-        }, 120);
-        return;
-      }
       this.renderMessages();
-      if (!this.reducedMotion.matches) {
-        const content = this.el.messageList.childElementCount
-          ? this.el.messageList
-          : this.el.conversationEmpty;
-        content.animate?.(
-          [
-            { opacity: 0, transform: "translateY(5px)" },
-            { opacity: 1, transform: "translateY(0)" },
-          ],
-          { duration: 180, easing: "cubic-bezier(.22, 1, .36, 1)" },
-        );
-      }
+      this.updateMetrics();
     },
 
     async animateWorkspaceOut() {

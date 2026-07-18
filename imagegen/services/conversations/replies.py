@@ -19,7 +19,7 @@ from ...models import (
     utcnow,
 )
 from ..prompt_drafts import PromptDraftReview
-from .operations import ConversationOperationRegistry
+from .operations import ConversationOperation, ConversationOperationRegistry
 from .prompts import animation_runtime_prompt, generation_mode_prompt
 from .support import ConversationDependencies, ConversationSupport
 
@@ -43,9 +43,17 @@ class ConversationReplyService(ConversationSupport):
         generation_reference_ids: tuple[str, ...] = (),
         generation_mode: str = "",
         message_id: str = "",
+        operation_id: str = "",
     ) -> tuple[ConversationMessage, ConversationMessage]:
         message_id = self._message_id(message_id or new_public_id())
-        with self.operations.workspace_operation(workspace, "reply", "正在确认需求"):
+        operation_id = self._message_id(operation_id or new_public_id())
+        with self.operations.workspace_operation(
+            workspace,
+            "reply",
+            "正在确认需求",
+            operation_id=operation_id,
+            message_id=message_id,
+        ) as operation:
             return self._send(
                 workspace,
                 model_id=model_id,
@@ -54,6 +62,7 @@ class ConversationReplyService(ConversationSupport):
                 generation_reference_ids=generation_reference_ids,
                 generation_mode=generation_mode,
                 message_id=message_id,
+                operation=operation,
             )
 
     def retry(
@@ -62,8 +71,16 @@ class ConversationReplyService(ConversationSupport):
         *,
         error_message_id: str,
         model_id: str,
+        operation_id: str = "",
     ) -> ConversationMessage:
-        with self.operations.workspace_operation(workspace, "reply", "正在重新确认需求"):
+        operation_id = self._message_id(operation_id or new_public_id())
+        with self.operations.workspace_operation(
+            workspace,
+            "reply",
+            "正在重新确认需求",
+            operation_id=operation_id,
+            message_id=error_message_id,
+        ) as operation:
             error_payload = db.session.scalar(
                 select(ConversationMessage.payload).where(
                     ConversationMessage.id == error_message_id,
@@ -97,7 +114,12 @@ class ConversationReplyService(ConversationSupport):
                 return current_reply
             self._ensure_workspace_unlocked(workspace)
             model = self._model(model_id)
-            return self._complete_reply(workspace, model, user_message)
+            return self._complete_reply(
+                workspace,
+                model,
+                user_message,
+                operation=operation,
+            )
 
     def _send(
         self,
@@ -109,6 +131,7 @@ class ConversationReplyService(ConversationSupport):
         generation_reference_ids: tuple[str, ...],
         generation_mode: str,
         message_id: str,
+        operation: ConversationOperation,
     ) -> tuple[ConversationMessage, ConversationMessage]:
         sent_at = utcnow()
         content = self._validate_message(content, has_attachments=bool(attachment_ids))
@@ -142,8 +165,14 @@ class ConversationReplyService(ConversationSupport):
                 return existing, reply
             self._ensure_workspace_unlocked(workspace)
             model = self._model(model_id)
-            return existing, self._complete_reply(workspace, model, existing)
+            return existing, self._complete_reply(
+                workspace,
+                model,
+                existing,
+                operation=operation,
+            )
 
+        operation.ensure_active()
         self._ensure_workspace_unlocked(workspace)
         model = self._model(model_id)
         attachments = self._load_assets(workspace, attachment_ids)
@@ -168,7 +197,12 @@ class ConversationReplyService(ConversationSupport):
         workspace.settings = {**(workspace.settings or {}), "prompt_draft_id": ""}
         workspace.updated_at = sent_at
         db.session.commit()
-        assistant_message = self._complete_reply(workspace, model, user_message)
+        assistant_message = self._complete_reply(
+            workspace,
+            model,
+            user_message,
+            operation=operation,
+        )
         return user_message, assistant_message
 
     def _complete_reply(
@@ -176,7 +210,10 @@ class ConversationReplyService(ConversationSupport):
         workspace: Workspace,
         model: ChatModelConfig,
         user_message: ConversationMessage,
+        *,
+        operation: ConversationOperation,
     ) -> ConversationMessage:
+        operation.ensure_active()
         attachments = [attachment.asset for attachment in user_message.attachments]
         payload = user_message.payload or {}
         generation_reference_ids = tuple(
@@ -231,6 +268,7 @@ class ConversationReplyService(ConversationSupport):
                 pending_image_keys=(f"asset:{asset.id}" for asset in context_attachments),
             )
             db.session.commit()
+            operation.ensure_active()
             result = self.client.complete(
                 model,
                 system=review.system_prompt(),
@@ -238,8 +276,15 @@ class ConversationReplyService(ConversationSupport):
                 max_output_tokens=min(model.max_output_tokens, 2400),
             )
         except OpenAIChatError as exc:
-            return self._error_reply(workspace, model, user_message, exc)
+            return self._error_reply(
+                workspace,
+                model,
+                user_message,
+                exc,
+                operation=operation,
+            )
 
+        operation.ensure_active()
         try:
             draft = review.finalize(
                 review.parse(result.content),
@@ -257,6 +302,7 @@ class ConversationReplyService(ConversationSupport):
                     request_id=result.request_id,
                     elapsed_seconds=result.elapsed_seconds,
                 ),
+                operation=operation,
             )
         reply_content, message_kind = review.message_content(draft)
         payload = {**draft, "reply_to_message_id": user_message.id}
@@ -270,6 +316,7 @@ class ConversationReplyService(ConversationSupport):
         )
         if message_kind == "prompt_draft":
             self._attach(assistant_message, generation_references)
+        operation.ensure_active()
         db.session.add(assistant_message)
         user_message.payload["reply_message_id"] = assistant_message.id
         self._record_chat_success(
@@ -287,6 +334,7 @@ class ConversationReplyService(ConversationSupport):
         )
         self._remember_preferences(workspace, model_id=model.identifier)
         workspace.updated_at = utcnow()
+        operation.ensure_active()
         db.session.commit()
         return assistant_message
 
@@ -390,7 +438,10 @@ class ConversationReplyService(ConversationSupport):
         model: ChatModelConfig,
         user_message: ConversationMessage,
         error: OpenAIChatError,
+        *,
+        operation: ConversationOperation,
     ) -> ConversationMessage:
+        operation.ensure_active()
         error_id = self._record_chat_error(workspace, model, "chat.reply", error)
         content = str(error)
         if error_id:
@@ -418,5 +469,6 @@ class ConversationReplyService(ConversationSupport):
         db.session.add(message)
         user_message.payload["reply_message_id"] = message.id
         workspace.updated_at = utcnow()
+        operation.ensure_active()
         db.session.commit()
         return message

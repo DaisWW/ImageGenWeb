@@ -1,4 +1,4 @@
-/* Studio-specific creative workflow, review, and slicing UI. */
+/* Studio-specific creative workflow and slicing UI. */
 
 .prompt-draft-meta {
   display: flex;
@@ -66,132 +66,20 @@
   height: 13px;
 }
 
-.quality-stage-switch {
-  display: grid;
-  height: 36px;
-  grid-column: 1 / -1;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 3px;
-  padding: 3px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface-2);
-}
-
-.quality-stage-switch button {
-  min-width: 0;
-  padding: 0 8px;
-  color: var(--muted);
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  font-size: 10px;
-}
-
-.quality-stage-switch button.active {
-  color: var(--text);
-  background: var(--surface-4);
-  box-shadow: 0 2px 8px rgb(0 0 0 / 20%);
-}
-
-.detail-actions {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.detail-review {
-  display: grid;
-  gap: 9px;
-  padding-block: 12px;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-}
-
-.detail-review header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  color: var(--muted);
-  font-size: 10px;
-}
-
-.detail-review header strong {
-  color: var(--text-soft);
-  font-size: 11px;
-}
-
-.detail-review.is-pass header strong { color: var(--success); }
-.detail-review.is-revise header strong { color: var(--danger); }
-
-.detail-review-scores {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.detail-review-scores span {
-  display: grid;
-  gap: 2px;
-  padding: 6px;
-  color: var(--muted);
-  border-left: 2px solid var(--line-strong);
-  background: var(--surface-2);
-  font-size: 9px;
-}
-
-.detail-review-scores strong {
-  color: var(--text);
-  font-size: 13px;
-}
-
-.detail-review ul {
-  display: grid;
-  gap: 6px;
-  padding: 0;
-  margin: 0;
-  list-style: none;
-}
-
-.detail-review li {
-  display: grid;
-  grid-template-columns: 14px minmax(0, 1fr);
-  gap: 6px;
-  color: var(--text-soft);
-  font-size: 10px;
-  line-height: 1.5;
-}
-
-.detail-review li::before {
-  color: var(--danger);
-  content: "x";
-  font-weight: 800;
-}
-
-.detail-review li.passed::before {
-  color: var(--success);
-  content: "OK";
-  font-size: 8px;
-}
-
-.detail-review > p {
-  padding: 8px 9px;
-  color: var(--text-soft);
-  border-left: 2px solid var(--accent);
-  background: var(--accent-muted);
-  font-size: 10px;
-  line-height: 1.6;
-}
-
 .slice-modal {
+  box-sizing: border-box;
   width: min(98vw, 1420px);
   max-width: min(98vw, 1420px);
+  max-height: calc(100dvh - 24px);
   overflow: hidden;
 }
 
 .slice-dialog-layout {
   display: grid;
-  height: min(94vh, 980px);
+  height: min(94dvh, 980px);
+  max-height: 100%;
   grid-template-columns: minmax(0, 1fr) 420px;
+  overflow: hidden;
 }
 
 .slice-preview-pane {
@@ -255,15 +143,15 @@
   min-height: 0;
   padding: 20px;
   place-items: center;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .slice-canvas {
   --preview-checker-dark: #20252a;
   --preview-checker-light: #3a4147;
   position: relative;
-  width: min(100%, calc((min(94vh, 980px) - 105px) * var(--slice-ratio, 1)));
-  max-height: calc(min(94vh, 980px) - 105px);
+  width: min(100%, calc((min(94dvh, 980px) - 105px) * var(--slice-ratio, 1)));
+  max-height: calc(min(94dvh, 980px) - 105px);
   aspect-ratio: var(--slice-ratio, 1);
   overflow: hidden;
   background:
@@ -342,6 +230,7 @@
 
 .slice-controls {
   display: grid;
+  min-height: 0;
   min-width: 0;
   grid-template-rows: auto auto auto minmax(110px, 1fr) auto;
   gap: 15px;
@@ -446,21 +335,43 @@ body:has(#generationForm:not([hidden])):has(#toastRegion .toast) #generationForm
 }
 
 @media (max-width: 920px) {
+  .slice-modal {
+    max-height: calc(100dvh - 16px);
+  }
+
   .slice-dialog-layout {
-    height: 92vh;
+    height: min(92dvh, calc(100dvh - 16px));
+    max-height: calc(100dvh - 16px);
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(330px, 55vh) minmax(0, 1fr);
-    overflow: auto;
+    grid-template-rows: minmax(240px, 40dvh) minmax(0, 1fr);
+    overflow: hidden;
   }
   .slice-controls {
-    min-height: 560px;
-    overflow: visible;
+    min-height: 0;
+    overflow: hidden;
     border-top: 1px solid var(--line);
     border-left: 0;
   }
   .slice-canvas {
-    width: min(100%, calc((55vh - 105px) * var(--slice-ratio, 1)));
-    max-height: calc(55vh - 105px);
+    width: min(100%, calc((40dvh - 105px) * var(--slice-ratio, 1)));
+    max-height: calc(40dvh - 105px);
+  }
+}
+
+@media (max-width: 920px) and (max-height: 700px) {
+  .slice-dialog-layout {
+    grid-template-rows: minmax(220px, 36dvh) auto;
+    overflow: auto;
+  }
+
+  .slice-controls {
+    min-height: 430px;
+    overflow: visible;
+  }
+
+  .slice-canvas {
+    width: min(100%, calc((36dvh - 105px) * var(--slice-ratio, 1)));
+    max-height: calc(36dvh - 105px);
   }
 }
 
@@ -473,6 +384,6 @@ body:has(#generationForm:not([hidden])):has(#toastRegion .toast) #generationForm
   .creative-direction-field { width: 100%; }
   .chat-toolbar .creative-direction-control { grid-column: 1 / -1; }
   .slice-preview-scroll { padding: 10px; }
-  .slice-controls { min-height: 600px; padding: 15px; }
+  .slice-controls { padding: 15px; }
   .slice-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

@@ -10,11 +10,6 @@
   to { transform: scale(1.075) translate3d(.9%, .6%, 0); }
 }
 
-@keyframes skeleton-flow {
-  from { background-position: 100% 0; }
-  to { background-position: -100% 0; }
-}
-
 @keyframes pending-dot {
   0%, 60%, 100% { opacity: .35; transform: translateY(0); }
   30% { opacity: 1; transform: translateY(-3px); }

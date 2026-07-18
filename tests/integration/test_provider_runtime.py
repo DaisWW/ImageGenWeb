@@ -220,6 +220,64 @@ class TestProviderAndRuntime(PlatformTestCase):
         self.assertTrue(first.closed)
         self.assertTrue(second.closed)
 
+    def test_chat_timeout_is_a_total_budget_across_retries(self):
+        model = replace(
+            self.app.extensions["chat_model_registry"].get("test-chat"),
+            timeout_seconds=10,
+        )
+        first = FakeChatResponse(status_code=502)
+        session = RecordingChatSession([first])
+        clock = [0.0]
+
+        def monotonic():
+            return clock[0]
+
+        def sleep(seconds):
+            clock[0] += seconds + 10
+
+        with patch("imagegen.integrations.openai_chat.time.monotonic", side_effect=monotonic):
+            with patch("imagegen.integrations.openai_chat.time.sleep", side_effect=sleep):
+                with self.assertRaises(OpenAIChatError) as raised:
+                    OpenAIChatClient(session).complete(
+                        model,
+                        system="系统提示",
+                        messages=[{"role": "user", "content": "你好"}],
+                    )
+
+        self.assertEqual(raised.exception.code, "chat_timeout")
+        self.assertEqual(len(session.requests), 1)
+        self.assertTrue(first.closed)
+
+    def test_chat_timeout_stops_a_stream_that_keeps_sending_data(self):
+        model = replace(
+            self.app.extensions["chat_model_registry"].get("test-chat"),
+            timeout_seconds=10,
+        )
+        clock = [0.0]
+
+        class KeepAliveResponse(FakeChatResponse):
+            def iter_lines(self, *, chunk_size=512, decode_unicode=False):
+                yield b": keep-alive"
+                clock[0] = 11.0
+                yield b""
+
+        response = KeepAliveResponse()
+        session = RecordingChatSession([response])
+
+        with patch(
+            "imagegen.integrations.openai_chat.time.monotonic", side_effect=lambda: clock[0]
+        ):
+            with self.assertRaises(OpenAIChatError) as raised:
+                OpenAIChatClient(session).complete(
+                    model,
+                    system="系统提示",
+                    messages=[{"role": "user", "content": "你好"}],
+                )
+
+        self.assertEqual(raised.exception.code, "chat_timeout")
+        self.assertGreaterEqual(raised.exception.elapsed_seconds, 10)
+        self.assertTrue(response.closed)
+
     def test_chat_does_not_retry_non_502_errors(self):
         model = self.app.extensions["chat_model_registry"].get("test-chat")
         response = FakeChatResponse(

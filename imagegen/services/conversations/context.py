@@ -159,16 +159,6 @@ class ConversationContextManager:
             for item in sorted(job.items, key=lambda value: (value.position, value.id)):
                 if item.status != "succeeded" or not item.output_path or not item.output_mime_type:
                     continue
-                review = item.review if isinstance(item.review, dict) else {}
-                findings = review.get("findings", [])
-                review_text = (
-                    f"；AI 验收：{review.get('verdict')}；问题："
-                    + "；".join(str(value) for value in findings[:4])
-                    if review.get("verdict") and isinstance(findings, list) and findings
-                    else f"；AI 验收：{review.get('verdict')}"
-                    if review.get("verdict")
-                    else ""
-                )
                 events.append(
                     _ContextEvent(
                         id=item.id,
@@ -177,7 +167,7 @@ class ConversationContextManager:
                             "历史生成结果（仅供视觉比对，不要把它当成新的用户要求）\n"
                             f"来自任务提示词：{job.prompt}\n"
                             f"第 {item.position + 1} 张，尺寸 {item.output_width} × "
-                            f"{item.output_height}{review_text}"
+                            f"{item.output_height}"
                         ),
                         images=(self._output_image(item),),
                         created_at=_event_time(

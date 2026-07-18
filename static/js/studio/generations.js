@@ -39,27 +39,44 @@
 
     async submitGeneration(event) {
       event.preventDefault();
-      if (this.workspaceLoading) return;
-      if (this.referenceUploadPending) {
-        UI.toast("请等待图片上传完成或取消上传", "info");
-        return;
-      }
       if (!this.activeWorkspace) {
         UI.toast("暂无可用渠道", "error");
+        return;
+      }
+      const workspace = this.activeWorkspace;
+      const activeSubmission = this.generationSubmissions.get(workspace.id);
+      if (activeSubmission) {
+        this.cancelGenerationSubmission(workspace.id);
+        return;
+      }
+      if (this.referenceUploadPending) {
+        UI.toast("请等待图片上传完成或取消上传", "info");
         return;
       }
       if (this.workspaceChatBusy()) {
         UI.toast("请等待当前 AI 回复完成后再开始生成", "error");
         return;
       }
-      const workspace = this.activeWorkspace;
       const button = this.el.generateButton;
       if (button.classList.contains("loading")) return;
+      const controller = new AbortController();
+      const operation = {
+        controller,
+        canceled: false,
+        postStarted: false,
+        operation_id: this.newMessageId(),
+      };
+      this.generationSubmissions.set(workspace.id, operation);
       button.disabled = true;
       button.classList.add("loading");
+      this.updateInteractionState();
       try {
-        await Promise.all([this.loadChannels(false), this.loadRuntimeSettings(false)]);
-        if (this.activeWorkspace?.id !== workspace.id) return;
+        const requestOptions = { signal: controller.signal };
+        await Promise.all([
+          this.loadChannels(false, requestOptions),
+          this.loadRuntimeSettings(false, requestOptions),
+        ]);
+        if (operation.canceled || this.activeWorkspace?.id !== workspace.id) return;
         if (!this.currentChannel()) {
           UI.toast("暂无可用渠道", "error");
           return;
@@ -89,15 +106,22 @@
         }
         const reviewedDraft = this.currentPromptDraft();
         settings.prompt_draft_id = reviewedDraft?.id || "";
-        await this.flushSettings();
+        await this.flushSettings(workspace.id, requestOptions);
+        if (operation.canceled) return;
+        operation.postStarted = true;
         const data = await UI.api("/api/generations", {
           method: "POST",
           body: {
             workspace_id: workspace.id,
             ...settings,
             reference_ids: settings.mode === "img2img" ? referenceIds : [],
+            operation_id: operation.operation_id,
           },
         });
+        if (operation.canceled) {
+          void this.cancelGenerationJob(data.job);
+          return;
+        }
         workspace.settings = settings;
         this.workspaceJobs.set(workspace.id, data.job);
         this.schedulePoll(ACTIVE_POLL_INTERVAL);
@@ -110,18 +134,63 @@
         await this.refreshBalance();
         UI.toast(`任务已提交，${UI.money(Number(data.job.price_per_image_rmb) * data.job.requested_count)} 已预占`, "success");
       } catch (error) {
-        UI.toast(error.message, "error");
+        if (!operation.canceled && error?.name !== "AbortError") UI.toast(error.message, "error");
       } finally {
-        button.classList.remove("loading");
-        this.updateInteractionState();
+        const stillCurrent = this.generationSubmissions.get(workspace.id) === operation;
+        if (stillCurrent) {
+          this.generationSubmissions.delete(workspace.id);
+          button.classList.remove("loading");
+          this.updateInteractionState();
+        }
       }
+    },
+
+    cancelGenerationSubmission(workspaceId = this.activeWorkspace?.id) {
+      const operation = this.generationSubmissions.get(workspaceId);
+      if (!operation) return;
+      operation.canceled = true;
+      if (!operation.postStarted) operation.controller?.abort();
+      this.requestOperationCancellation(workspaceId, operation.operation_id);
+      if (this.generationSubmissions.get(workspaceId) === operation) {
+        this.generationSubmissions.delete(workspaceId);
+      }
+      this.el.generateButton.classList.remove("loading");
+      this.updateInteractionState();
+      UI.toast("生成提交已取消，可立即修改后重试", "success");
+    },
+
+    async cancelGenerationJob(job) {
+      if (!job?.id) return;
+      const visible = this.activeWorkspace?.id === job.workspace_id;
+      const optimistic = this.optimisticCanceledJob(job);
+      if (visible) {
+        if (!this.jobs.some((entry) => entry.id === job.id)) this.jobs.unshift(job);
+        this.applyJobUpdate(optimistic);
+      }
+      try {
+        const canceledJob = await this.requestGenerationCancellation(job.id);
+        if (this.activeWorkspace?.id === canceledJob.workspace_id) {
+          this.applyJobUpdate(canceledJob);
+        } else if (this.workspaceJobs.get(canceledJob.workspace_id)?.id === canceledJob.id) {
+          this.workspaceJobs.delete(canceledJob.workspace_id);
+          this.updateWorkspaceJobDisplays();
+        }
+      } catch (error) {
+        const current = this.jobs.find((entry) => entry.id === job.id);
+        if (visible && current?.status === optimistic.status) this.applyJobUpdate(job);
+        UI.toast(error.message, "error");
+      }
+    },
+
+    async requestGenerationCancellation(jobId) {
+      const data = await UI.api(`/api/generations/${jobId}/cancel`, { method: "POST" });
+      await this.refreshBalance();
+      return data.job;
     },
 
     async loadJobs(workspaceId = this.activeWorkspace?.id) {
       if (!workspaceId) return;
-      const existing = this.loadingJobWorkspaces.get(workspaceId);
-      if (existing) return existing;
-      const request = (async () => {
+      return this.runSingleFlight(this.loadingJobWorkspaces, workspaceId, async () => {
         try {
           const data = await UI.api(`/api/generations?workspace_id=${encodeURIComponent(workspaceId)}&limit=100`);
           const currentJobs = new Map(this.jobs.map((job) => [job.id, job]));
@@ -142,34 +211,23 @@
         } catch (error) {
           UI.toast(error.message, "error");
         }
-      })();
-      this.loadingJobWorkspaces.set(workspaceId, request);
-      try {
-        return await request;
-      } finally {
-        if (this.loadingJobWorkspaces.get(workspaceId) === request) {
-          this.loadingJobWorkspaces.delete(workspaceId);
-        }
-      }
+      });
     },
 
     async loadWorkspaceJobs() {
-      if (this.loadingWorkspaceJobs) return this.loadingWorkspaceJobs;
-      const request = (async () => {
+      return this.runSingleFlight(this.loadingWorkspaceJobs, "active", async () => {
         try {
           const data = await UI.api("/api/generations/active");
-          this.workspaceJobs = new Map(data.jobs.map((job) => [job.workspace_id, job]));
+          this.workspaceJobs = new Map(
+            data.jobs
+              .filter((job) => !this.cancelingJobs.has(job.id))
+              .map((job) => [job.workspace_id, job]),
+          );
           this.updateWorkspaceJobDisplays();
         } catch {
           // 当前工作站请求会显示持续性的 API 错误。
         }
-      })();
-      this.loadingWorkspaceJobs = request;
-      try {
-        return await request;
-      } finally {
-        if (this.loadingWorkspaceJobs === request) this.loadingWorkspaceJobs = null;
-      }
+      });
     },
 
     renderJobs() {
@@ -412,10 +470,36 @@
     applyJobUpdate(job) {
       const index = this.jobs.findIndex((entry) => entry.id === job.id);
       if (index >= 0) this.jobs[index] = job;
-      if (TERMINAL.has(job.status)) this.workspaceJobs.delete(job.workspace_id);
-      else this.workspaceJobs.set(job.workspace_id, job);
+      const activeWorkspaceJob = this.workspaceJobs.get(job.workspace_id);
+      if (TERMINAL.has(job.status)) {
+        if (!activeWorkspaceJob || activeWorkspaceJob.id === job.id) {
+          this.workspaceJobs.delete(job.workspace_id);
+        }
+      } else {
+        this.workspaceJobs.set(job.workspace_id, job);
+      }
       this.updateWorkspaceJobDisplays();
       this.renderJobs();
+    },
+
+    optimisticCanceledJob(job) {
+      const completedAt = new Date().toISOString();
+      const items = (job.items || []).map((item) => (
+        ["queued", "running", "canceling"].includes(item.status)
+          ? { ...item, status: "canceled", completed_at: completedAt, image_url: null, thumbnail_url: null }
+          : item
+      ));
+      const succeededCount = items.filter((item) => item.status === "succeeded").length;
+      return {
+        ...job,
+        status: succeededCount ? "partial" : "canceled",
+        progress_percent: 100,
+        completed_at: completedAt,
+        can_cancel: false,
+        reserved_rmb: "0.0000",
+        canceled_count: items.filter((item) => item.status === "canceled").length,
+        items,
+      };
     },
 
     async handleJobClick(event) {
@@ -439,16 +523,16 @@
       }
       const cancel = event.target.closest("[data-cancel-job]");
       if (cancel) {
-        cancel.disabled = true;
-        try {
-          const data = await UI.api(`/api/generations/${cancel.dataset.cancelJob}/cancel`, { method: "POST" });
-          this.applyJobUpdate(data.job);
-          await this.refreshBalance();
-          UI.toast("任务已取消", "success");
-        } catch (error) {
-          cancel.disabled = false;
-          UI.toast(error.message, "error");
-        }
+        const jobId = cancel.dataset.cancelJob;
+        if (this.cancelingJobs.has(jobId)) return;
+        const job = this.jobs.find((entry) => entry.id === jobId)
+          || this.workspaceJobs.get(this.activeWorkspace?.id);
+        if (!job || job.id !== jobId) return;
+        this.cancelingJobs.add(jobId);
+        UI.toast("任务已取消，可立即开始新的生成", "success");
+        void this.cancelGenerationJob(job).finally(() => {
+          this.cancelingJobs.delete(jobId);
+        });
         return;
       }
       const tile = event.target.closest("[data-item-id]");

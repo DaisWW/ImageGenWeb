@@ -5,9 +5,6 @@ COOKBOOK_GUIDE = (
     "https://github.com/openai/openai-cookbook/blob/main/examples/multimodal/"
     "image-gen-models-prompting-guide.ipynb"
 )
-COOKBOOK_EVALS = "https://github.com/openai/openai-cookbook/tree/main/examples/evals/imagegen_evals"
-
-
 PROMPT_CRAFT_GUIDANCE = """提示词工程规范来自 OpenAI Cookbook、awesome-gpt-image-2 和 GPT-Image2-Skill：
 1. 先写交付物与用途，再按画布/布局 → 主体/任务 → 环境/细节 → 约束组织；选择可维护的清晰格式，不堆砌关键词。复杂商品、食品或多系统画面可使用干净的 JSON/config 分区。
 2. 精确文字逐条使用直引号，注明语言、大小层级、位置和可读性；不得补写用户未提供的品牌、价格、日期或文案。密集中文最终交付使用 high，并明确禁止乱码、拼音和额外英文。

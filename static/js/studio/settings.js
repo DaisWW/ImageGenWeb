@@ -4,12 +4,10 @@
   const {
     StudioApp,
     UI,
-    STATUS,
     COMPOSER_CLOSE_TIMEOUT,
     IMAGE_SIZE_PATTERN,
     IMAGE_DIMENSION_MIN,
     IMAGE_DIMENSION_MAX,
-    setText,
     setAttribute,
   } = window.ImageGenStudio;
 
@@ -46,6 +44,20 @@
 
     updatePromptCounter() {
       this.el.promptCounter.textContent = `${this.el.promptInput.value.length} / ${this.limits.max_prompt_characters}`;
+    },
+
+    async copyPrompt() {
+      const prompt = this.el.promptInput.value;
+      if (!prompt.trim()) {
+        UI.toast("暂无可复制的提示词", "info");
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(prompt);
+        UI.toast("提示词已复制", "success");
+      } catch (_error) {
+        UI.toast("复制失败，请手动复制", "error");
+      }
     },
 
     applyWorkspaceSettings() {
@@ -85,7 +97,6 @@
       this.applyChannel(settings, false);
       const mode = this.isAnimationWorkspace() ? "img2img" : (settings.mode || "text2img");
       this.setMode(mode, false);
-      this.setGenerationStage(settings.generation_stage || "draft", false);
       this.el.saveState.textContent = "参数已保存";
       this.updatePromptReviewState();
     },
@@ -264,17 +275,6 @@
       if (shouldSave) this.settingChanged();
     },
 
-    setGenerationStage(stage, shouldSave) {
-      const normalized = ["draft", "refine", "final"].includes(stage) ? stage : "draft";
-      this.el.qualityStageSwitch.dataset.stage = normalized;
-      this.el.qualityStageSwitch.querySelectorAll("[data-generation-stage]").forEach((button) => {
-        const active = button.dataset.generationStage === normalized;
-        button.classList.toggle("active", active);
-        button.setAttribute("aria-pressed", String(active));
-      });
-      if (shouldSave) this.settingChanged();
-    },
-
     currentPromptDraft() {
       const draftId = this.activeWorkspace?.settings?.prompt_draft_id;
       if (!draftId) return null;
@@ -297,12 +297,6 @@
 
     updatePromptReviewState() {
       if (!this.el?.promptReviewStatus) return;
-      const reviewed = Boolean(this.currentPromptDraft());
-      this.el.promptReviewStatus.classList.toggle("is-reviewed", reviewed);
-      setText(
-        this.el.promptReviewStatus.querySelector("span"),
-        reviewed ? "最终提示词已就绪" : "可直接编辑提示词",
-      );
       this.updateInteractionState();
     },
 
@@ -334,7 +328,7 @@
         translate_prompt: this.el.translatePrompt.checked,
         creative_direction_id: this.el.creativeDirectionSelect.value || "auto",
         prompt_draft_id: this.activeWorkspace?.settings?.prompt_draft_id || "",
-        generation_stage: this.el.qualityStageSwitch.dataset.stage || "draft",
+        generation_stage: this.activeWorkspace?.settings?.generation_stage || "draft",
         reference_ids: [...this.currentSelection()],
       };
     },
@@ -351,15 +345,15 @@
       }, 550);
     },
 
-    async flushSettings(workspaceId = this.activeWorkspace?.id) {
+    async flushSettings(workspaceId = this.activeWorkspace?.id, options = {}) {
       if (!workspaceId || this.activeWorkspace?.id !== workspaceId) return;
       if (this.saveTimer === null) return;
       window.clearTimeout(this.saveTimer);
       this.saveTimer = null;
-      await this.saveSettings();
+      await this.saveSettings(options);
     },
 
-    async saveSettings() {
+    async saveSettings(options = {}) {
       const workspace = this.activeWorkspace;
       if (!workspace) return;
       if (!this.validateSizeInput(false)) {
@@ -371,10 +365,12 @@
         const data = await UI.api(`/api/workspaces/${workspace.id}`, {
           method: "PATCH",
           body: { settings },
+          ...options,
         });
         workspace.settings = data.workspace.settings;
         if (workspace === this.activeWorkspace) this.el.saveState.textContent = "参数已保存";
       } catch (error) {
+        if (error?.name === "AbortError") return;
         if (workspace === this.activeWorkspace) this.el.saveState.textContent = "保存失败";
         UI.toast(error.message, "error");
       }

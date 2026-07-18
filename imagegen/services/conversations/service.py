@@ -14,17 +14,15 @@ from ...models import (
     ConversationAttachment,
     ConversationMessage,
     ConversationState,
-    GenerationItem,
     Workspace,
 )
 from ...storage import ImageStorage
 from ..runtime_logs import RuntimeLogService
 from ..settings import SystemSettingsService
 from .context import ConversationContextManager
-from .operations import ConversationOperationRegistry
+from .operations import ConversationOperation, ConversationOperationRegistry
 from .prompt_workflow import PromptDraftWorkflow
 from .replies import ConversationReplyService
-from .review_workflow import ImageReviewWorkflow
 from .support import ConversationDependencies
 
 
@@ -56,7 +54,6 @@ class ConversationService:
         self.operations = ConversationOperationRegistry(settings)
         self.replies = ConversationReplyService(self.dependencies, self.operations)
         self.prompt_drafts = PromptDraftWorkflow(self.dependencies, self.operations)
-        self.image_reviews = ImageReviewWorkflow(self.dependencies, self.operations)
 
     @property
     def client(self) -> OpenAIChatClient:
@@ -111,6 +108,7 @@ class ConversationService:
         generation_reference_ids: tuple[str, ...] = (),
         generation_mode: str = "",
         message_id: str = "",
+        operation_id: str = "",
     ) -> tuple[ConversationMessage, ConversationMessage]:
         return self.replies.send(
             workspace,
@@ -120,6 +118,7 @@ class ConversationService:
             generation_reference_ids=generation_reference_ids,
             generation_mode=generation_mode,
             message_id=message_id,
+            operation_id=operation_id,
         )
 
     def retry(
@@ -128,11 +127,13 @@ class ConversationService:
         *,
         error_message_id: str,
         model_id: str,
+        operation_id: str = "",
     ) -> ConversationMessage:
         return self.replies.retry(
             workspace,
             error_message_id=error_message_id,
             model_id=model_id,
+            operation_id=operation_id,
         )
 
     def create_prompt_draft(
@@ -171,14 +172,6 @@ class ConversationService:
             reference_ids=reference_ids,
         )
 
-    def review_generation_item(
-        self,
-        item: GenerationItem,
-        *,
-        model_id: str,
-    ) -> dict[str, Any]:
-        return self.image_reviews.review_generation_item(item, model_id=model_id)
-
     def state_dict(self, workspace: Workspace) -> dict[str, Any]:
         state = db.session.get(ConversationState, workspace.id)
         return {
@@ -190,8 +183,16 @@ class ConversationService:
     def operation_state(self, workspace_id: str) -> dict[str, Any]:
         return self.operations.state(workspace_id)
 
-    def generation_submission(self, workspace: Workspace) -> AbstractContextManager[None]:
-        return self.operations.generation_submission(workspace)
+    def cancel_operation(self, workspace_id: str, operation_id: str) -> bool:
+        return self.operations.cancel(workspace_id, operation_id)
+
+    def generation_submission(
+        self,
+        workspace: Workspace,
+        *,
+        operation_id: str = "",
+    ) -> AbstractContextManager[ConversationOperation]:
+        return self.operations.generation_submission(workspace, operation_id=operation_id)
 
     def workspace_mutation(
         self,

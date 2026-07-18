@@ -110,6 +110,8 @@
         this.chatReferenceSelections.delete(workspaceId);
         this.chatDrafts.delete(workspaceId);
         this.chatOperations.delete(workspaceId);
+        this.canceledChatOperationIds.delete(workspaceId);
+        this.cancelGenerationSubmission?.(workspaceId);
         this.workspaceJobs.delete(workspaceId);
         this.clearOutgoingMessages(workspaceId);
         this.workspaces.splice(index, 1);
@@ -158,6 +160,7 @@
         this.referenceSelections.set(workspace.id, new Set());
         this.chatReferenceSelections.set(workspace.id, new Set());
         this.chatDrafts.set(workspace.id, "");
+        this.canceledChatOperationIds.delete(workspace.id);
         this.clearOutgoingMessages(workspace.id);
         this.chatReferencePickerOpen = false;
         this.applyWorkspaceSettings();
