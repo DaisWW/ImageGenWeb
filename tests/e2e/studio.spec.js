@@ -160,6 +160,51 @@ test("switching workspaces stays interactive and pending chat remains cancelable
   await deleteWorkspace(page, name);
 });
 
+test("switching to a known active workspace stays locked while history loads", async ({
+  studioPage: page,
+}) => {
+  const initial = page.locator("#workspaceList .workspace-item.active");
+  const initialId = await initial.getAttribute("data-workspace-id");
+  const name = `E2E-Switch-Active-${Date.now()}`;
+  await createWorkspace(page, name);
+  const createdId = await page.locator("#workspaceList .workspace-item.active")
+    .getAttribute("data-workspace-id");
+  const history = deferred();
+  const activeJob = {
+    id: "e2e-known-active-job",
+    workspace_id: initialId,
+    status: "running",
+    progress_percent: 35,
+    estimated_end_at: null,
+  };
+
+  await page.route("**/api/generations/active", async (route) => {
+    await route.fulfill({ json: { jobs: [activeJob] } });
+  });
+  await page.route("**/api/generations?*", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("workspace_id") === initialId) {
+      await history.promise;
+      await route.fulfill({ json: { jobs: [], queue_total: 0 } });
+      return;
+    }
+    await route.continue();
+  });
+
+  try {
+    await page.reload();
+    const target = page.locator(`[data-workspace-id="${initialId}"]`);
+    await expect(target.locator(".workspace-meta")).toContainText("生成中 35%");
+    await target.locator("[data-select-workspace]").click();
+    await expect(page.locator("#chatInput")).toBeDisabled({ timeout: 1000 });
+  } finally {
+    history.resolve();
+  }
+
+  await page.locator(`[data-workspace-id="${createdId}"] [data-select-workspace]`).click();
+  await deleteWorkspace(page, name);
+});
+
 test("direct generation bypasses AI conversation", { tag: "@responsive" }, async ({
   studioPage: page,
 }) => {
