@@ -285,11 +285,12 @@
         imageToast = "",
       },
     ) {
-      if (!workspace || !asset || this.activeWorkspace?.id !== workspace.id) return;
+      if (!workspace || !asset) return;
       if (!workspace.assets.some((entry) => entry.id === asset.id)) {
         workspace.assets.push(asset);
       }
       this.renderWorkspaceList();
+      if (this.activeWorkspace?.id !== workspace.id) return;
       if (workspace.kind === "animation") {
         const selection = this.currentSelection(workspace.id);
         selection.clear();

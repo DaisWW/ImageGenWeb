@@ -4,6 +4,22 @@ const {
   test,
 } = require("./fixtures");
 
+test("late reference response updates the original workspace cache", async ({
+  studioPage: page,
+}) => {
+  const result = await page.evaluate(async () => {
+    const workspace = { id: "original-workspace", assets: [] };
+    let renders = 0;
+    await window.ImageGenStudio.StudioApp.prototype.applyReferenceAsset.call({
+      activeWorkspace: { id: "new-workspace" },
+      renderWorkspaceList: () => { renders += 1; },
+    }, { id: "late-asset" }, { workspace });
+    return { assetIds: workspace.assets.map((asset) => asset.id), renders };
+  });
+
+  expect(result).toEqual({ assetIds: ["late-asset"], renders: 1 });
+});
+
 test("image detail keeps its reference through multi-turn refinement", async ({
   studioPage: page,
 }) => {
