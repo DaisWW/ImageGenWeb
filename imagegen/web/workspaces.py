@@ -191,7 +191,6 @@ def retry_conversation_message(workspace_id: str, message_id: str):
     ), 201
 
 
-@web.post("/api/workspaces/<workspace_id>/messages/<operation_id>/cancel")
 @web.post("/api/workspaces/<workspace_id>/operations/<operation_id>/cancel")
 @login_required
 def cancel_workspace_operation(workspace_id: str, operation_id: str):

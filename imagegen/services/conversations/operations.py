@@ -127,12 +127,12 @@ class ConversationOperationRegistry:
         )
         with self._operation_lock:
             self._prune_canceled_locked()
-            canceled = any(
-                self._canceled_operations.pop((workspace.id, identifier), None) is not None
+            canceled = [
+                self._canceled_operations.pop((workspace.id, identifier), None)
                 for identifier in (operation.operation_id, operation.message_id)
                 if identifier
-            )
-            if canceled:
+            ]
+            if any(created is not None for created in canceled):
                 operation.cancel_event.set()
                 operation.ensure_active()
             active = self._operations.get(workspace.id)

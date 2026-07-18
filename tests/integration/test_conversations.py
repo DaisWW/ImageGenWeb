@@ -229,7 +229,7 @@ class TestConversations(PlatformTestCase):
             self.assertTrue(client.started.wait(5))
             self.assertTrue(conversations.operation_state(workspace.id)["busy"])
             response = self.user_client().post(
-                f"/api/workspaces/{workspace.id}/messages/{'b' * 32}/cancel"
+                f"/api/workspaces/{workspace.id}/operations/{'b' * 32}/cancel"
             )
             self.assertEqual(response.status_code, 200)
             self.assertFalse(conversations.operation_state(workspace.id)["busy"])
@@ -253,20 +253,29 @@ class TestConversations(PlatformTestCase):
         )
         self.assertEqual(assistant_message.role, "assistant")
 
-    def test_chat_cancel_tombstone_accepts_zero_timestamp(self):
+    def test_chat_cancel_tombstones_are_consumed_at_zero_timestamp(self):
         workspace = self.create_workspace("零时间取消")
         conversations = self.services.conversations
 
         with patch("imagegen.services.conversations.operations.monotonic", return_value=0.0):
             self.assertFalse(conversations.cancel_operation(workspace.id, "d" * 32))
+            self.assertFalse(conversations.cancel_operation(workspace.id, "e" * 32))
             with self.assertRaises(ServiceError) as raised:
                 with conversations.operations.workspace_operation(
                     workspace,
                     "reply",
                     "等待回复",
                     operation_id="d" * 32,
+                    message_id="e" * 32,
                 ):
                     pass
+            with conversations.operations.workspace_operation(
+                workspace,
+                "reply",
+                "再次等待回复",
+                operation_id="e" * 32,
+            ):
+                pass
 
         self.assertEqual(raised.exception.code, "conversation_canceled")
 

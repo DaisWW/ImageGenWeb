@@ -149,8 +149,11 @@
       const operation = this.generationSubmissions.get(workspaceId);
       if (!operation) return;
       operation.canceled = true;
-      if (!operation.postStarted) operation.controller?.abort();
-      this.requestOperationCancellation(workspaceId, operation.operation_id);
+      if (operation.postStarted) {
+        this.requestOperationCancellation(workspaceId, operation.operation_id);
+      } else {
+        operation.controller?.abort();
+      }
       if (this.generationSubmissions.get(workspaceId) === operation) {
         this.generationSubmissions.delete(workspaceId);
       }
