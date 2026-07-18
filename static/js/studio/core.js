@@ -37,6 +37,8 @@
     "[data-job-quality]",
     "[data-job-count]",
     "[data-job-charge]",
+    "[data-job-error]",
+    "[data-job-error-message]",
     "[data-animation-result]",
     "[data-animation-image]",
     "[data-animation-meta]",

@@ -201,6 +201,10 @@
               <span data-job-size></span><span data-job-quality></span>
               <span data-job-count></span><span data-job-charge></span>
             </div>
+            <div class="job-error" data-job-error role="alert" hidden>
+              <i data-lucide="circle-alert"></i>
+              <span><strong>失败原因：</strong><span data-job-error-message></span></span>
+            </div>
           </div>
           <div class="animation-result" data-animation-result hidden>
             <div class="animation-preview"><img data-animation-image alt="动画预览" decoding="async"></div>
@@ -242,6 +246,8 @@
         quality: fields.jobQuality,
         count: fields.jobCount,
         charge: fields.jobCharge,
+        error: fields.jobError,
+        errorMessage: fields.jobErrorMessage,
         animationResult: fields.animationResult,
         animationImage: fields.animationImage,
         animationMeta: fields.animationMeta,
@@ -307,6 +313,14 @@
         : job.kind === "animation_master" ? "张母图" : "张";
       setText(elements.count, `${job.succeeded_count}/${job.requested_count} ${unit}`);
       setText(elements.charge, `${UI.money(job.charged_rmb)} 已扣`);
+      const failureReasons = [...new Set(
+        (job.items || [])
+          .filter((item) => ["failed", "interrupted"].includes(item.status))
+          .map((item) => String(item.error || "").trim())
+          .filter(Boolean),
+      )];
+      setHidden(elements.error, !failureReasons.length);
+      setText(elements.errorMessage, failureReasons.join("；"));
       setHidden(elements.animationResult, !job.animation_url);
       if (job.animation_url) {
         if (elements.animationImage.dataset.url !== job.animation_url) {
@@ -325,6 +339,7 @@
       if (!elements.eta.hidden) UI.icons(elements.eta);
       if (!elements.retry.hidden) UI.icons(elements.retry);
       if (!elements.cancel.hidden) UI.icons(elements.cancel);
+      if (!elements.error.hidden) UI.icons(elements.error);
       if (!elements.animationResult.hidden) UI.icons(elements.animationDownload);
       return article;
     },

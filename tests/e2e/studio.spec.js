@@ -359,6 +359,66 @@ test("active generation locks prompt reuse and cancellation unlocks immediately"
   await expect(page.getByText("取消中", { exact: true })).toHaveCount(0);
 });
 
+test("failed generation shows the provider reason once", {
+  tag: "@responsive",
+}, async ({ studioPage: page }) => {
+  const workspaceId = await page.locator("#workspaceList .workspace-item.active")
+    .getAttribute("data-workspace-id");
+  const createdAt = new Date().toISOString();
+  const reason = "渠道错误：请上传需要转换的照片";
+  const failedJob = {
+    id: "e2e-failed-job",
+    workspace_id: workspaceId,
+    status: "failed",
+    progress_percent: 100,
+    queue_position: null,
+    queue_total: 0,
+    estimated_end_at: null,
+    is_over_estimate: false,
+    kind: "image",
+    channel: "E2E 渠道",
+    prompt: "把这张照片转换成涂鸦插画",
+    model: "e2e-image",
+    size: "1024x1024",
+    quality: "low",
+    requested_count: 2,
+    charged_rmb: "0.0000",
+    created_at: createdAt,
+    succeeded_count: 0,
+    can_cancel: false,
+    can_retry: false,
+    transparent_background: false,
+    animation_url: null,
+    items: [0, 1].map((position) => ({
+      id: `e2e-failed-item-${position}`,
+      position,
+      status: "failed",
+      error: reason,
+      image_url: null,
+      thumbnail_url: null,
+    })),
+  };
+
+  await page.route("**/api/generations*", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/api/generations/active") {
+      await route.fulfill({ json: { jobs: [] } });
+      return;
+    }
+    if (url.pathname === "/api/generations") {
+      await route.fulfill({ json: { jobs: [failedJob], queue_total: 0 } });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.reload();
+  const jobCard = page.locator(`[data-job-id="${failedJob.id}"]`);
+  await expect(jobCard.locator("[data-job-error]")).toBeVisible();
+  await expect(jobCard.locator("[data-job-error-message]")).toHaveText(reason);
+  await expect(jobCard.getByText(reason, { exact: true })).toHaveCount(1);
+});
+
 test("latest toast does not cover the generation composer", {
   tag: "@responsive",
 }, async ({ studioPage: page }) => {

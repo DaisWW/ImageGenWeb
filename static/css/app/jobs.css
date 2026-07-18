@@ -170,6 +170,37 @@
   margin-top: 9px;
 }
 
+.job-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-top: 9px;
+  padding: 7px 9px;
+  color: #efb0b3;
+  border: 1px solid #65343a;
+  border-radius: 4px;
+  background: var(--danger-muted);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.job-error > svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  margin-top: 1px;
+  color: var(--danger);
+}
+
+.job-error > span {
+  min-width: 0;
+}
+
+.job-error strong {
+  white-space: nowrap;
+}
+
 .job-meta span,
 .admin-job-detail span,
 .capability-list span {
