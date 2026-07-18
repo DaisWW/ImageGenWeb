@@ -133,6 +133,8 @@
       this.libraryTotal = 0;
       this.libraryOffset = 0;
       this.libraryUploading = false;
+      this.librarySelection = new Set();
+      this.libraryBusy = false;
       this.channelVersion = "";
       this.chatModelVersion = "";
       this.runtimeRevision = "";
@@ -306,6 +308,10 @@
         libraryGrid: byId("libraryGrid"),
         libraryPagination: byId("libraryPagination"),
         libraryLoadMoreButton: byId("libraryLoadMoreButton"),
+        librarySelectionSummary: byId("librarySelectionSummary"),
+        librarySelectAllButton: byId("librarySelectAllButton"),
+        libraryClearSelectionButton: byId("libraryClearSelectionButton"),
+        libraryConfirmButton: byId("libraryConfirmButton"),
       };
     }
 
@@ -500,10 +506,14 @@
         this.uploadLibraryImages([...this.el.libraryInput.files]);
       });
       this.el.libraryGrid.addEventListener("click", (event) => this.handleLibraryClick(event));
+      this.el.libraryGrid.addEventListener("change", (event) => this.handleLibrarySelectionChange(event));
       this.el.libraryRetryButton.addEventListener("click", () => this.loadLibraryImages());
       this.el.libraryLoadMoreButton.addEventListener("click", () => {
         this.loadLibraryImages({ append: true });
       });
+      this.el.librarySelectAllButton.addEventListener("click", () => this.selectAllLibraryImages());
+      this.el.libraryClearSelectionButton.addEventListener("click", () => this.clearLibrarySelection());
+      this.el.libraryConfirmButton.addEventListener("click", () => this.confirmLibrarySelection());
       this.el.libraryDropArea.addEventListener("dragover", (event) => this.handleLibraryDrag(event));
       this.el.libraryDropArea.addEventListener("drop", (event) => this.handleLibraryDrop(event));
       document.addEventListener("visibilitychange", () => {

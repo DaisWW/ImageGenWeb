@@ -17,6 +17,7 @@
       this.libraryTarget = target || (
         this.isAnimationWorkspace() || !this.el.generationForm.hidden ? "generation" : "chat"
       );
+      this.librarySelection.clear();
       this.el.libraryTargetLabel.textContent = this.libraryTarget === "chat"
         ? "随消息发送"
         : this.isAnimationWorkspace() ? "设为母图" : "设为垫图";
@@ -67,29 +68,114 @@
       setHidden(this.el.libraryPagination, unloaded || !this.libraryHasMore);
       setDisabled(
         this.el.libraryUploadButton,
-        unloaded || this.libraryLoading || this.libraryUploading,
+        unloaded || this.libraryLoading || this.libraryUploading || this.libraryBusy,
       );
-      setDisabled(this.el.libraryLoadMoreButton, this.libraryLoading);
+      setDisabled(this.el.libraryLoadMoreButton, this.libraryLoading || this.libraryBusy);
       this.el.libraryLoadMoreButton.classList.toggle("loading", this.libraryLoading && !unloaded);
       const action = this.libraryTarget === "chat"
         ? "随消息发送"
         : this.isAnimationWorkspace() ? "设为母图" : "设为垫图";
+      const disabled = this.libraryBusy ? " disabled" : "";
       this.el.libraryGrid.innerHTML = images.map((entry) => {
         const id = UI.escapeHtml(entry.id);
         const name = UI.escapeHtml(entry.name);
         const url = UI.escapeHtml(entry.thumbnail_url || entry.url);
         const useTitle = UI.escapeHtml(`${action}：${entry.name}`);
+        const selected = this.librarySelection.has(entry.id);
+        const selectTitle = UI.escapeHtml(selected ? `取消选择 ${entry.name}` : `选择 ${entry.name}`);
         const deleteTitle = UI.escapeHtml(`从图库删除 ${entry.name}`);
-        return `<article class="library-card">
-          <button type="button" class="library-use" data-use-library-image="${id}" title="${useTitle}">
+        return `<article class="library-card${selected ? " selected" : ""}" data-library-image="${id}">
+          <button type="button" class="library-use" data-use-library-image="${id}" title="${useTitle}"${disabled}>
             <span class="library-thumbnail"><img src="${url}" alt="${name}" loading="lazy" decoding="async"></span>
             <span class="library-card-copy"><strong>${name}</strong></span>
           </button>
-          <button type="button" class="icon-button library-delete" data-delete-library-image="${id}" title="${deleteTitle}" aria-label="${deleteTitle}"><i data-lucide="trash-2"></i></button>
+          <label class="library-select" title="${selectTitle}">
+            <input type="checkbox" data-select-library-image="${id}"${selected ? " checked" : ""}${disabled} aria-label="${selectTitle}">
+          </label>
+          <button type="button" class="icon-button library-delete" data-delete-library-image="${id}" title="${deleteTitle}" aria-label="${deleteTitle}"${disabled}><i data-lucide="trash-2"></i></button>
         </article>`;
       }).join("");
       this.el.libraryGrid.querySelectorAll("img").forEach((image) => this.prepareImageReveal(image));
       UI.icons(this.el.libraryGrid);
+      this.updateLibrarySelectionUI();
+    },
+
+    librarySelectionContext(workspace = this.activeWorkspace) {
+      const target = this.libraryTarget;
+      const rawLimit = Number(this.referenceSelectionLimit(target, workspace));
+      const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 0;
+      const replacesAnimationMaster = workspace?.kind === "animation"
+        && target === "generation";
+      const selection = target === "chat"
+        ? this.currentChatSelection(workspace?.id)
+        : this.currentSelection(workspace?.id);
+      const available = replacesAnimationMaster
+        ? 1
+        : Math.max(0, limit - selection.size);
+      return { target, limit, selection, replacesAnimationMaster, available };
+    },
+
+    updateLibrarySelectionUI() {
+      if (!this.el?.librarySelectionSummary) return;
+      const { limit, selection, replacesAnimationMaster } = this.librarySelectionContext();
+      const selectionCount = this.librarySelection.size;
+      const existing = replacesAnimationMaster ? 0 : selection.size;
+      this.el.librarySelectionSummary.textContent = limit > 0
+        ? `已选择 ${existing + selectionCount} / ${limit} 张`
+        : `已选择 ${selectionCount} 张`;
+      const hasImages = (this.libraryImages || []).length > 0;
+      setDisabled(this.el.librarySelectAllButton, this.libraryBusy || this.libraryLoading || !hasImages);
+      setDisabled(this.el.libraryClearSelectionButton, this.libraryBusy || !selectionCount);
+      setDisabled(this.el.libraryConfirmButton, this.libraryBusy || !selectionCount);
+      this.el.libraryConfirmButton.classList.toggle("is-loading", this.libraryBusy);
+    },
+
+    handleLibrarySelectionChange(event) {
+      const input = event.target.closest("[data-select-library-image]");
+      if (!input) return;
+      const imageId = input.dataset.selectLibraryImage;
+      if (input.checked) {
+        const { target, limit, available } = this.librarySelectionContext();
+        if (!this.librarySelection.has(imageId) && this.librarySelection.size >= available) {
+          input.checked = false;
+          UI.toast(target === "chat"
+            ? `每条消息最多发送 ${limit} 张图片`
+            : `当前渠道最多选择 ${limit} 张垫图`, "error");
+          return;
+        }
+        this.librarySelection.add(imageId);
+      } else {
+        this.librarySelection.delete(imageId);
+      }
+      this.renderLibrary();
+    },
+
+    selectAllLibraryImages() {
+      if (this.libraryBusy || this.libraryLoading) return;
+      const images = this.libraryImages || [];
+      const available = this.librarySelectionContext().available - this.librarySelection.size;
+      if (available <= 0) {
+        UI.toast("已达到当前场景的图片上限", "info");
+        return;
+      }
+      images.filter((image) => !this.librarySelection.has(image.id))
+        .slice(0, available)
+        .forEach((image) => this.librarySelection.add(image.id));
+      this.renderLibrary();
+      if (images.some((image) => !this.librarySelection.has(image.id))) {
+        UI.toast("已按当前场景上限选择图片", "info");
+      }
+    },
+
+    clearLibrarySelection() {
+      if (this.libraryBusy) return;
+      this.librarySelection.clear();
+      this.renderLibrary();
+    },
+
+    async confirmLibrarySelection() {
+      if (!this.librarySelection.size) return;
+      await this.useLibraryImages([...this.librarySelection]);
     },
 
     mergeLibraryImages(images, addedCount = 0) {
@@ -108,7 +194,7 @@
     async uploadLibraryImages(files) {
       this.el.libraryInput.value = "";
       if (!files.length || this.libraryImages === null
-        || this.libraryLoading || this.libraryUploading) return;
+        || this.libraryLoading || this.libraryUploading || this.libraryBusy) return;
       const images = files.filter((file) => (
         REFERENCE_IMAGE_TYPES.has(file.type.toLowerCase())
         || REFERENCE_IMAGE_EXTENSION.test(file.name)
@@ -144,14 +230,15 @@
       event.preventDefault();
       const blocked = this.libraryImages === null
         || this.libraryLoading
-        || this.libraryUploading;
+        || this.libraryUploading
+        || this.libraryBusy;
       event.dataTransfer.dropEffect = blocked ? "none" : "copy";
     },
 
     handleLibraryDrop(event) {
       if (![...(event.dataTransfer?.types || [])].includes("Files")) return;
       event.preventDefault();
-      if (this.libraryImages === null || this.libraryLoading || this.libraryUploading) return;
+      if (this.libraryImages === null || this.libraryLoading || this.libraryUploading || this.libraryBusy) return;
       this.uploadLibraryImages([...event.dataTransfer.files]);
     },
 
@@ -164,6 +251,7 @@
         try {
           await UI.api(`/api/library-images/${image.id}`, { method: "DELETE" });
           this.libraryImages = this.libraryImages.filter((entry) => entry.id !== image.id);
+          this.librarySelection.delete(image.id);
           this.libraryTotal = Math.max(0, this.libraryTotal - 1);
           this.libraryOffset = Math.max(0, this.libraryOffset - 1);
           this.libraryHasMore = this.libraryOffset < this.libraryTotal;
@@ -179,53 +267,94 @@
       if (use) await this.useLibraryImage(use.dataset.useLibraryImage, use);
     },
 
-    async useLibraryImage(imageId, button) {
+    async importLibraryAsset(workspace, imageId) {
+      const data = await UI.api(
+        `/api/workspaces/${workspace.id}/assets/from-library/${imageId}`,
+        { method: "POST" },
+      );
+      if (!data.asset) throw new Error("图库图片导入结果无效");
+      if (!workspace.assets.some((asset) => asset.id === data.asset.id)) {
+        workspace.assets.push(data.asset);
+      }
+      return data.asset;
+    },
+
+    async useLibraryImages(imageIds) {
       if (!this.activeWorkspace || this.workspaceLoading || this.referenceUploadPending
-        || this.workspaceChatBusy() || this.workspaceHasActiveJob()) {
+        || this.workspaceChatBusy() || this.workspaceHasActiveJob() || this.libraryBusy) {
         UI.toast("当前工作站忙碌，请稍后选择图片", "error");
         return;
       }
       const workspace = this.activeWorkspace;
-      const target = this.libraryTarget;
-      const selection = target === "chat" ? this.currentChatSelection() : this.currentSelection();
-      const limit = this.referenceSelectionLimit(target, workspace);
-      const replacesAnimationMaster = workspace.kind === "animation" && target === "generation";
-      if (!replacesAnimationMaster && selection.size >= limit) {
+      const {
+        target,
+        limit,
+        selection,
+        replacesAnimationMaster,
+        available,
+      } = this.librarySelectionContext(workspace);
+      const requested = [...new Set(imageIds)].slice(0, available);
+      if (!requested.length) {
         UI.toast(target === "chat" ? `每条消息最多发送 ${limit} 张图片` : `当前渠道最多选择 ${limit} 张垫图`, "error");
         return;
       }
-      button.disabled = true;
+
+      this.libraryBusy = true;
+      this.renderLibrary();
+      const imported = [];
+      const failures = [];
       try {
-        const data = await UI.api(
-          `/api/workspaces/${workspace.id}/assets/from-library/${imageId}`,
-          { method: "POST" },
-        );
-        if (!workspace.assets.some((asset) => asset.id === data.asset.id)) {
-          workspace.assets.push(data.asset);
+        for (const imageId of requested) {
+          try {
+            const asset = await this.importLibraryAsset(workspace, imageId);
+            if (replacesAnimationMaster) selection.clear();
+            selection.add(asset.id);
+            imported.push(asset);
+          } catch (error) {
+            failures.push(error);
+          }
         }
-        if (replacesAnimationMaster) selection.clear();
-        selection.add(data.asset.id);
-        this.renderWorkspaceList();
-        this.renderReferences();
-        this.renderChatReferences();
-        UI.closeDialog(this.el.libraryDialog);
-        if (target === "chat") {
-          this.chatReferencePickerOpen = true;
-          this.setComposerMode("chat");
-          this.renderChatReferences();
-          this.el.chatInput.focus();
-          UI.toast("已加入待发送图片", "success");
-        } else {
-          this.setMode("img2img", true);
-          this.renderReferences();
-          if (this.el.generationForm.hidden) this.openGenerationComposer([data.asset.id]);
-          else this.el.promptInput.focus();
-          UI.toast(workspace.kind === "animation" ? "已设为母图" : "已选择垫图", "success");
-        }
-      } catch (error) {
-        button.disabled = false;
-        UI.toast(error.message, "error");
+      } finally {
+        this.libraryBusy = false;
       }
+
+      if (!imported.length) {
+        this.renderLibrary();
+        UI.toast(failures[0]?.message || "图库图片导入失败", "error");
+        return;
+      }
+      this.librarySelection.clear();
+      this.renderWorkspaceList();
+      this.renderReferences();
+      this.renderChatReferences();
+      UI.closeDialog(this.el.libraryDialog);
+      if (target === "chat") {
+        this.chatReferencePickerOpen = true;
+        this.setComposerMode("chat");
+        this.renderChatReferences();
+        this.el.chatInput.focus();
+        UI.toast(
+          imported.length === 1 ? "已加入待发送图片" : `已加入 ${imported.length} 张待发送图片`,
+          "success",
+        );
+      } else {
+        this.setMode("img2img", true);
+        this.renderReferences();
+        if (this.el.generationForm.hidden) this.openGenerationComposer([...selection]);
+        else this.el.promptInput.focus();
+        UI.toast(
+          workspace.kind === "animation"
+            ? "已设为母图"
+            : imported.length === 1 ? "已选择垫图" : `已选择 ${imported.length} 张垫图`,
+          "success",
+        );
+      }
+      if (failures.length) UI.toast(`有 ${failures.length} 张图片导入失败`, "error");
+    },
+
+    async useLibraryImage(imageId, button) {
+      if (button?.disabled) return;
+      await this.useLibraryImages([imageId]);
     },
 
     async saveLibrarySource(source, button) {

@@ -1,9 +1,39 @@
 const path = require("node:path");
 const {
   expect,
+  mockConfiguredImageChannel,
   test,
   uploadLibraryImage,
 } = require("./fixtures");
+
+function libraryImage(id, name, url) {
+  return { id, name, url, thumbnail_url: url };
+}
+
+async function mockLibrarySelection(page, images) {
+  const imported = [];
+  await page.route("**/api/library-images?*", (route) => route.fulfill({
+    json: { images, total: images.length, has_more: false },
+  }));
+  await page.route("**/api/workspaces/*/assets/from-library/*", async (route) => {
+    const imageId = new URL(route.request().url()).pathname.split("/").at(-1);
+    const image = images.find((entry) => entry.id === imageId);
+    imported.push(imageId);
+    await route.fulfill({
+      json: {
+        asset: {
+          id: `asset-${imageId}`,
+          name: image.name,
+          url: image.url,
+          thumbnail_url: image.thumbnail_url,
+          mime_type: "image/png",
+          bytes: 1024,
+        },
+      },
+    });
+  });
+  return imported;
+}
 
 test("image library exposes retry after its initial load fails", async ({ studioPage: page }) => {
   let attempts = 0;
@@ -82,4 +112,58 @@ test("image library pagination keeps its server offset after merging a duplicate
 
   await expect(page.locator("#libraryPagination")).toBeHidden();
   expect(requestedOffsets).toEqual([0, 60]);
+});
+
+test("image library confirms multiple message attachments together", {
+  tag: "@responsive",
+}, async ({ studioPage: page }) => {
+  const images = [
+    libraryImage("library-chat-a", "chat-a.png", "/static/assets/brand-mark-v2.png"),
+    libraryImage("library-chat-b", "chat-b.png", "/static/assets/starter-ocean-sky-reference.png"),
+  ];
+  const imported = await mockLibrarySelection(page, images);
+
+  await page.locator("#libraryButton").click();
+  await expect(page.locator("#libraryGrid .library-card")).toHaveCount(2);
+  const checkboxes = page.locator("#libraryGrid [data-select-library-image]");
+  await checkboxes.nth(0).check();
+  await checkboxes.nth(1).check();
+  await expect(page.locator("#librarySelectionSummary")).toHaveText("已选择 2 / 20 张");
+  await expect(page.locator("#libraryConfirmButton")).toBeEnabled();
+
+  await page.locator("#libraryConfirmButton").click();
+  await expect(page.locator("#libraryDialog")).toBeHidden();
+  await expect(page.locator("#chatReferenceCount")).toHaveText("2");
+  expect(imported).toEqual(["library-chat-a", "library-chat-b"]);
+});
+
+test("image library confirms multiple padding images up to the channel limit", {
+  tag: "@responsive",
+}, async ({ studioPage: page }) => {
+  await mockConfiguredImageChannel(page);
+  await page.reload();
+  const images = [
+    libraryImage("library-generation-a", "generation-a.png", "/static/assets/brand-mark-v2.png"),
+    libraryImage("library-generation-b", "generation-b.png", "/static/assets/starter-ocean-sky-reference.png"),
+  ];
+  const imported = await mockLibrarySelection(page, images);
+
+  await page.locator("#directGenerationButton").evaluate((button) => {
+    button.hidden = false;
+    button.click();
+  });
+  await expect(page.locator("#generationForm")).toBeVisible();
+  await page.locator('#modeSwitch [data-mode="img2img"]').click();
+  await page.locator("#referenceLibrary").click();
+  await expect(page.locator("#libraryTargetLabel")).toHaveText("设为垫图");
+  const checkboxes = page.locator("#libraryGrid [data-select-library-image]");
+  await checkboxes.nth(0).check();
+  await checkboxes.nth(1).check();
+  await expect(page.locator("#librarySelectionSummary")).toHaveText("已选择 2 / 2 张");
+  await page.locator("#libraryConfirmButton").click();
+
+  await expect(page.locator("#libraryDialog")).toBeHidden();
+  await expect(page.locator("#referenceList .reference-card.selected")).toHaveCount(2);
+  await expect(page.locator("#referenceLimit")).toHaveText("2 / 2");
+  expect(imported).toEqual(["library-generation-a", "library-generation-b"]);
 });
