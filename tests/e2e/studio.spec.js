@@ -106,7 +106,8 @@ test("workspace switching does not wait for a pending settings save", {
   await createWorkspace(page, name);
   const createdId = await page.locator("#workspaceList .workspace-item.active")
     .getAttribute("data-workspace-id");
-  const saves = deferred();
+  const firstSave = deferred();
+  const savedSettings = [];
 
   await page.route(`**/api/workspaces/${createdId}`, async (route) => {
     if (route.request().method() !== "PATCH") {
@@ -114,8 +115,8 @@ test("workspace switching does not wait for a pending settings save", {
       return;
     }
     const settings = route.request().postDataJSON().settings;
-    expect(settings.translate_prompt).toBe(true);
-    await saves.promise;
+    savedSettings.push(settings);
+    if (savedSettings.length === 1) await firstSave.promise;
     await route.fulfill({
       json: { workspace: { settings } },
     });
@@ -124,13 +125,23 @@ test("workspace switching does not wait for a pending settings save", {
   await page.locator("#translatePrompt").check();
   try {
     await page.locator(`[data-workspace-id="${initialId}"] [data-select-workspace]`).click();
+    await expect.poll(() => savedSettings.length).toBe(1);
     await expect(page.locator("#workspaceTitle")).toHaveText(initialName, { timeout: 1000 });
     await expect(page.locator("#chatInput")).toBeEditable({ timeout: 1000 });
     await page.locator(`[data-workspace-id="${createdId}"] [data-select-workspace]`).click();
     await expect(page.locator("#workspaceTitle")).toHaveText(name, { timeout: 1000 });
     await expect(page.locator("#chatInput")).toBeEditable({ timeout: 1000 });
+    await expect(page.locator("#translatePrompt")).toBeChecked();
+
+    await page.locator("#translatePrompt").uncheck();
+    await page.waitForTimeout(700);
+    expect(savedSettings).toHaveLength(1);
+    firstSave.resolve();
+    await expect.poll(() => savedSettings.length).toBe(2);
+    expect(savedSettings.map((settings) => settings.translate_prompt)).toEqual([true, false]);
+    await expect(page.locator("#saveState")).toHaveText("参数已保存");
   } finally {
-    saves.resolve();
+    firstSave.resolve();
   }
 
   await deleteWorkspace(page, name);

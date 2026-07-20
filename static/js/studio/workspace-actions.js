@@ -13,8 +13,6 @@
       this.el.workspaceNameInput.value = mode === "rename"
         ? this.activeWorkspace?.name || ""
         : this.nextWorkspaceName();
-      this.el.workspaceKindControl.hidden = mode !== "create";
-      if (mode === "create") this.setDialogWorkspaceKind("image");
       UI.openDialog(this.el.workspaceDialog);
       this.el.workspaceNameInput.focus();
       if (mode === "create") this.el.workspaceNameInput.select();
@@ -31,18 +29,6 @@
       return `${base} ${index}`;
     },
 
-    setDialogWorkspaceKind(kind) {
-      const supported = [...this.el.workspaceKindSwitch.querySelectorAll("[data-workspace-kind]")]
-        .some((button) => button.dataset.workspaceKind === kind);
-      this.dialogWorkspaceKind = supported ? kind : "image";
-      this.el.workspaceKindSwitch.dataset.kind = this.dialogWorkspaceKind;
-      this.el.workspaceKindSwitch.querySelectorAll("[data-workspace-kind]").forEach((button) => {
-        const active = button.dataset.workspaceKind === this.dialogWorkspaceKind;
-        button.classList.toggle("active", active);
-        button.setAttribute("aria-pressed", String(active));
-      });
-    },
-
     async saveWorkspaceName(event) {
       event.preventDefault();
       const name = this.el.workspaceNameInput.value.trim();
@@ -52,7 +38,7 @@
         if (this.dialogMode === "create") {
           const data = await UI.api("/api/workspaces", {
             method: "POST",
-            body: { name, kind: this.dialogWorkspaceKind },
+            body: { name },
           });
           this.workspaces.unshift(data.workspace);
           UI.closeDialog(this.el.workspaceDialog);

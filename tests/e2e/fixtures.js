@@ -10,8 +10,6 @@ async function loginAsAdmin(page) {
 
 async function createWorkspace(page, name) {
   await page.locator("#newWorkspaceButton").click();
-  await expect(page.locator("#workspaceKindSwitch [data-workspace-kind]")).toHaveCount(1);
-  await expect(page.locator('#workspaceKindSwitch [data-workspace-kind="image"]')).toBeVisible();
   await page.locator("#workspaceNameInput").fill(name);
   await page.locator('#workspaceForm button[type="submit"]').click();
   await expect(page.locator("#workspaceTitle")).toHaveText(name);

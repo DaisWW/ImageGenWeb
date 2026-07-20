@@ -92,6 +92,7 @@
       this.generationSubmissions = new Map();
       this.cancelingJobs = new Set();
       this.saveTimer = null;
+      this.workspaceSettingSaves = new Map();
       this.promptCounterTimer = null;
       this.composerCloseTimer = null;
       this.workspaceLoadSequence = 0;
@@ -105,7 +106,6 @@
       this.referenceUploadQueues = new Map();
       this.referenceUploadSequence = 0;
       this.dialogMode = "create";
-      this.dialogWorkspaceKind = "image";
       this.workspaceDeleteId = null;
       this.draggedWorkspaceId = null;
       this.workspaceOrderSaving = false;
@@ -203,8 +203,6 @@
         workspaceForm: byId("workspaceForm"),
         workspaceDialogTitle: byId("workspaceDialogTitle"),
         workspaceNameInput: byId("workspaceNameInput"),
-        workspaceKindControl: byId("workspaceKindControl"),
-        workspaceKindSwitch: byId("workspaceKindSwitch"),
         workspaceClearDialog: byId("workspaceClearDialog"),
         workspaceClearForm: byId("workspaceClearForm"),
         workspaceClearName: byId("workspaceClearName"),
@@ -342,10 +340,6 @@
       this.el.workspaceDeleteForm.addEventListener("submit", (event) => this.deleteWorkspace(event));
       this.el.workspaceDeleteDialog.addEventListener("close", () => {
         this.workspaceDeleteId = null;
-      });
-      this.el.workspaceKindSwitch.addEventListener("click", (event) => {
-        const button = event.target.closest("[data-workspace-kind]");
-        if (button) this.setDialogWorkspaceKind(button.dataset.workspaceKind);
       });
       this.el.workspaceList.addEventListener("click", (event) => this.handleWorkspaceListClick(event));
       this.el.workspaceList.addEventListener("dblclick", (event) => this.handleWorkspaceDoubleClick(event));

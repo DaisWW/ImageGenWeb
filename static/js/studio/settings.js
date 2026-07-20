@@ -85,7 +85,9 @@
       this.renderChannelOptions(preferred?.id);
       this.applyChannel(settings, false);
       this.setMode(settings.mode || "text2img", false);
-      this.el.saveState.textContent = "参数已保存";
+      this.el.saveState.textContent = this.workspaceSettingSaves.has(this.activeWorkspace.id)
+        ? "正在保存..."
+        : "参数已保存";
       this.updatePromptReviewState();
     },
 
@@ -300,7 +302,10 @@
 
     async flushSettings(workspaceId = this.activeWorkspace?.id, options = {}) {
       if (!workspaceId || this.activeWorkspace?.id !== workspaceId) return;
-      if (this.saveTimer === null) return;
+      if (this.saveTimer === null) {
+        await this.workspaceSettingSaves.get(workspaceId);
+        return;
+      }
       window.clearTimeout(this.saveTimer);
       this.saveTimer = null;
       await this.saveSettings(options);
@@ -314,18 +319,30 @@
         return;
       }
       const settings = this.collectSettings();
-      try {
-        const data = await UI.api(`/api/workspaces/${workspace.id}`, {
+      workspace.settings = settings;
+      const previous = this.workspaceSettingSaves.get(workspace.id) || Promise.resolve();
+      const request = previous
+        .catch(() => {})
+        .then(() => UI.api(`/api/workspaces/${workspace.id}`, {
           method: "PATCH",
           body: { settings },
           ...options,
-        });
+        }));
+      this.workspaceSettingSaves.set(workspace.id, request);
+      try {
+        const data = await request;
+        if (this.workspaceSettingSaves.get(workspace.id) !== request) return;
         workspace.settings = data.workspace.settings;
         if (workspace === this.activeWorkspace) this.el.saveState.textContent = "参数已保存";
       } catch (error) {
         if (error?.name === "AbortError") return;
+        if (this.workspaceSettingSaves.get(workspace.id) !== request) return;
         if (workspace === this.activeWorkspace) this.el.saveState.textContent = "保存失败";
         UI.toast(error.message, "error");
+      } finally {
+        if (this.workspaceSettingSaves.get(workspace.id) === request) {
+          this.workspaceSettingSaves.delete(workspace.id);
+        }
       }
     },
 

@@ -201,14 +201,6 @@
   transform: translateX(100%);
 }
 
-.workspace-kind-switch {
-  grid-template-columns: 1fr;
-}
-
-.workspace-kind-switch::before {
-  width: calc(100% - 6px);
-}
-
 .mode-button {
   position: relative;
   z-index: 1;

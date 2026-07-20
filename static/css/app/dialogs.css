@@ -24,24 +24,6 @@
   width: min(94vw, 440px);
 }
 
-.workspace-kind-field {
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  margin: 0;
-}
-
-.workspace-kind-field legend {
-  margin-bottom: 7px;
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 650;
-}
-
-.workspace-kind-switch {
-  width: 100%;
-}
-
 .modal-form,
 .image-dialog-info {
   display: grid;
