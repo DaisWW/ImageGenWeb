@@ -195,3 +195,36 @@ test("chat waits for message persistence and resends stored messages with new ID
     };
   }
 });
+
+test("server chat operation does not show an assistant before its message is stored", async ({
+  studioPage: page,
+}) => {
+  const messageId = "b".repeat(32);
+  let operationBusy = true;
+
+  await page.route("**/api/workspaces/*/messages*", (route) => route.fulfill({
+    json: {
+      messages: [],
+      conversation_operation: operationBusy
+        ? {
+          busy: true,
+          kind: "reply",
+          label: "正在等待 AI 回复",
+          operation_id: "c".repeat(32),
+          message_id: messageId,
+        }
+        : { busy: false },
+    },
+  }));
+
+  await page.reload();
+  await expect(page.locator("#workspaceList .workspace-item.active .workspace-meta"))
+    .toHaveText("正在发送消息");
+  await expect(page.locator(".message-row.assistant")).toHaveCount(0);
+
+  operationBusy = false;
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await expect(page.locator("#workspaceList .workspace-item.active .workspace-meta"))
+    .not.toHaveText("正在发送消息");
+  await expect(page.locator(".message-row.assistant")).toHaveCount(0);
+});

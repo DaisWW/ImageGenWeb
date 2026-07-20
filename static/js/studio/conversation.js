@@ -308,9 +308,15 @@
       return Boolean(workspaceId && this.chatOperations.has(workspaceId));
     },
 
-    chatOperationAwaitingMessageAcceptance(operation) {
-      return Boolean(operation?.local && operation.message_id
-        && this.outgoingMessages.get(operation.message_id)?.delivery_state === "sending");
+    chatOperationAwaitingMessageAcceptance(
+      operation,
+      workspaceId = this.activeWorkspace?.id,
+    ) {
+      if (!operation?.message_id) return false;
+      if (this.outgoingMessages.has(operation.message_id)) return true;
+      return workspaceId === this.activeWorkspace?.id && !this.messages.some((message) => (
+        message.id === operation.message_id
+      ));
     },
 
     chatOperationHasReply(operation) {
