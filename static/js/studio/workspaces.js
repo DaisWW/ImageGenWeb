@@ -131,10 +131,13 @@
         item.classList.toggle(`job-${status}`, job?.status === status && !operation);
       });
       if (operation) {
+        const operationLabel = this.chatOperationAwaitingMessageAcceptance(operation)
+          ? "正在发送消息"
+          : operation.label;
         setHidden(progress, true);
         setHidden(timing, true);
-        setText(meta, operation.label);
-        setAttribute(meta, "title", operation.label);
+        setText(meta, operationLabel);
+        setAttribute(meta, "title", operationLabel);
         return;
       }
       if (!job) {

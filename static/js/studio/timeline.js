@@ -52,6 +52,7 @@
               outgoingChanged = true;
             }
           }
+          if (outgoingChanged) this.renderWorkspaceList();
           if (this.activeWorkspace?.id === workspaceId) {
             const messagesChanged = this.messages.length !== nextMessages.length
               || this.messages[0]?.id !== nextMessages[0]?.id
@@ -120,7 +121,9 @@
         return time || String(left.id).localeCompare(String(right.id));
       });
       const operation = this.chatOperations.get(workspaceId);
-      if (operation) {
+      if (operation
+        && !this.chatOperationAwaitingMessageAcceptance(operation)
+        && !this.chatOperationHasReply(operation)) {
         timeline.push({
           type: "message",
           createdAt: null,
@@ -297,7 +300,10 @@
       if (message.delivery_state === "sending") timingParts.push("发送中");
       else if (message.delivery_state === "canceled") timingParts.push("已取消");
       else if (message.delivery_state === "failed") timingParts.push("发送失败");
-      else if (message.created_at) timingParts.push(UI.dateTime(message.created_at));
+      else {
+        if (message.role === "user") timingParts.push("已发送");
+        if (message.created_at) timingParts.push(UI.dateTime(message.created_at));
+      }
       if (message.role === "assistant" && Number.isFinite(Number(message.elapsed_seconds))) {
         timingParts.push(`响应 ${this.formatElapsed(message.elapsed_seconds)}`);
       }
@@ -378,6 +384,34 @@
           attachments.append(link);
         });
         card.append(attachments);
+      }
+
+      const canCopy = Boolean(message.content?.trim());
+      const canResend = message.role === "user" && !message.delivery_state;
+      if (message.kind === "message" && message.id && (canCopy || canResend)) {
+        const actions = document.createElement("div");
+        actions.className = "message-actions";
+        if (canCopy) {
+          const copy = document.createElement("button");
+          copy.type = "button";
+          copy.className = "icon-button message-action-button";
+          copy.dataset.copyMessage = message.id;
+          copy.title = "复制消息";
+          copy.setAttribute("aria-label", "复制消息");
+          copy.innerHTML = '<i data-lucide="copy"></i>';
+          actions.append(copy);
+        }
+        if (canResend) {
+          const resend = document.createElement("button");
+          resend.type = "button";
+          resend.className = "icon-button message-action-button";
+          resend.dataset.resendMessage = message.id;
+          resend.title = "重新发送";
+          resend.setAttribute("aria-label", "重新发送");
+          resend.innerHTML = '<i data-lucide="refresh-cw"></i>';
+          actions.append(resend);
+        }
+        card.append(actions);
       }
 
       row.append(avatar, card);

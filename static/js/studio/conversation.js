@@ -18,6 +18,22 @@
       }
     },
 
+    async copyMessage(messageId) {
+      const message = this.messages.find((item) => item.id === messageId)
+        || this.outgoingMessages.get(messageId);
+      const content = String(message?.content || "");
+      if (!content.trim()) {
+        UI.toast("暂无可复制的消息", "info");
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(content);
+        UI.toast("消息已复制", "success");
+      } catch (_error) {
+        UI.toast("复制失败，请手动复制", "error");
+      }
+    },
+
     async sendChatMessage(event) {
       event.preventDefault();
       if (!this.activeWorkspace || this.workspaceChatBusy() || this.workspaceHasActiveJob()) return;
@@ -85,6 +101,52 @@
       if (!message || !["failed", "canceled"].includes(message.delivery_state)
         || this.activeWorkspace?.id !== message.workspace_id
         || this.workspaceChatBusy() || this.workspaceHasActiveJob()) return;
+      await this.submitOutgoingMessage(message);
+    },
+
+    async resendChatMessage(messageId) {
+      const workspace = this.activeWorkspace;
+      if (!workspace || this.workspaceChatBusy() || this.workspaceHasActiveJob()) return;
+      if (this.referenceUploadPending) {
+        UI.toast("请等待图片上传完成或取消上传", "info");
+        return;
+      }
+      const original = this.messages.find((message) => (
+        message.id === messageId && message.role === "user"
+      ));
+      const modelId = this.el.chatModelSelect.value;
+      if (!original || !modelId) return;
+
+      const activeAssetIds = new Set(workspace.assets.map((asset) => asset.id));
+      const attachmentIds = (original.attachments || []).map((asset) => asset.id);
+      const generationReferenceIds = original.payload?.generation_reference_ids || [];
+      if ([...attachmentIds, ...generationReferenceIds].some((id) => !activeAssetIds.has(id))) {
+        UI.toast("原消息使用的图片已不存在，无法重新发送", "error");
+        return;
+      }
+      const generationMode = original.payload?.generation_mode || (
+        attachmentIds.length ? "auto" : "text2img"
+      );
+      if (generationMode === "img2img" && !generationReferenceIds.length) {
+        UI.toast("原消息使用的垫图已不存在，无法重新发送", "error");
+        return;
+      }
+      const content = String(original.content || "");
+      if (!content.trim() && !attachmentIds.length) {
+        UI.toast("原消息内容已不可用，无法重新发送", "error");
+        return;
+      }
+      const message = {
+        ...original,
+        id: this.newMessageId(),
+        workspace_id: workspace.id,
+        model_id: modelId,
+        attachment_ids: attachmentIds,
+        generation_mode: generationMode,
+        generation_reference_ids: generationReferenceIds,
+        created_at: new Date().toISOString(),
+      };
+      workspace.settings.prompt_draft_id = "";
       await this.submitOutgoingMessage(message);
     },
 
@@ -244,6 +306,19 @@
 
     workspaceChatBusy(workspaceId = this.activeWorkspace?.id) {
       return Boolean(workspaceId && this.chatOperations.has(workspaceId));
+    },
+
+    chatOperationAwaitingMessageAcceptance(operation) {
+      return Boolean(operation?.local && operation.message_id
+        && this.outgoingMessages.get(operation.message_id)?.delivery_state === "sending");
+    },
+
+    chatOperationHasReply(operation) {
+      if (!operation?.message_id) return false;
+      return this.messages.some((message) => (
+        message.role === "assistant"
+        && message.payload?.reply_to_message_id === operation.message_id
+      ));
     },
 
     isChatOperationCanceled(operation, error = null) {
@@ -411,6 +486,7 @@
       const generationBusy = this.workspaceHasActiveJob();
       const operation = this.chatOperations.get(this.activeWorkspace?.id);
       const chatBusy = Boolean(operation);
+      const messageSending = this.chatOperationAwaitingMessageAcceptance(operation);
       const generationSubmission = this.generationSubmissions.get(this.activeWorkspace?.id);
       const submissionBusy = Boolean(generationSubmission);
       const locked = noWorkspace || generationBusy || chatBusy || submissionBusy;
@@ -430,7 +506,7 @@
         chatCanCancel ? "cancel" : "send",
       );
       const sendTitle = chatCanCancel
-        ? "取消等待"
+        ? (messageSending ? "取消发送" : "取消等待")
         : referenceUploading ? "等待图片上传完成" : "发送消息";
       setAttribute(this.el.chatSendButton, "title", sendTitle);
       setAttribute(this.el.chatSendButton, "aria-label", sendTitle);
@@ -474,8 +550,10 @@
           && (locked || referenceUploading);
         setDisabled(button, this.chatOperations.has(workspaceId) || activeLocked);
       });
-      this.el.messageList.querySelectorAll("[data-retry-message], [data-retry-send]").forEach((button) => {
-        setDisabled(button, locked || !hasModel);
+      this.el.messageList.querySelectorAll(
+        "[data-retry-message], [data-retry-send], [data-resend-message]",
+      ).forEach((button) => {
+        setDisabled(button, locked || referenceUploading || !hasModel);
       });
       this.el.messageList.querySelectorAll("[data-cancel-chat]").forEach((button) => {
         const buttonWorkspace = button.dataset.cancelWorkspace || this.activeWorkspace?.id;
@@ -499,7 +577,9 @@
         : generationBusy
         ? "当前生成完成前不能继续对话，可在生成记录中取消任务"
         : submissionBusy ? "正在提交生成，可立即取消"
-        : chatBusy ? `${operation.label}，可切换到其他工作站继续`
+        : chatBusy ? messageSending
+          ? "正在发送消息，等待服务端确认"
+          : `${operation.label}，可切换到其他工作站继续`
         : "描述你想生成的画面...";
       if (this.el.chatInput.placeholder !== placeholder) this.el.chatInput.placeholder = placeholder;
     },

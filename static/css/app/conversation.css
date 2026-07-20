@@ -234,6 +234,23 @@
   transform: scale(1.04);
 }
 
+.message-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.message-action-button {
+  width: 28px;
+  height: 28px;
+}
+
+.message-action-button > svg {
+  width: 15px;
+  height: 15px;
+}
+
 .prompt-draft-content {
   display: grid;
   gap: 8px;

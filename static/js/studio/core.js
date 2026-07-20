@@ -405,6 +405,16 @@
           this.applyPromptDraft(button.dataset.usePromptDraft);
           return;
         }
+        const copyButton = event.target.closest("[data-copy-message]");
+        if (copyButton) {
+          this.copyMessage(copyButton.dataset.copyMessage);
+          return;
+        }
+        const resendButton = event.target.closest("[data-resend-message]");
+        if (resendButton) {
+          this.resendChatMessage(resendButton.dataset.resendMessage);
+          return;
+        }
         this.handleJobClick(event);
       });
       [this.el.generationBackdrop, this.el.generationBackButton].forEach((button) => {
