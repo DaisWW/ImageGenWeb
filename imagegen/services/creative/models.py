@@ -10,6 +10,8 @@ class CreativeDirection:
     description: str
     guidance: tuple[str, ...]
     pitfalls: tuple[str, ...]
+    required_fields: tuple[str, ...] = ()
+    hard_checks: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,3 +25,6 @@ class PromptTemplate:
     guidance: tuple[str, ...]
     pitfalls: tuple[str, ...]
     example_case_ids: tuple[int, ...]
+    case_refs: tuple[str, ...] = ()
+    required_fields: tuple[str, ...] = ()
+    hard_checks: tuple[str, ...] = ()

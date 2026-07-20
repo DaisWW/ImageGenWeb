@@ -59,11 +59,12 @@ ready 时还必须完成一次交付前审查：
 - creative_direction 必须是给定目录中的一个 ID；用户锁定方向时不得改选。
 - template_id 必须是目录中的一个模板 ID；确实没有近似模板时使用 custom。style_tags、scene_tags 必须从目录值中选择，selection_reason 用一句中文解释匹配依据。
 - brief 必须把模糊会话压缩成交付物、用途、主体、构图、风格、精确文字、参考图计划、保持项、改变项和禁止项。没有的内容使用空字符串或空数组，不得臆造。
+- production_spec 必须把所选游戏模板需要的制作字段结构化；非游戏任务没有对应字段时使用空字符串、空数组或 0，不得臆造。
 - hard_checks 只列能从最终图片判断的 2～6 个硬门槛，例如精确文字、主体数量、必要元素、参考图身份、非目标区域保持和禁止额外内容。
 - quality_hint 只能是 low、medium 或 high；它表示当前提示词首次试生成的建议，生成时沿用工作站保存的阶段。
 只输出一个 JSON 对象，不要 Markdown，不要额外说明，并严格使用以下两种格式之一：
 {{"status":"needs_clarification","questions":["问题 1","问题 2"],"creative_direction":"poster"}}
-{{"status":"ready","summary_zh":"中文需求确认","prompt":"最终生图提示词","reference_usage":"generation","reference_reason":"用户要求保持参考图主体并修改背景。","creative_direction":"poster","template_id":"poster-layout-system","style_tags":["Poster"],"scene_tags":["Commerce"],"selection_reason":"交付物是商业海报，需明确版式与文字层级。","brief":{{"deliverable":"交付物","intended_use":"用途与受众","subject":"主体","composition":"构图与画幅","style":"媒介、材质、光线与配色","exact_text":["必须逐字出现的文字"],"reference_plan":[{{"image_number":1,"role":"职责","preserve":["保持项"],"change":["改变项"]}}],"preserve":["全局保持项"],"change":["全局改变项"],"avoid":["禁止项"]}},"hard_checks":["可从成品判断的硬门槛"],"quality_hint":"low"}}"""
+{{"status":"ready","summary_zh":"中文需求确认","prompt":"最终生图提示词","reference_usage":"generation","reference_reason":"用户要求保持参考图主体并修改背景。","creative_direction":"poster","template_id":"poster-layout-system","style_tags":["Poster"],"scene_tags":["Commerce"],"selection_reason":"交付物是商业海报，需明确版式与文字层级。","brief":{{"deliverable":"交付物","intended_use":"用途与受众","subject":"主体","composition":"构图与画幅","style":"媒介、材质、光线与配色","exact_text":["必须逐字出现的文字"],"reference_plan":[{{"image_number":1,"role":"职责","preserve":["保持项"],"change":["改变项"]}}],"preserve":["全局保持项"],"change":["全局改变项"],"avoid":["禁止项"]}},"production_spec":{{"platform":"平台","canvas":"画布","screen_type":"界面或交付物状态","safe_area":"安全区","hud_zones":["区域职责"],"panel_count":0,"panel_roles":["面板职责"],"identity_anchors":["身份锚点"],"camera_and_action":"镜头与动作","materials":["材质"],"palette_and_lighting":"色板与光线","exact_text":["必须逐字出现的文字"],"ui_constraints":["界面约束"],"consistency_rules":["一致性规则"]}},"hard_checks":["可从成品判断的硬门槛"],"quality_hint":"low"}}"""
 
     def parse(self, content: str) -> dict[str, Any]:
         payload = parse_json_object(content)
@@ -146,6 +147,10 @@ ready 时还必须完成一次交付前审查：
         if not summary or not prompt:
             return None
         direction_id = _direction_id(payload.get("creative_direction"), self.creative_direction_id)
+        catalog = _catalog_selection(payload, direction_id)
+        direction = get_creative_direction(direction_id)
+        template_checks = catalog.get("template_hard_checks", [])
+        direction_checks = list(direction.hard_checks) if direction else []
         return {
             "status": "ready",
             "summary_zh": summary[: self.max_prompt_characters],
@@ -154,9 +159,13 @@ ready 时还必须完成一次交付前审查：
             "creative_direction": direction_id,
             "reference_usage": _reference_usage(payload.get("reference_usage")),
             "reference_reason": str(payload.get("reference_reason", "")).strip()[:500],
-            **_catalog_selection(payload, direction_id),
+            **catalog,
             "brief": _brief(payload.get("brief")),
-            "hard_checks": _string_list(payload.get("hard_checks"), 6, 300),
+            "production_spec": _production_spec(payload.get("production_spec")),
+            "hard_checks": _merge_hard_checks(
+                payload.get("hard_checks"),
+                [*template_checks, *direction_checks],
+            ),
             "quality_hint": _quality_hint(payload.get("quality_hint")),
             "sources": [dict(source) for source in SOURCE_METADATA],
         }
@@ -190,9 +199,17 @@ def _catalog_selection(payload: dict[str, Any], direction_id: str) -> dict[str, 
             style_tags = list(template.styles)
         if not scene_tags:
             scene_tags = list(template.scenes)
+    case_refs = []
+    if template is not None:
+        case_refs = list(template.case_refs) or [
+            f"awesome:{case_id}" for case_id in template.example_case_ids
+        ]
     return {
         "template_id": template_id,
         "template_label": template.label if template else "自定义 Craft",
+        "case_refs": case_refs,
+        "template_required_fields": list(template.required_fields) if template else [],
+        "template_hard_checks": list(template.hard_checks) if template else [],
         "style_tags": style_tags,
         "style_labels": catalog_tag_labels(style_tags),
         "scene_tags": scene_tags,
@@ -226,6 +243,17 @@ def _string_list(value: Any, limit: int, maximum: int) -> list[str]:
     return result
 
 
+def _merge_hard_checks(value: Any, defaults: list[str]) -> list[str]:
+    result = _string_list(value, 6, 300)
+    for item in defaults:
+        text = str(item).strip()[:300]
+        if text and text not in result:
+            result.append(text)
+        if len(result) >= 6:
+            break
+    return result
+
+
 def _brief(value: Any) -> dict[str, Any]:
     raw = value if isinstance(value, dict) else {}
     brief = {
@@ -254,3 +282,79 @@ def _brief(value: Any) -> dict[str, Any]:
             )
     brief["reference_plan"] = reference_plan
     return brief
+
+
+def _production_spec(value: Any) -> dict[str, Any]:
+    """Keep a compact, typed production contract for game UI and concept work."""
+    raw = value if isinstance(value, dict) else {}
+    text_keys = (
+        "platform",
+        "canvas",
+        "screen_type",
+        "safe_area",
+        "navigation",
+        "selected_state",
+        "grid",
+        "display_size",
+        "map_scale",
+        "orientation",
+        "deliverable_stage",
+        "world_and_faction",
+        "environment_function",
+        "player_route",
+        "scale_reference",
+        "camera",
+        "camera_and_action",
+        "lighting",
+        "palette",
+        "palette_and_lighting",
+        "prop_function",
+        "user_and_scale",
+        "views",
+        "material_breakdown",
+        "camera_axis",
+    )
+    list_keys = (
+        "hud_zones",
+        "ui_states",
+        "grid_and_slots",
+        "markers_and_legend",
+        "quest_text",
+        "icon_roles",
+        "identity_anchors",
+        "views_and_expressions",
+        "costume_and_equipment",
+        "landmarks",
+        "materials",
+        "mechanical_details",
+        "callouts",
+        "panel_roles",
+        "shared_identity_anchors",
+        "shared_palette",
+        "shared_materials",
+        "labels",
+        "frame_roles",
+        "action_beats",
+        "effects",
+        "exact_text",
+        "ui_constraints",
+        "consistency_rules",
+    )
+    result: dict[str, Any] = {}
+    for key in text_keys:
+        raw_text = raw.get(key)
+        text = raw_text.strip()[:500] if isinstance(raw_text, str) else ""
+        if text:
+            result[key] = text
+    for key in list_keys:
+        values = _string_list(raw.get(key), 12, 300)
+        if values:
+            result[key] = values
+    for key in ("panel_count", "icon_count", "frame_count"):
+        try:
+            count = max(0, min(64, int(raw.get(key, 0))))
+        except (TypeError, ValueError):
+            count = 0
+        if count:
+            result[key] = count
+    return result

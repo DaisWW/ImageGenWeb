@@ -62,6 +62,13 @@ class GenerationWorkflow:
             "style_tags": draft.get("style_tags", []) if draft else [],
             "scene_tags": draft.get("scene_tags", []) if draft else [],
             "selection_reason": str(draft.get("selection_reason", "")) if draft else "",
+            "case_refs": draft.get("case_refs", []) if draft else [],
+            "template_required_fields": (
+                draft.get("template_required_fields", []) if draft else []
+            ),
+            "template_hard_checks": draft.get("template_hard_checks", []) if draft else [],
+            "brief": draft.get("brief", {}) if draft else {},
+            "production_spec": draft.get("production_spec", {}) if draft else {},
             "generation_stage": normalized_stage,
             "ai_reviewed": draft is not None,
             "hard_checks": draft.get("hard_checks", []) if draft else [],
@@ -85,6 +92,11 @@ def sanitize_workflow(value: object) -> dict[str, object]:
         "style_tags",
         "scene_tags",
         "selection_reason",
+        "case_refs",
+        "template_required_fields",
+        "template_hard_checks",
+        "brief",
+        "production_spec",
         "generation_stage",
         "ai_reviewed",
         "hard_checks",
@@ -102,6 +114,9 @@ def sanitize_workflow(value: object) -> dict[str, object]:
     for key in ("style_tags", "scene_tags"):
         tags = result.get(key)
         result[key] = [str(item)[:80] for item in tags[:4]] if isinstance(tags, list) else []
+    for key in ("case_refs", "template_required_fields", "template_hard_checks"):
+        values = result.get(key)
+        result[key] = [str(item)[:160] for item in values[:12]] if isinstance(values, list) else []
     stage = str(result.get("generation_stage", "final")).lower()
     result["generation_stage"] = stage if stage in {"draft", "refine", "final"} else "final"
     result["ai_reviewed"] = result.get("ai_reviewed") is True
@@ -111,4 +126,46 @@ def sanitize_workflow(value: object) -> dict[str, object]:
     )
     sources = result.get("sources")
     result["sources"] = sources[:3] if isinstance(sources, list) else []
+    result["brief"] = _sanitize_workflow_mapping(result.get("brief"))
+    result["production_spec"] = _sanitize_workflow_mapping(result.get("production_spec"))
     return result
+
+
+def _sanitize_workflow_mapping(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, object] = {}
+    for key, raw in list(value.items())[:40]:
+        name = str(key).strip()[:80]
+        if not name:
+            continue
+        sanitized = _sanitize_workflow_value(raw)
+        if sanitized is not None:
+            result[name] = sanitized
+    return result
+
+
+def _sanitize_workflow_value(value: object, depth: int = 0) -> object | None:
+    if depth > 2:
+        return str(value)[:300] if isinstance(value, str) else None
+    if isinstance(value, dict):
+        result: dict[str, object] = {}
+        for key, raw in list(value.items())[:20]:
+            name = str(key).strip()[:80]
+            if not name:
+                continue
+            sanitized = _sanitize_workflow_value(raw, depth + 1)
+            if sanitized is not None:
+                result[name] = sanitized
+        return result
+    if isinstance(value, list):
+        return [
+            sanitized
+            for item in value[:12]
+            if (sanitized := _sanitize_workflow_value(item, depth + 1)) is not None
+        ]
+    if isinstance(value, str):
+        return value[:500]
+    if isinstance(value, (int, float, bool)):
+        return value
+    return None

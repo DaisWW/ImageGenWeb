@@ -205,9 +205,13 @@ class ConversationContextManager:
                 "reference_reason",
                 "creative_direction",
                 "template_id",
+                "case_refs",
+                "template_required_fields",
+                "template_hard_checks",
                 "style_tags",
                 "scene_tags",
                 "brief",
+                "production_spec",
                 "hard_checks",
                 "quality_hint",
             )

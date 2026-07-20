@@ -14,6 +14,7 @@ from imagegen.services.creative import (
     PROMPT_TEMPLATES,
     SCENE_TAG_LABELS,
     STYLE_TAG_LABELS,
+    creative_direction_dicts,
 )
 from tests.support.platform import (
     PlatformTestCase,
@@ -23,10 +24,23 @@ from tests.support.platform import (
 
 class TestPromptDrafts(PlatformTestCase):
     def test_creative_catalog_keeps_all_source_dimensions(self):
-        self.assertEqual(len(CREATIVE_DIRECTIONS), 13)
-        self.assertEqual(len(STYLE_TAG_LABELS), 19)
-        self.assertEqual(len(SCENE_TAG_LABELS), 10)
-        self.assertEqual(len(PROMPT_TEMPLATES), 22)
+        self.assertEqual(len(CREATIVE_DIRECTIONS), 15)
+        self.assertEqual(len(STYLE_TAG_LABELS), 29)
+        self.assertEqual(len(SCENE_TAG_LABELS), 11)
+        self.assertEqual(len(PROMPT_TEMPLATES), 32)
+
+    def test_game_directions_are_first_concrete_choices_and_have_production_contracts(self):
+        directions = creative_direction_dicts()
+        self.assertEqual([item["id"] for item in directions[:3]], ["auto", "game_ui", "game_art"])
+        game_templates = [
+            template
+            for template in PROMPT_TEMPLATES
+            if template.direction_id in {"game_ui", "game_art"}
+        ]
+        self.assertEqual(len(game_templates), 10)
+        self.assertTrue(all(template.case_refs for template in game_templates))
+        self.assertTrue(all(template.required_fields for template in game_templates))
+        self.assertTrue(all(template.hard_checks for template in game_templates))
 
     def test_prompt_draft_auto_selects_catalog_template_and_preserves_locked_direction(self):
         workspace = self.create_workspace("自动匹配海报")
@@ -87,6 +101,54 @@ class TestPromptDrafts(PlatformTestCase):
         )
         self.assertEqual(locked.payload["creative_direction"], "product")
         self.assertEqual(locked.payload["template_id"], "custom")
+
+    def test_game_ui_draft_keeps_template_case_refs_and_production_spec(self):
+        workspace = self.create_workspace("游戏 HUD")
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="原创科幻动作游戏的移动端战斗 HUD，显示护盾、弹药和任务目标。",
+        )
+        self.chat_client.prompt_draft_content = json.dumps(
+            {
+                "status": "ready",
+                "summary_zh": "移动端原创科幻动作游戏战斗 HUD。",
+                "prompt": "single mobile gameplay HUD with shield, ammo and quest objective",
+                "creative_direction": "game_ui",
+                "template_id": "game-ui-gameplay-hud",
+                "style_tags": ["Game UI", "HUD"],
+                "scene_tags": ["Gaming"],
+                "selection_reason": "交付物是单一实机 HUD，需要固定平台和分区。",
+                "production_spec": {
+                    "platform": "mobile",
+                    "canvas": "16:9 gameplay screen",
+                    "screen_type": "gameplay_hud",
+                    "safe_area": "内缩 5%",
+                    "hud_zones": ["左上护盾", "右上弹药", "左下任务"],
+                    "identity_anchors": ["原创科幻游戏视觉语言"],
+                    "exact_text": ["OBJECTIVE: REACH THE GATE"],
+                    "ui_constraints": ["不遮挡角色和敌人"],
+                },
+                "hard_checks": ["HUD 分区不越界", "关键数值可读"],
+                "quality_hint": "high",
+            },
+            ensure_ascii=False,
+        )
+
+        draft = self.services.conversations.create_prompt_draft(
+            workspace,
+            model_id="test-chat",
+            translate_to_english=True,
+            creative_direction_id="game_ui",
+        )
+
+        self.assertEqual(draft.payload["creative_direction"], "game_ui")
+        self.assertEqual(draft.payload["template_id"], "game-ui-gameplay-hud")
+        self.assertEqual(draft.payload["case_refs"], ["skill:15", "skill:18", "skill:19"])
+        self.assertEqual(draft.payload["production_spec"]["platform"], "mobile")
+        self.assertIn("gallery-gaming.md", draft.payload["sources"][2]["references"]["gaming"])
+        self.assertIn("game-ui-gameplay-hud", self.chat_client.calls[-1]["system"])
+        self.assertIn("平台、目标画布、屏幕状态和安全区", self.chat_client.calls[-1]["system"])
 
     def test_prompt_translation_defaults_off_and_records_draft_duration(self):
         workspace = self.create_workspace()
