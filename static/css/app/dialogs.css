@@ -349,8 +349,7 @@
 
 .detail-list dt,
 .detail-prompt > span,
-.detail-references > span,
-.admin-references > span {
+.detail-references > span {
   color: var(--muted);
   font-size: 10px;
 }

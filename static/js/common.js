@@ -94,6 +94,14 @@
     return `¥${amount(value)}`;
   }
 
+  function generationChargeLabel(job) {
+    const charged = money(job?.charged_rmb);
+    if (["queued", "running", "canceling"].includes(job?.status)) {
+      return `${money(job?.reserved_rmb)} 预占 · ${charged} 已扣`;
+    }
+    return `${charged} 已扣`;
+  }
+
   function updateWallet(user, spending = {}) {
     const values = {
       "[data-wallet-balance]": user?.available_balance_rmb,
@@ -180,6 +188,7 @@
     dateTime,
     escapeHtml,
     formatBytes,
+    generationChargeLabel,
     icons,
     money,
     openDialog,

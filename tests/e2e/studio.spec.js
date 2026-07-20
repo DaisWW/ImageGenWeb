@@ -523,8 +523,10 @@ test("active generation locks prompt reuse and cancellation unlocks immediately"
 
   const jobCard = page.locator(`[data-job-id="${activeJob.id}"]`);
   await expect(jobCard.locator("[data-job-status-label]")).toHaveText("生成中");
+  await expect(jobCard.locator("[data-job-charge]")).toHaveText("¥0.03 预占 · ¥0.00 已扣");
   await jobCard.getByRole("button", { name: "取消" }).click();
   await expect(jobCard.locator("[data-job-status-label]")).toHaveText("已取消");
+  await expect(jobCard.locator("[data-job-charge]")).toHaveText("¥0.00 已扣");
   await expect(jobCard.getByRole("button", { name: "取消" })).toBeHidden();
   await expect(reusePrompt).toBeEnabled();
   await expect(page.locator("#chatInput")).toBeEditable();

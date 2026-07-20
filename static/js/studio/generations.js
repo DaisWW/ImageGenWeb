@@ -336,7 +336,7 @@
       setText(elements.size, job.size);
       setText(elements.quality, job.quality);
       setText(elements.count, `${job.succeeded_count}/${job.requested_count} 张`);
-      setText(elements.charge, `${UI.money(job.charged_rmb)} 已扣`);
+      setText(elements.charge, UI.generationChargeLabel(job));
       const failureReasons = [...new Set(
         (job.items || [])
           .filter((item) => ["failed", "interrupted"].includes(item.status))

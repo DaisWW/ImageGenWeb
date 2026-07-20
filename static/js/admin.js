@@ -657,20 +657,28 @@
         const motionClass = wasInitialized && previousSignature == null
           ? " data-enter"
           : previousSignature && previousSignature !== this.jobMotionSignature(job) ? " data-updated" : "";
+        const imageDimensions = (image) => {
+          const width = Number(image.width);
+          const height = Number(image.height);
+          return Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0
+            ? ` width="${width}" height="${height}"`
+            : "";
+        };
         const outputs = job.items.map((item) => item.thumbnail_url
-          ? `<a class="admin-output" href="${item.image_url}" target="_blank" title="查看原图"><img src="${item.thumbnail_url}" alt="生成结果"></a>`
-          : `<span class="admin-output empty ${item.status}"><i data-lucide="${item.status === "failed" ? "circle-alert" : "loader-circle"}"></i></span>`).join("");
+          ? `<a class="admin-media-tile admin-output" href="${UI.escapeHtml(item.image_url)}" target="_blank" rel="noopener" title="查看第 ${item.position + 1} 张原图"><img src="${UI.escapeHtml(item.thumbnail_url)}" alt="生成结果 ${item.position + 1}" loading="lazy" decoding="async"${imageDimensions(item)}></a>`
+          : `<span class="admin-media-tile admin-output empty ${item.status}" aria-label="${UI.escapeHtml(STATUS[item.status] || item.status)}"><i data-lucide="${item.status === "failed" ? "circle-alert" : "loader-circle"}"></i></span>`).join("");
         const references = job.references.length
-          ? `<div class="admin-references"><span>垫图</span>${job.references.map((asset) => `<a href="${asset.url}" target="_blank"><img src="${asset.url}" alt="${UI.escapeHtml(asset.name)}"></a>`).join("")}</div>`
+          ? `<section class="admin-media-group admin-reference-group admin-references"><div class="admin-media-heading"><span>垫图</span><small>${job.references.length} 张</small></div><div class="admin-media-grid">${job.references.map((asset, index) => `<a class="admin-media-tile admin-reference" href="${UI.escapeHtml(asset.url)}" target="_blank" rel="noopener" title="查看垫图 ${index + 1}"><img src="${UI.escapeHtml(asset.url)}" alt="${UI.escapeHtml(asset.name || `垫图 ${index + 1}`)}" loading="lazy" decoding="async"${imageDimensions(asset)}></a>`).join("")}</div></section>`
           : "";
+        const outputGroup = `<section class="admin-media-group admin-output-group"><div class="admin-media-heading"><span>生成结果</span><small>${job.succeeded_count}/${job.requested_count} 张</small></div><div class="admin-media-grid">${outputs}</div></section>`;
         return `<article class="admin-job-card ${job.status}${motionClass}" data-job-id="${UI.escapeHtml(identifier)}">
           <div class="admin-job-top">
             <div class="admin-job-owner"><span class="user-avatar small">${UI.escapeHtml((job.user.display_name || job.user.username).slice(0, 1).toUpperCase())}</span><div><strong>${UI.escapeHtml(job.user.display_name || job.user.username)}</strong><small>${UI.dateTime(job.created_at)} · ${UI.escapeHtml(job.channel)} · ${UI.escapeHtml(job.model)}</small></div></div>
             <div class="admin-job-state"><span class="status-badge ${job.status}"><span></span>${STATUS[job.status] || job.status}</span>${job.can_cancel ? `<button class="button danger small" data-admin-cancel="${job.id}"><i data-lucide="square"></i>取消</button>` : ""}</div>
           </div>
           <p class="admin-job-prompt">${UI.escapeHtml(job.prompt)}</p>
-          <div class="admin-job-detail"><span>${job.size}</span><span>${job.quality}</span><span>${job.succeeded_count}/${job.requested_count} 张</span><span>${UI.money(job.charged_rmb)} 已扣</span>${job.queue_position ? `<span>队列 ${job.queue_position}/${job.queue_total}</span>` : ""}</div>
-          ${references}<div class="admin-output-row">${outputs}</div>
+          <div class="admin-job-detail"><span>${job.size}</span><span>${job.quality}</span><span>${job.succeeded_count}/${job.requested_count} 张</span><span>${UI.generationChargeLabel(job)}</span>${job.queue_position ? `<span>队列 ${job.queue_position}/${job.queue_total}</span>` : ""}</div>
+          <div class="admin-media-stack">${references}${outputGroup}</div>
         </article>`;
       }).join("");
       UI.icons(this.el.adminJobList);
