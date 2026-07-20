@@ -60,6 +60,7 @@ ready 时还必须完成一次交付前审查：
 - template_id 必须是目录中的一个模板 ID；确实没有近似模板时使用 custom。style_tags、scene_tags 必须从目录值中选择，selection_reason 用一句中文解释匹配依据。
 - brief 必须把模糊会话压缩成交付物、用途、主体、构图、风格、精确文字、参考图计划、保持项、改变项和禁止项。没有的内容使用空字符串或空数组，不得臆造。
 - production_spec 必须把所选游戏模板需要的制作字段结构化；非游戏任务没有对应字段时使用空字符串、空数组或 0，不得臆造。
+- game_art 的角色设定表若包含白发、疤痕、单侧护甲或机械臂等非对称特征，production_spec.directional_identity_map 必须逐项写成“面板/视图：角色侧别 → 观看者侧别 → 可见特征”，覆盖 FRONT、SIDE、BACK 和 FACE；没有非对称特征时使用空数组。
 - hard_checks 只列能从最终图片判断的 2～6 个硬门槛，例如精确文字、主体数量、必要元素、参考图身份、非目标区域保持和禁止额外内容。
 - quality_hint 只能是 low、medium 或 high；它表示当前提示词首次试生成的建议，生成时沿用工作站保存的阶段。
 只输出一个 JSON 对象，不要 Markdown，不要额外说明，并严格使用以下两种格式之一：
@@ -246,11 +247,11 @@ def _string_list(value: Any, limit: int, maximum: int) -> list[str]:
 def _merge_hard_checks(value: Any, defaults: list[str]) -> list[str]:
     result = _string_list(value, 6, 300)
     for item in defaults:
+        if len(result) >= 6:
+            break
         text = str(item).strip()[:300]
         if text and text not in result:
             result.append(text)
-        if len(result) >= 6:
-            break
     return result
 
 
@@ -322,6 +323,7 @@ def _production_spec(value: Any) -> dict[str, Any]:
         "quest_text",
         "icon_roles",
         "identity_anchors",
+        "directional_identity_map",
         "views_and_expressions",
         "costume_and_equipment",
         "landmarks",

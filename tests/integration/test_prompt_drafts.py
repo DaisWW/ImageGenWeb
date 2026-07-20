@@ -41,6 +41,16 @@ class TestPromptDrafts(PlatformTestCase):
         self.assertTrue(all(template.case_refs for template in game_templates))
         self.assertTrue(all(template.required_fields for template in game_templates))
         self.assertTrue(all(template.hard_checks for template in game_templates))
+        character_sheet = next(
+            template
+            for template in game_templates
+            if template.identifier == "game-art-character-sheet"
+        )
+        self.assertIn("directional_identity_map", character_sheet.required_fields)
+        gameplay_hud = next(
+            template for template in game_templates if template.identifier == "game-ui-gameplay-hud"
+        )
+        self.assertTrue(any("全幅装饰框" in pitfall for pitfall in gameplay_hud.pitfalls))
 
     def test_prompt_draft_auto_selects_catalog_template_and_preserves_locked_direction(self):
         workspace = self.create_workspace("自动匹配海报")
@@ -129,7 +139,14 @@ class TestPromptDrafts(PlatformTestCase):
                     "exact_text": ["OBJECTIVE: REACH THE GATE"],
                     "ui_constraints": ["不遮挡角色和敌人"],
                 },
-                "hard_checks": ["HUD 分区不越界", "关键数值可读"],
+                "hard_checks": [
+                    "HUD 分区不越界",
+                    "关键数值可读",
+                    "平台正确",
+                    "画布正确",
+                    "不遮挡主体",
+                    "无额外文字",
+                ],
                 "quality_hint": "high",
             },
             ensure_ascii=False,
@@ -146,9 +163,51 @@ class TestPromptDrafts(PlatformTestCase):
         self.assertEqual(draft.payload["template_id"], "game-ui-gameplay-hud")
         self.assertEqual(draft.payload["case_refs"], ["skill:15", "skill:18", "skill:19"])
         self.assertEqual(draft.payload["production_spec"]["platform"], "mobile")
+        self.assertEqual(len(draft.payload["hard_checks"]), 6)
         self.assertIn("gallery-gaming.md", draft.payload["sources"][2]["references"]["gaming"])
         self.assertIn("game-ui-gameplay-hud", self.chat_client.calls[-1]["system"])
         self.assertIn("平台、目标画布、屏幕状态和安全区", self.chat_client.calls[-1]["system"])
+
+    def test_game_art_draft_preserves_directional_identity_map(self):
+        workspace = self.create_workspace("角色设定表")
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="六面板女性剑士设定表，角色右侧白发、左肩白甲、右臂机械护具。",
+        )
+        directional_map = [
+            "FRONT：角色右侧 → 观看者左侧 → 白发与右臂护具",
+            "BACK：角色左侧 → 观看者左侧 → 白色肩甲",
+            "FACE：角色右侧 → 观看者左侧 → 白发",
+        ]
+        self.chat_client.prompt_draft_content = json.dumps(
+            {
+                "status": "ready",
+                "summary_zh": "六面板女性剑士正式角色设定表。",
+                "prompt": "six-panel production character sheet",
+                "creative_direction": "game_art",
+                "template_id": "game-art-character-sheet",
+                "production_spec": {
+                    "panel_count": 6,
+                    "directional_identity_map": directional_map,
+                },
+                "hard_checks": ["六面板数量正确"],
+            },
+            ensure_ascii=False,
+        )
+
+        draft = self.services.conversations.create_prompt_draft(
+            workspace,
+            model_id="test-chat",
+            translate_to_english=True,
+            creative_direction_id="game_art",
+        )
+
+        self.assertEqual(draft.payload["template_id"], "game-art-character-sheet")
+        self.assertEqual(
+            draft.payload["production_spec"]["directional_identity_map"], directional_map
+        )
+        self.assertLessEqual(len(draft.payload["hard_checks"]), 6)
 
     def test_prompt_translation_defaults_off_and_records_draft_duration(self):
         workspace = self.create_workspace()
