@@ -179,14 +179,21 @@ class OpenAIChatClient:
                         details=response_summary(response, completed),
                     )
                 break
-        except (requests.RequestException, OSError, ValueError) as exc:
+        except (requests.RequestException, OSError, ValueError, AttributeError) as exc:
             if time.monotonic() >= deadline:
                 raise _timeout_error(
                     started,
                     response=response,
                     exception_type=exc.__class__.__name__,
                 ) from exc
-            raise
+            raise OpenAIChatError(
+                "聊天模型连接中断，请重试",
+                code="chat_connection_error",
+                request_id=_request_id(response),
+                upstream_status=response.status_code,
+                elapsed_seconds=_elapsed(started),
+                details={"exception_type": exc.__class__.__name__},
+            ) from exc
         finally:
             timer.cancel()
 

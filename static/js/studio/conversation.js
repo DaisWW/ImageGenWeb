@@ -139,10 +139,11 @@
         }
         return;
       }
-      const outgoing = this.outgoingMessages.get(message.id);
-      if (!outgoing) return;
+      const outgoing = this.outgoingMessages.get(message.id) || message;
       outgoing.delivery_state = "failed";
       outgoing.delivery_error = failure.message;
+      outgoing.operation_id = "";
+      this.outgoingMessages.set(message.id, outgoing);
       if (this.activeWorkspace?.id === message.workspace_id) this.renderMessages();
     },
 
@@ -154,6 +155,8 @@
         UI.toast("管理员尚未配置可用的对话模型", "error");
         return;
       }
+      const previousError = this.messages.find((message) => message.id === errorMessageId);
+      if (previousError) delete previousError.retry_error;
       const result = await this.runChatOperation(
         workspaceId,
         "正在重新确认需求",
@@ -167,9 +170,13 @@
           });
         },
       );
-      const { data, canceled } = result;
+      const { data, failure, canceled } = result;
       if (data && this.activeWorkspace?.id === workspaceId) {
         this.mergeConversationMessages([data.message], data.context);
+        this.renderMessages();
+      }
+      if (failure && this.activeWorkspace?.id === workspaceId && previousError) {
+        previousError.retry_error = failure.message;
         this.renderMessages();
       }
       if (canceled && this.activeWorkspace?.id === workspaceId) this.renderMessages();
@@ -263,7 +270,7 @@
         canceled = this.isChatOperationCanceled(operation, error);
         if (!canceled) failure = error;
       } finally {
-        await this.finishLocalChatOperation(workspaceId, failure, operation);
+        this.finishLocalChatOperation(workspaceId, operation);
       }
       return {
         operation,
@@ -301,15 +308,12 @@
       return operation;
     },
 
-    async finishLocalChatOperation(workspaceId, failure, operation) {
+    finishLocalChatOperation(workspaceId, operation) {
       if (this.chatOperations.get(workspaceId) === operation) {
         this.chatOperations.delete(workspaceId);
       }
       this.renderWorkspaceList();
       if (this.activeWorkspace?.id === workspaceId) this.renderMessages();
-      if (!failure || operation?.canceled) return;
-      UI.toast(failure.message, "error");
-      await this.loadMessages(workspaceId);
     },
 
     requestOperationCancellation(workspaceId, operationId) {

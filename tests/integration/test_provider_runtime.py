@@ -278,6 +278,28 @@ class TestProviderAndRuntime(PlatformTestCase):
         self.assertGreaterEqual(raised.exception.elapsed_seconds, 10)
         self.assertTrue(response.closed)
 
+    def test_chat_stream_read_failure_becomes_retryable_provider_error(self):
+        model = self.app.extensions["chat_model_registry"].get("test-chat")
+
+        class BrokenStreamResponse(FakeChatResponse):
+            def iter_lines(self, *, chunk_size=512, decode_unicode=False):
+                raise AttributeError("'NoneType' object has no attribute 'read'")
+
+        response = BrokenStreamResponse()
+
+        with self.assertRaises(OpenAIChatError) as raised:
+            OpenAIChatClient(RecordingChatSession([response])).complete(
+                model,
+                system="系统提示",
+                messages=[{"role": "user", "content": "你好"}],
+            )
+
+        self.assertEqual(str(raised.exception), "聊天模型连接中断，请重试")
+        self.assertEqual(raised.exception.code, "chat_connection_error")
+        self.assertEqual(raised.exception.request_id, "chat-http-test")
+        self.assertEqual(raised.exception.details["exception_type"], "AttributeError")
+        self.assertTrue(response.closed)
+
     def test_chat_does_not_retry_non_502_errors(self):
         model = self.app.extensions["chat_model_registry"].get("test-chat")
         response = FakeChatResponse(

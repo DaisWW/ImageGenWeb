@@ -33,12 +33,20 @@
             && !canceledOutgoingIds.has(message.payload?.reply_to_message_id)
           ));
           const serverMessageIds = new Set(nextMessages.map((message) => message.id));
+          const repliedUserMessageIds = new Set(
+            nextMessages
+              .filter((message) => message.role === "user" && message.payload?.reply_message_id)
+              .map((message) => message.id),
+          );
           let outgoingChanged = false;
           for (const [id, message] of this.outgoingMessages) {
             if (
               message.workspace_id === workspaceId
               && serverMessageIds.has(id)
-              && message.delivery_state !== "canceled"
+              && (
+                message.delivery_state === "sending"
+                || repliedUserMessageIds.has(id)
+              )
             ) {
               this.outgoingMessages.delete(id);
               outgoingChanged = true;
@@ -75,12 +83,22 @@
       const workspaceId = this.activeWorkspace?.id;
       const messageIds = new Set(this.messages.map((message) => message.id));
       const timeline = [
-        ...this.messages.map((message) => ({
-          type: "message",
-          createdAt: message.created_at,
-          id: message.id,
-          value: message,
-        })),
+        ...this.messages.map((message) => {
+          const outgoing = this.outgoingMessages.get(message.id);
+          const value = outgoing?.delivery_state === "failed"
+            ? {
+              ...message,
+              delivery_state: "failed",
+              delivery_error: outgoing.delivery_error,
+            }
+            : message;
+          return {
+            type: "message",
+            createdAt: message.created_at,
+            id: message.id,
+            value,
+          };
+        }),
         ...this.jobs.map((job) => ({
           type: "job",
           createdAt: job.created_at,
@@ -123,6 +141,15 @@
       this.renderContextStatus();
       this.updateInteractionState();
       if (keepAtBottom && timelineChanged) this.scrollConversation();
+    },
+
+    messageRenderState(message) {
+      return [
+        message.kind || "message",
+        message.delivery_state || "stored",
+        message.operation_id || "",
+        message.delivery_error || message.retry_error || "",
+      ].join(":");
     },
 
     reconcileTimeline(timeline) {
@@ -170,7 +197,7 @@
             if (previousStatus !== entry.value.status) layoutChanged = true;
           }
         } else {
-          const state = `${entry.value.kind || "message"}:${entry.value.delivery_state || "stored"}:${entry.value.operation_id || ""}`;
+          const state = this.messageRenderState(entry.value);
           if (!node || node.dataset.messageState !== state) {
             const replacement = this.messageCard(entry.value);
             if (node) node.replaceWith(replacement);
@@ -245,7 +272,7 @@
         message.kind || "message",
         message.delivery_state || "",
       ].filter(Boolean).join(" ");
-      row.dataset.messageState = `${message.kind || "message"}:${message.delivery_state || "stored"}:${message.operation_id || ""}`;
+      row.dataset.messageState = this.messageRenderState(message);
       if (message.id) row.dataset.messageId = message.id;
 
       const avatar = document.createElement("span");
@@ -291,6 +318,17 @@
         content.className = "message-content";
         content.textContent = message.content || "";
         card.append(content);
+        const errorText = message.retry_error
+          ? `重试失败：${message.retry_error}`
+          : message.delivery_state === "failed"
+            ? `错误原因：${message.delivery_error || "消息发送失败"}`
+            : "";
+        if (errorText) {
+          const failure = document.createElement("p");
+          failure.className = "message-error";
+          failure.textContent = errorText;
+          card.append(failure);
+        }
         if (message.kind === "error" && message.payload?.retry_user_message_id) {
           const retry = document.createElement("button");
           retry.type = "button";

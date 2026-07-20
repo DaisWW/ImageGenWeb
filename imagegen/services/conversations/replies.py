@@ -244,7 +244,6 @@ class ConversationReplyService(ConversationSupport):
         settings = workspace.settings or {}
         review = PromptDraftReview(
             translate_to_english=settings.get("translate_prompt") is True,
-            workspace_kind=workspace.kind,
             workspace_prompt=self.chat_models.workspace_prompt(workspace.kind),
             conversation_prompt=self.chat_models.system_prompt("chat"),
             generation_prompt=generation_mode_prompt(

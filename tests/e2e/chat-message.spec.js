@@ -9,7 +9,6 @@ test("chat delivery uses stable IDs and retries the same message", async ({ page
     max_context_tokens: 32000,
   };
   let workspaceId = "";
-  let accepted = false;
   let releaseReply;
   const replyReleased = new Promise((resolve) => {
     releaseReply = resolve;
@@ -42,12 +41,15 @@ test("chat delivery uses stable IDs and retries the same message", async ({ page
       requests.push(body);
       if (requests.length === 1) {
         await route.fulfill({
-          status: 503,
-          json: { error: "消息发送失败", code: "request_failed" },
+          status: 500,
+          json: {
+            error: "服务器内部错误",
+            code: "internal_error",
+            error_id: "e2e-internal-error-id",
+          },
         });
         return;
       }
-      accepted = true;
       await replyReleased;
       await route.fulfill({
         status: 201,
@@ -58,7 +60,7 @@ test("chat delivery uses stable IDs and retries the same message", async ({ page
       });
       return;
     }
-    if (accepted) {
+    if (requests.length) {
       const body = requests.at(-1);
       await route.fulfill({
         json: {
@@ -94,6 +96,12 @@ test("chat delivery uses stable IDs and retries the same message", async ({ page
   const userId = requests[0].message_id;
   expect(userId).toMatch(/^[a-f0-9]{32}$/);
   const userRow = page.locator('[data-message-id="' + userId + '"]');
+  await expect(userRow).toContainText("发送失败");
+  await expect(userRow).toContainText("错误原因：服务器内部错误（错误 ID：e2e-internal-error-id）");
+  await expect(userRow.getByRole("button", { name: "重试发送" })).toBeVisible();
+  await expect(page.locator("#toastRegion .toast")).toHaveCount(0);
+
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
   await expect(userRow).toContainText("发送失败");
   await expect(userRow.getByRole("button", { name: "重试发送" })).toBeVisible();
 

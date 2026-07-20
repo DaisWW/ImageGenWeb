@@ -313,17 +313,15 @@
       this.draggedWorkspaceId = null;
     },
 
-    async selectWorkspace(id, { knownEmpty = false } = {}) {
+    selectWorkspace(id, { knownEmpty = false } = {}) {
       const workspace = this.workspaces.find((item) => item.id === id);
       if (!workspace || workspace === this.activeWorkspace) return;
       const selection = ++this.workspaceLoadSequence;
       if (this.activeWorkspace) {
-        this.cancelGenerationSubmission?.(this.activeWorkspace.id);
-        this.chatDrafts.set(this.activeWorkspace.id, this.el.chatInput.value);
-        await this.flushSettings();
-        if (selection !== this.workspaceLoadSequence) return;
-        await this.animateWorkspaceOut();
-        if (selection !== this.workspaceLoadSequence) return;
+        const outgoingWorkspaceId = this.activeWorkspace.id;
+        this.cancelGenerationSubmission?.(outgoingWorkspaceId);
+        this.chatDrafts.set(outgoingWorkspaceId, this.el.chatInput.value);
+        void this.flushSettings(outgoingWorkspaceId);
       }
       this.activeWorkspace = workspace;
       this.saveLastWorkspaceId(workspace.id);
@@ -381,20 +379,6 @@
       this.setComposerMode("chat");
       this.renderMessages();
       this.updateMetrics();
-    },
-
-    async animateWorkspaceOut() {
-      if (this.reducedMotion.matches || typeof this.el.conversationView.animate !== "function") return;
-      this.workspaceTransition?.cancel();
-      const animation = this.el.conversationView.animate(
-        [
-          { opacity: 1, transform: "translateY(0)" },
-          { opacity: 0.28, transform: "translateY(-4px)" },
-        ],
-        { duration: 90, easing: "ease-out", fill: "forwards" },
-      );
-      this.workspaceTransition = animation;
-      await animation.finished.catch(() => {});
     },
 
     animateWorkspaceIn() {

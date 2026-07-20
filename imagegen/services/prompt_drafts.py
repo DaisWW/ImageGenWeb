@@ -20,10 +20,8 @@ from .creative import (
 @dataclass(frozen=True, slots=True)
 class PromptDraftReview:
     translate_to_english: bool
-    workspace_kind: str
     workspace_prompt: str
     conversation_prompt: str = ""
-    runtime_prompt: str = ""
     generation_prompt: str = ""
     creative_direction_id: str = "auto"
     max_prompt_characters: int = 8000
@@ -33,12 +31,6 @@ class PromptDraftReview:
             "prompt 必须是自然、具体、结构清晰的英文生图提示词"
             if self.translate_to_english
             else "prompt 必须是自然、具体、结构清晰的中文生图提示词"
-        )
-        task = "静态图片" if self.workspace_kind == "image" else "视觉内容"
-        runtime_section = (
-            f"\n本次任务的运行参数如下：\n{self.runtime_prompt.strip()}"
-            if self.runtime_prompt.strip()
-            else ""
         )
         generation_section = (
             f"\n{self.generation_prompt.strip()}" if self.generation_prompt.strip() else ""
@@ -51,12 +43,12 @@ class PromptDraftReview:
         direction_section = creative_direction_prompt(self.creative_direction_id)
         return f"""你是高级 AI 视觉创作搭档与提示词工程师。本次调用同时完成需求确认和最终提示词整理：先判断会话是否已经足够明确，再决定是继续澄清还是直接为 GPT Image 2 整理最终提示词。
 独立核对用户已经确认的事实、用户明确授权 AI 决定的事项、未解决问题和互相冲突的要求。助手曾提出但用户没有接受的建议不能视为已确认；用户明确回答“你决定”或同义表达时，该项视为已授权，不要再次阻塞。
-只有缺失或冲突会让主体、用途、构图、风格、精确文字、参考图用途或动画动作产生明显不同结果时，才判定需要澄清。不要为了补齐所有常见参数而阻塞；不影响核心意图的衔接细节可采用克制、专业且不抢戏的默认选择。
+只有缺失或冲突会让主体、用途、构图、风格、精确文字、参考图用途或主体动作产生明显不同结果时，才判定需要澄清。不要为了补齐所有常见参数而阻塞；不影响核心意图的衔接细节可采用克制、专业且不抢戏的默认选择。
 若需要澄清，先完整核对会话，筛掉不会明显改变结果的低影响细节，只保留信息增益最高、互不重复且容易回答的阻塞性问题。把当前能够识别的问题一次性输出，问题宁少勿多，最多四个；不得把已经能识别的问题拆到后续轮次，也不要为了凑满四个补充问题。只有用户回答后新出现、且此前无法判断的关键分支或冲突，才允许追加追问。
 questions 数组的每一项只放一个问题。适合枚举时，在同一字符串内换行列出“A.、B.、C.、D.……”选项，标明一个“（推荐）”，并把最后一项写为“其他（请自定义）”；无法合理枚举时直接要求填写具体内容。用户也可以自由输入或回答“你决定”；此时禁止输出半成品提示词。
 若需求已足够明确，{target}，准确描述主体、动作、环境、构图、镜头、光线、材质、色彩和风格，不要堆砌互相冲突的关键词。summary_zh 要让用户能够核对所有关键事实、授权决定与精确限制。
-当前任务是{task}。请遵循以下工作站创作指导：
-{self.workspace_prompt.strip()}{conversation_section}{runtime_section}{generation_section}
+当前任务是静态图片。请遵循以下工作站创作指导：
+{self.workspace_prompt.strip()}{conversation_section}{generation_section}
 
 {direction_section}
 

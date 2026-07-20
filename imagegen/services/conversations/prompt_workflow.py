@@ -78,7 +78,6 @@ class PromptDraftWorkflow(ConversationSupport):
         )
         review = PromptDraftReview(
             translate_to_english=translate_to_english,
-            workspace_kind=workspace.kind,
             workspace_prompt=self.chat_models.workspace_prompt(workspace.kind),
             generation_prompt=generation_mode_prompt(
                 effective_mode,

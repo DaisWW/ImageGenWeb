@@ -94,6 +94,48 @@ test("new workspace is interactive while history is delayed", async ({ studioPag
   await deleteWorkspace(page, name);
 });
 
+test("workspace switching does not wait for a pending settings save", {
+  tag: "@responsive",
+}, async ({
+  studioPage: page,
+}) => {
+  const initial = page.locator("#workspaceList .workspace-item.active");
+  const initialId = await initial.getAttribute("data-workspace-id");
+  const initialName = await initial.locator(".workspace-copy strong").textContent();
+  const name = `E2E-Switch-Save-${Date.now()}`;
+  await createWorkspace(page, name);
+  const createdId = await page.locator("#workspaceList .workspace-item.active")
+    .getAttribute("data-workspace-id");
+  const saves = deferred();
+
+  await page.route(`**/api/workspaces/${createdId}`, async (route) => {
+    if (route.request().method() !== "PATCH") {
+      await route.continue();
+      return;
+    }
+    const settings = route.request().postDataJSON().settings;
+    expect(settings.translate_prompt).toBe(true);
+    await saves.promise;
+    await route.fulfill({
+      json: { workspace: { settings } },
+    });
+  });
+
+  await page.locator("#translatePrompt").check();
+  try {
+    await page.locator(`[data-workspace-id="${initialId}"] [data-select-workspace]`).click();
+    await expect(page.locator("#workspaceTitle")).toHaveText(initialName, { timeout: 1000 });
+    await expect(page.locator("#chatInput")).toBeEditable({ timeout: 1000 });
+    await page.locator(`[data-workspace-id="${createdId}"] [data-select-workspace]`).click();
+    await expect(page.locator("#workspaceTitle")).toHaveText(name, { timeout: 1000 });
+    await expect(page.locator("#chatInput")).toBeEditable({ timeout: 1000 });
+  } finally {
+    saves.resolve();
+  }
+
+  await deleteWorkspace(page, name);
+});
+
 test("switching workspaces stays interactive and pending chat remains cancelable", async ({
   studioPage: page,
 }) => {

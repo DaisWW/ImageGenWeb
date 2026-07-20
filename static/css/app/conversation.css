@@ -75,6 +75,15 @@
   margin-top: 9px;
 }
 
+.message-error {
+  margin-top: 8px;
+  color: #efb0b3;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .message-avatar {
   display: grid;
   width: 34px;
