@@ -360,7 +360,10 @@ test("workspace lifecycle remains usable", { tag: "@responsive" }, async ({
     hasText: "starter-ocean-sky-reference.png",
   }).first();
   await expect(libraryImage).toBeVisible();
-  await libraryImage.locator("[data-use-library-image]").click();
+  await libraryImage.locator("[data-toggle-library-image]").click();
+  await expect(libraryImage.locator("[data-select-library-image]")).toBeChecked();
+  await expect(page.locator("#libraryDialog")).toBeVisible();
+  await page.locator("#libraryConfirmButton").click();
   await expect(page.locator("#libraryDialog")).toBeHidden();
   await expect(page.locator("#chatReferenceCount")).toHaveText("1");
 

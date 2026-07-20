@@ -137,6 +137,38 @@ test("image library confirms multiple message attachments together", {
   expect(imported).toEqual(["library-chat-a", "library-chat-b"]);
 });
 
+test("image library mirrors existing message selections and card clicks toggle", {
+  tag: "@responsive",
+}, async ({ studioPage: page }) => {
+  const images = [
+    libraryImage("library-chat-sync", "chat-sync.png", "/static/assets/brand-mark-v2.png"),
+  ];
+  const imported = await mockLibrarySelection(page, images);
+
+  await page.locator("#libraryButton").click();
+  const card = page.locator("#libraryGrid .library-card").first();
+  await card.locator("[data-toggle-library-image]").click();
+  await expect(card.locator("[data-select-library-image]")).toBeChecked();
+  await expect(page.locator("#libraryDialog")).toBeVisible();
+  await expect(page.locator("#librarySelectionSummary")).toHaveText("已选择 1 / 20 张");
+  await page.locator("#libraryConfirmButton").click();
+  await expect(page.locator("#libraryDialog")).toBeHidden();
+  await expect(page.locator("#chatReferenceCount")).toHaveText("1");
+
+  await page.locator("#libraryButton").click();
+  const reopenedCard = page.locator("#libraryGrid .library-card").first();
+  await expect(reopenedCard.locator("[data-select-library-image]")).toBeChecked();
+  await expect(page.locator("#librarySelectionSummary")).toHaveText("已选择 1 / 20 张");
+
+  await reopenedCard.locator("[data-toggle-library-image]").click();
+  await expect(reopenedCard.locator("[data-select-library-image]")).not.toBeChecked();
+  await expect(page.locator("#librarySelectionSummary")).toHaveText("已选择 0 / 20 张");
+  await page.locator("#libraryConfirmButton").click();
+  await expect(page.locator("#libraryDialog")).toBeHidden();
+  await expect(page.locator("#chatReferenceCount")).toHaveText("0");
+  expect(imported).toEqual(["library-chat-sync"]);
+});
+
 test("image library confirms multiple padding images up to the channel limit", {
   tag: "@responsive",
 }, async ({ studioPage: page }) => {
