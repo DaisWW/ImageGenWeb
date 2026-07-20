@@ -145,6 +145,13 @@ class RuntimeConfigService:
                 raise ServiceError("对话模型条目格式无效")
             identifier = str(raw.get("id", "")).strip()
             old = existing.get(identifier)
+            review_reasoning_effort = (
+                raw["review_reasoning_effort"]
+                if "review_reasoning_effort" in raw
+                else old.review_reasoning_effort
+                if old
+                else ""
+            )
             models.append(
                 {
                     "id": identifier,
@@ -154,6 +161,7 @@ class RuntimeConfigService:
                     "api_key": _resolved_key(raw, old.api_key if old else ""),
                     "model": str(raw.get("model", "")).strip(),
                     "reasoning_effort": str(raw.get("reasoning_effort", "")).strip(),
+                    "review_reasoning_effort": str(review_reasoning_effort).strip(),
                     "timeout_seconds": raw.get("timeout_seconds"),
                     "max_output_tokens": raw.get("max_output_tokens"),
                 }

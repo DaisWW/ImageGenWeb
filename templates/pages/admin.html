@@ -243,8 +243,9 @@
       <label class="field"><span>上游模型</span><input name="model" maxlength="150" required></label>
     </div>
     <label class="check-line" data-clear-chat-key-row hidden><input type="checkbox" name="clear_api_key"><span>清除已保存的 API Key</span></label>
-    <div class="form-grid three-columns">
+    <div class="form-grid four-columns">
       <label class="field"><span>推理强度</span><select name="reasoning_effort"><option value="">默认</option><option value="none">None</option><option value="minimal">Minimal</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="max">Max</option></select></label>
+      <label class="field"><span>需求整理推理强度</span><select name="review_reasoning_effort"><option value="">继承通用</option><option value="none">None</option><option value="minimal">Minimal</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="max">Max</option></select></label>
       <label class="field"><span>超时秒数</span><input type="number" name="timeout_seconds" min="10" max="600" required></label>
       <label class="field"><span>最大输出 Tokens</span><input type="number" name="max_output_tokens" min="128" max="16000" required></label>
     </div>

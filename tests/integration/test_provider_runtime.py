@@ -144,7 +144,10 @@ class TestProviderAndRuntime(PlatformTestCase):
             messages=[{"role": "user", "content": "你好"}],
         )
         self.assertEqual(model.reasoning_effort, "max")
+        self.assertEqual(model.review_reasoning_effort, "medium")
+        self.assertEqual(model.effective_review_reasoning_effort, "medium")
         self.assertEqual(model.public_dict()["reasoning_effort"], "max")
+        self.assertEqual(model.public_dict()["review_reasoning_effort"], "medium")
         self.assertEqual(session.request["url"], "https://chat.example/v1/responses")
         self.assertEqual(session.request["headers"]["Accept"], "text/event-stream")
         self.assertTrue(session.request["stream"])
@@ -159,6 +162,15 @@ class TestProviderAndRuntime(PlatformTestCase):
         self.assertEqual(result.input_tokens, 4)
         self.assertEqual(result.output_tokens, 2)
         self.assertTrue(session.responses == [])
+
+        override_session = RecordingChatSession()
+        OpenAIChatClient(override_session).complete(
+            model,
+            system="系统提示",
+            messages=[{"role": "user", "content": "你好"}],
+            reasoning_effort="low",
+        )
+        self.assertEqual(override_session.request["json"]["reasoning"], {"effort": "low"})
 
     def test_chat_request_converts_image_parts_for_responses_api(self):
         model = self.app.extensions["chat_model_registry"].get("test-chat")

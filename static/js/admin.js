@@ -903,7 +903,7 @@
         <tr>
           <td><strong>${UI.escapeHtml(model.label)}</strong><small class="subline">${UI.escapeHtml(model.id)}</small></td>
           <td><span class="status-badge ${model.configured ? "succeeded" : "failed"}"><span></span>${model.configured ? "可用" : model.enabled ? "缺少 Key" : "停用"}</span></td>
-          <td>${UI.escapeHtml(model.model)}${model.reasoning_effort ? `<small class="subline">推理 ${UI.escapeHtml(model.reasoning_effort)}</small>` : ""}</td>
+          <td>${UI.escapeHtml(model.model)}<small class="subline">通用推理 ${UI.escapeHtml(model.reasoning_effort || "继承默认")}</small><small class="subline">需求整理 ${UI.escapeHtml(model.review_reasoning_effort || "继承通用")}</small></td>
           <td><div class="capability-list"><span>超限直接截断较早内容</span><span>历史图片和生成结果优先</span></div></td>
           <td class="actions-cell"><div class="row-actions">
             <button class="icon-button" type="button" data-edit-chat-model="${UI.escapeHtml(model.id)}" title="编辑模型" aria-label="编辑模型"><i data-lucide="pencil"></i></button>
@@ -929,6 +929,7 @@
       form.querySelector("[data-clear-chat-key-row]").hidden = !model?.has_api_key;
       form.elements.model.value = model?.model || "";
       form.elements.reasoning_effort.value = model?.reasoning_effort || "";
+      form.elements.review_reasoning_effort.value = model?.review_reasoning_effort || "";
       form.elements.timeout_seconds.value = model?.timeout_seconds ?? 180;
       form.elements.max_output_tokens.value = model?.max_output_tokens ?? 2000;
       this.el.chatModelDialogTitle.textContent = model ? `编辑 ${model.label}` : "新增对话模型";
@@ -969,6 +970,7 @@
           clear_api_key: form.elements.clear_api_key.checked,
           model: form.elements.model.value.trim(),
           reasoning_effort: form.elements.reasoning_effort.value,
+          review_reasoning_effort: form.elements.review_reasoning_effort.value,
           timeout_seconds: Number(form.elements.timeout_seconds.value),
           max_output_tokens: Number(form.elements.max_output_tokens.value),
         };

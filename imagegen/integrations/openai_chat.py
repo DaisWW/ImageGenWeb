@@ -55,6 +55,7 @@ class OpenAIChatClient:
         system: str,
         messages: list[dict[str, Any]],
         max_output_tokens: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> ChatCompletion:
         started = time.monotonic()
         deadline = started + float(model.timeout_seconds)
@@ -65,8 +66,9 @@ class OpenAIChatClient:
             "stream": True,
             "max_output_tokens": max_output_tokens or model.max_output_tokens,
         }
-        if model.reasoning_effort:
-            payload["reasoning"] = {"effort": model.reasoning_effort}
+        effort = model.reasoning_effort if reasoning_effort is None else reasoning_effort
+        if effort:
+            payload["reasoning"] = {"effort": effort}
 
         for attempt in range(2):
             response = None

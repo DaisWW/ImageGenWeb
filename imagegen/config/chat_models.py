@@ -10,6 +10,7 @@ from .base import ReloadableConfigRegistry
 
 SYSTEM_PROMPT_MAX_LENGTH = 20000
 WORKSPACE_PROMPT_MAX_LENGTH = 12000
+REASONING_EFFORTS = {"", "none", "minimal", "low", "medium", "high", "max"}
 DEFAULT_SYSTEM_PROMPTS = {
     "chat": """你是用户的 AI 视觉创作搭档，专注于把想法逐步变成清晰、可执行的图像方案。
 交流要自然、专业、有审美判断，像经验丰富的创意伙伴，不要像客服、产品说明书或信息收集表。
@@ -50,6 +51,7 @@ class ChatModelConfig:
     base_url: str
     model: str
     reasoning_effort: str
+    review_reasoning_effort: str
     timeout_seconds: int
     max_output_tokens: int
     api_key: str = field(repr=False)
@@ -57,6 +59,10 @@ class ChatModelConfig:
     @property
     def configured(self) -> bool:
         return self.enabled and bool(self.api_key) and bool(self.base_url) and bool(self.model)
+
+    @property
+    def effective_review_reasoning_effort(self) -> str:
+        return self.review_reasoning_effort or self.reasoning_effort
 
     def public_dict(self) -> dict[str, Any]:
         return {
@@ -66,6 +72,7 @@ class ChatModelConfig:
             "configured": self.configured,
             "model": self.model,
             "reasoning_effort": self.reasoning_effort,
+            "review_reasoning_effort": self.review_reasoning_effort,
         }
 
     def editable_dict(self) -> dict[str, Any]:
@@ -78,6 +85,7 @@ class ChatModelConfig:
             "has_api_key": bool(self.api_key),
             "model": self.model,
             "reasoning_effort": self.reasoning_effort,
+            "review_reasoning_effort": self.review_reasoning_effort,
             "timeout_seconds": self.timeout_seconds,
             "max_output_tokens": self.max_output_tokens,
         }
@@ -212,9 +220,16 @@ class ChatModelRegistry(ReloadableConfigRegistry[ChatModelSnapshot]):
             str(raw.get("reasoning_effort_env", "")).strip(), ""
         ).strip()
         reasoning_effort = reasoning_effort or str(raw.get("reasoning_effort", "")).strip()
-        allowed_efforts = {"", "none", "minimal", "low", "medium", "high", "max"}
-        if reasoning_effort not in allowed_efforts:
+        if reasoning_effort not in REASONING_EFFORTS:
             raise ValueError(f"{label} 的 reasoning_effort 配置无效")
+        review_reasoning_effort = os.environ.get(
+            str(raw.get("review_reasoning_effort_env", "")).strip(), ""
+        ).strip()
+        review_reasoning_effort = (
+            review_reasoning_effort or str(raw.get("review_reasoning_effort", "")).strip()
+        )
+        if review_reasoning_effort not in REASONING_EFFORTS:
+            raise ValueError(f"{label} 的 review_reasoning_effort 配置无效")
         api_key = str(raw.get("api_key", "")).strip()
         if not api_key:
             api_key = os.environ.get(str(raw.get("api_key_env", "")).strip(), "").strip()
@@ -225,6 +240,7 @@ class ChatModelRegistry(ReloadableConfigRegistry[ChatModelSnapshot]):
             base_url=base_url,
             model=model,
             reasoning_effort=reasoning_effort,
+            review_reasoning_effort=review_reasoning_effort,
             timeout_seconds=bounded_int(raw, "timeout_seconds", 180, 10, 600),
             max_output_tokens=bounded_int(raw, "max_output_tokens", 2000, 128, 16000),
             api_key=api_key,

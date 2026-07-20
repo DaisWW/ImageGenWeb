@@ -267,6 +267,7 @@ class ConversationReplyService(ConversationSupport):
                 system=review.system_prompt(),
                 messages=context,
                 max_output_tokens=min(model.max_output_tokens, 2400),
+                reasoning_effort=model.effective_review_reasoning_effort,
             )
         except OpenAIChatError as exc:
             return self._error_reply(

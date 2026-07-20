@@ -21,5 +21,28 @@ models:
     model_env: GPT_CHAT_MODEL
     reasoning_effort: max
     reasoning_effort_env: GPT_CHAT_REASONING_EFFORT
+    review_reasoning_effort: medium
+    timeout_seconds: 180
+    max_output_tokens: 16000
+  - id: gpt-5-6-luna
+    label: GPT 5.6 LUNA
+    enabled: true
+    base_url: http://xjbkw.weiw:18080
+    base_url_env: GPT_CHAT_API_BASE_URL
+    api_key_env: GPT_CHAT_API_KEY
+    model: gpt-5.6-luna
+    reasoning_effort: max
+    review_reasoning_effort: medium
+    timeout_seconds: 180
+    max_output_tokens: 16000
+  - id: gpt-5-6-terra
+    label: GPT 5.6 TERRA
+    enabled: true
+    base_url: http://xjbkw.weiw:18080
+    base_url_env: GPT_CHAT_API_BASE_URL
+    api_key_env: GPT_CHAT_API_KEY
+    model: gpt-5.6-terra
+    reasoning_effort: max
+    review_reasoning_effort: medium
     timeout_seconds: 180
     max_output_tokens: 16000

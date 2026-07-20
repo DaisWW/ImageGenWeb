@@ -329,6 +329,7 @@ class TestAdminAndMaintenance(PlatformTestCase):
         self.assertNotIn("test-chat-key-not-secret", json.dumps(config))
         config["models"][0]["api_key"] = "replacement-chat-key"
         config["models"][0]["reasoning_effort"] = "high"
+        config["models"][0]["review_reasoning_effort"] = "low"
 
         response = client.put("/api/admin/chat-models", json=config)
         self.assertEqual(response.status_code, 200)
@@ -338,6 +339,7 @@ class TestAdminAndMaintenance(PlatformTestCase):
         model = self.app.extensions["chat_model_registry"].get("test-chat")
         self.assertEqual(model.api_key, "replacement-chat-key")
         self.assertEqual(model.reasoning_effort, "high")
+        self.assertEqual(model.review_reasoning_effort, "low")
         stored = db.session.get(SystemState, CHAT_CONFIG_KEY)
         self.assertNotIn("replacement-chat-key", stored.value)
 
@@ -349,6 +351,17 @@ class TestAdminAndMaintenance(PlatformTestCase):
         self.assertEqual(registry.version, old_version)
         self.assertIn("至少需要一个渠道", registry.last_error)
         self.assertEqual(registry.get("test").label, "测试渠道")
+
+    def test_legacy_chat_config_save_preserves_review_reasoning_effort(self):
+        client = self.admin_client()
+        config = client.get("/api/admin/chat-models").json["config"]
+        config["models"][0].pop("review_reasoning_effort")
+
+        response = client.put("/api/admin/chat-models", json=config)
+
+        self.assertEqual(response.status_code, 200)
+        model = self.app.extensions["chat_model_registry"].get("test-chat")
+        self.assertEqual(model.review_reasoning_effort, "medium")
 
     def test_retention_keeps_metadata_when_file_deletion_fails_then_retries(self):
         workspace = self.create_workspace("清理重试")

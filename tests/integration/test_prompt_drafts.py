@@ -105,6 +105,7 @@ class TestPromptDrafts(PlatformTestCase):
         self.assertEqual(float(draft.elapsed_seconds), 1.234)
         self.assertEqual(draft.provider_id, "test-chat")
         self.assertEqual(self.chat_client.calls[-1]["model_id"], "test-chat")
+        self.assertEqual(self.chat_client.calls[-1]["reasoning_effort"], "medium")
         self.assertIn("中文生图提示词", self.chat_client.calls[-1]["system"])
 
         translated = self.services.conversations.create_prompt_draft(
@@ -365,6 +366,7 @@ class TestPromptDrafts(PlatformTestCase):
                 "api_key": "creative-chat-key",
                 "model": "gpt-creative",
                 "reasoning_effort": "low",
+                "review_reasoning_effort": "medium",
                 "timeout_seconds": 30,
                 "max_output_tokens": 1000,
             }

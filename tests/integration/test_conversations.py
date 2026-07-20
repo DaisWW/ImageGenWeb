@@ -49,6 +49,7 @@ class TestConversations(PlatformTestCase):
         self.assertEqual(assistant_message.payload["status"], "ready")
         self.assertIn("竖版新品海报", assistant_message.payload["prompt"])
         self.assertEqual(len(self.chat_client.calls), 1)
+        self.assertEqual(self.chat_client.calls[0]["reasoning_effort"], "medium")
         self.assertIn(
             "本次调用同时完成需求确认和最终提示词整理", self.chat_client.calls[0]["system"]
         )

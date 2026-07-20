@@ -96,6 +96,7 @@ models:
     api_key_env: TEST_CHAT_KEY
     model: gpt-test
     reasoning_effort: max
+    review_reasoning_effort: medium
     timeout_seconds: 30
     max_output_tokens: 1000
 """
@@ -226,7 +227,15 @@ class FakeChatClient:
         self.reply_content = ""
         self.prompt_draft_content = ""
 
-    def complete(self, model, *, system, messages, max_output_tokens=None):
+    def complete(
+        self,
+        model,
+        *,
+        system,
+        messages,
+        max_output_tokens=None,
+        reasoning_effort=None,
+    ):
         self.calls.append(
             {
                 "model_id": model.identifier,
@@ -234,6 +243,7 @@ class FakeChatClient:
                 "system": system,
                 "messages": messages,
                 "max_output_tokens": max_output_tokens,
+                "reasoning_effort": reasoning_effort,
             }
         )
         if "工作站生成一个简短、具体的标题" in system:
@@ -269,12 +279,21 @@ class FakeChatClient:
 
 
 class FailingOnceChatClient(FakeChatClient):
-    def complete(self, model, *, system, messages, max_output_tokens=None):
+    def complete(
+        self,
+        model,
+        *,
+        system,
+        messages,
+        max_output_tokens=None,
+        reasoning_effort=None,
+    ):
         result = super().complete(
             model,
             system=system,
             messages=messages,
             max_output_tokens=max_output_tokens,
+            reasoning_effort=reasoning_effort,
         )
         if len(self.calls) == 1:
             raise OpenAIChatError(
@@ -294,13 +313,22 @@ class BlockingFirstChatClient:
         self.calls = []
         self._lock = threading.Lock()
 
-    def complete(self, _model, *, system, messages, max_output_tokens=None):
+    def complete(
+        self,
+        _model,
+        *,
+        system,
+        messages,
+        max_output_tokens=None,
+        reasoning_effort=None,
+    ):
         with self._lock:
             self.calls.append(
                 {
                     "system": system,
                     "messages": messages,
                     "max_output_tokens": max_output_tokens,
+                    "reasoning_effort": reasoning_effort,
                 }
             )
             call_number = len(self.calls)
