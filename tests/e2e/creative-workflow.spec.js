@@ -109,7 +109,6 @@ test("AI automatically prepares a gallery template before generation", {
   await expect(page.locator(".prompt-draft-content").last()).toBeVisible();
   await expect(page.locator("#draftPromptButton")).toHaveCount(0);
   expect(promptDraftRequests).toBe(0);
-  await expect(page.locator("#animationParametersButton")).toBeHidden();
 
   const draft = page.locator(".prompt-draft-content").last();
   await expect(draft).toContainText("海报排版系统");

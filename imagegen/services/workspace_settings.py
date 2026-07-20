@@ -23,33 +23,25 @@ ALLOWED_WORKSPACE_SETTING_KEYS = {
     "compression",
     "transparent_background",
     "batch_count",
-    "animation_frame_count",
-    "animation_fps",
-    "animation_loop",
-    "animation_format",
 }
 
 
-def default_workspace_settings(workspace_kind: str = "image") -> dict[str, Any]:
+def default_workspace_settings() -> dict[str, Any]:
     return {
         "chat_model_id": "",
         "translate_prompt": False,
         "creative_direction_id": "auto",
         "prompt_draft_id": "",
         "generation_stage": "draft",
-        "mode": "img2img" if workspace_kind == "animation" else "text2img",
+        "mode": "text2img",
         "prompt": "",
         "channel_id": "",
         "model": "",
         "size": "1024x1024",
         "output_format": "png",
         "compression": 90,
-        "transparent_background": workspace_kind == "animation",
+        "transparent_background": False,
         "batch_count": 1,
-        "animation_frame_count": 8,
-        "animation_fps": 8,
-        "animation_loop": True,
-        "animation_format": "webp",
     }
 
 
@@ -81,7 +73,6 @@ def sanitize_workspace_settings(raw: Any, runtime: RuntimeSettings | None = None
     settings["size"] = normalize_image_size(settings["size"])
     settings["output_format"] = str(settings["output_format"])[:20]
     settings["transparent_background"] = as_bool(settings["transparent_background"])
-    settings["animation_loop"] = as_bool(settings["animation_loop"])
     if settings["output_format"] not in {"png", "webp"}:
         settings["transparent_background"] = False
     try:
@@ -89,15 +80,6 @@ def sanitize_workspace_settings(raw: Any, runtime: RuntimeSettings | None = None
         settings["batch_count"] = min(
             runtime.max_batch_images, max(1, int(settings["batch_count"]))
         )
-        settings["animation_frame_count"] = min(
-            runtime.max_animation_frames, max(2, int(settings["animation_frame_count"]))
-        )
-        settings["animation_fps"] = min(
-            runtime.max_animation_fps, max(1, int(settings["animation_fps"]))
-        )
     except (TypeError, ValueError) as exc:
         raise ServiceError("工作站数字参数无效") from exc
-    settings["animation_format"] = str(settings["animation_format"]).lower()
-    if settings["animation_format"] not in {"webp", "gif"}:
-        settings["animation_format"] = "webp"
     return settings

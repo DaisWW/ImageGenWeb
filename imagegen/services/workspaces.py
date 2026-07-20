@@ -87,7 +87,7 @@ class WorkspaceService:
             )
         name = self._validate_name(name.strip() or self._next_workspace_name(user_id))
         kind = str(kind).strip().lower()
-        if kind not in {"image", "animation"}:
+        if kind != "image":
             raise ServiceError("工作站类型无效")
         self._ensure_name_available(user_id, name)
         minimum_position = db.session.scalar(
@@ -98,7 +98,7 @@ class WorkspaceService:
             name=name,
             kind=kind,
             position=0 if minimum_position is None else minimum_position - 1,
-            settings=default_workspace_settings(kind),
+            settings=default_workspace_settings(),
         )
         db.session.add(workspace)
         self._commit_name_change()
@@ -332,9 +332,7 @@ class WorkspaceService:
         _, locked_workspace, jobs, items = self._lock_workspace_records(workspace)
         if any(item.status in {"queued", "running", "canceling"} for item in items):
             raise ServiceError(
-                "当前帧动画尚未生成完成，请等待完成或先取消任务"
-                if locked_workspace.kind == "animation"
-                else "当前图片尚未生成完成，请等待完成或先取消任务",
+                "当前图片尚未生成完成，请等待完成或先取消任务",
                 code="workspace_generation_active",
                 status_code=409,
             )

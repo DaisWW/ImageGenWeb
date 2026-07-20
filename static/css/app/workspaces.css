@@ -66,12 +66,6 @@
   --workspace-icon-background: #182a36;
 }
 
-.workspace-item[data-workspace-kind="animation"] {
-  --workspace-icon-color: #c3a0df;
-  --workspace-icon-border: #57436d;
-  --workspace-icon-background: #251e31;
-}
-
 .workspace-drag-handle {
   display: grid;
   width: 20px;

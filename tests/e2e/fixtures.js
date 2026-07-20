@@ -8,12 +8,11 @@ async function loginAsAdmin(page) {
   await expect(page).toHaveURL(/\/$/);
 }
 
-async function createWorkspace(page, name, kind = "image") {
+async function createWorkspace(page, name) {
   await page.locator("#newWorkspaceButton").click();
+  await expect(page.locator("#workspaceKindSwitch [data-workspace-kind]")).toHaveCount(1);
+  await expect(page.locator('#workspaceKindSwitch [data-workspace-kind="image"]')).toBeVisible();
   await page.locator("#workspaceNameInput").fill(name);
-  if (kind !== "image") {
-    await page.locator(`#workspaceKindSwitch [data-workspace-kind="${kind}"]`).click();
-  }
   await page.locator('#workspaceForm button[type="submit"]').click();
   await expect(page.locator("#workspaceTitle")).toHaveText(name);
 }

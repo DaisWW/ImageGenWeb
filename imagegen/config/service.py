@@ -9,7 +9,7 @@ from ..extensions import db
 from ..models import GenerationItem
 from ..validation import as_bool
 from .channels import ChannelRegistry, ChannelSnapshot
-from .chat_models import ChatModelRegistry
+from .chat_models import DEFAULT_WORKSPACE_PROMPTS, ChatModelRegistry
 from .repository import RuntimeConfigRepository
 
 ACTIVE_GENERATION_STATUSES = {"queued", "running", "canceling"}
@@ -164,7 +164,7 @@ class RuntimeConfigService:
         workspace_prompts = payload.get("workspace_prompts")
         if workspace_prompts is None:
             workspace_prompts = {
-                kind: self.chat_models.workspace_prompt(kind) for kind in ("image", "animation")
+                kind: self.chat_models.workspace_prompt(kind) for kind in DEFAULT_WORKSPACE_PROMPTS
             }
         if not isinstance(workspace_prompts, dict):
             raise ServiceError("工作站提示词格式无效")
@@ -177,8 +177,7 @@ class RuntimeConfigService:
             "version": 1,
             "system_prompts": {"chat": system_prompts.get("chat")},
             "workspace_prompts": {
-                "image": workspace_prompts.get("image"),
-                "animation": workspace_prompts.get("animation"),
+                kind: workspace_prompts.get(kind) for kind in DEFAULT_WORKSPACE_PROMPTS
             },
             "context": {
                 "max_context_tokens": context.get("max_context_tokens"),

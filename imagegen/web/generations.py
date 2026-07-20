@@ -9,7 +9,6 @@ from ..extensions import db
 from ..models import Asset, Workspace
 from ..serializers import job_dict, job_status_dict
 from ..services import GenerationWorkflow, SubmitGeneration
-from ..storage import StorageError
 from . import web
 from .shared import (
     accessible_item,
@@ -52,10 +51,8 @@ def submit_generation():
     try:
         compression = int(data.get("compression", 90))
         batch_count = int(data.get("batch_count", 1))
-        frame_count = int(data.get("animation_frame_count", data.get("frame_count", 8)))
-        animation_fps = int(data.get("animation_fps", 8))
     except (TypeError, ValueError) as exc:
-        raise ServiceError("生成数量、帧率或压缩质量无效") from exc
+        raise ServiceError("生成数量或压缩质量无效") from exc
     mode = str(data.get("mode", "text2img"))
     prompt = str(data.get("prompt", ""))
     ordered_reference_ids = tuple(str(item) for item in reference_ids)
@@ -89,10 +86,6 @@ def submit_generation():
         quality=workflow.quality,
         workflow=workflow.metadata,
         transparent_background=json_bool(data.get("transparent_background", False)),
-        frame_count=frame_count,
-        animation_fps=animation_fps,
-        animation_loop=json_bool(data.get("animation_loop", True)),
-        animation_format=str(data.get("animation_format", "webp")).lower(),
     )
     generation_service = application_services.generations
     operation_id = str(data.get("operation_id", "")).strip().lower()
@@ -171,18 +164,6 @@ def cancel_generation(job_id: str):
     return jsonify(job=_job_payload(generation_service, job))
 
 
-@web.post("/api/generations/<job_id>/retry")
-@login_required
-def retry_animation_generation(job_id: str):
-    application_services = services()
-    generation_service = application_services.generations
-    existing = generation_service.get_job(job_id, user_id=current_user.id)
-    workspace = owned_workspace(existing.workspace_id)
-    with application_services.conversations.generation_submission(workspace):
-        job = generation_service.retry_animation(job_id, user_id=current_user.id)
-    return jsonify(job=_job_payload(generation_service, job)), 202
-
-
 @web.get("/media/assets/<asset_id>")
 @login_required
 def asset_file(asset_id: str):
@@ -210,40 +191,6 @@ def output_file(item_id: str):
         mimetype=item.output_mime_type,
         as_attachment=request.args.get("download") == "1",
         download_name=(f"image_{item.id}.{image_extension(item.output_mime_type)}"),
-        conditional=True,
-    )
-
-
-@web.get("/media/animations/<job_id>")
-@login_required
-def animation_file(job_id: str):
-    job = services().generations.get_job(
-        job_id,
-        user_id=current_user.id,
-        admin=current_user.is_admin,
-    )
-    if job.kind != "animation" or job.status != "succeeded":
-        abort(404)
-    frame_paths = [item.output_path for item in job.items]
-    if not all(frame_paths):
-        abort(404)
-    try:
-        animation = storage().save_animation(
-            user_id=job.user_id,
-            workspace_id=job.workspace_id,
-            job_id=job.id,
-            frame_paths=frame_paths,
-            output_format=job.animation_format,
-            fps=job.animation_fps,
-            loop=job.animation_loop,
-        )
-    except StorageError as exc:
-        raise ServiceError(str(exc), code="animation_export_failed", status_code=409) from exc
-    return send_file(
-        storage().read(animation.relative_path),
-        mimetype=animation.mime_type,
-        as_attachment=request.args.get("download") == "1",
-        download_name=f"animation_{job.id}.{animation.extension}",
         conditional=True,
     )
 

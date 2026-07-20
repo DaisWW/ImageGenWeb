@@ -4,7 +4,6 @@
   const {
     StudioApp,
     UI,
-    setAttribute,
   } = window.ImageGenStudio;
 
   Object.assign(StudioApp.prototype, {
@@ -33,7 +32,9 @@
     },
 
     setDialogWorkspaceKind(kind) {
-      this.dialogWorkspaceKind = kind === "animation" ? "animation" : "image";
+      const supported = [...this.el.workspaceKindSwitch.querySelectorAll("[data-workspace-kind]")]
+        .some((button) => button.dataset.workspaceKind === kind);
+      this.dialogWorkspaceKind = supported ? kind : "image";
       this.el.workspaceKindSwitch.dataset.kind = this.dialogWorkspaceKind;
       this.el.workspaceKindSwitch.querySelectorAll("[data-workspace-kind]").forEach((button) => {
         const active = button.dataset.workspaceKind === this.dialogWorkspaceKind;

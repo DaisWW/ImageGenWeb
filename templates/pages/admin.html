@@ -142,11 +142,9 @@
       </fieldset>
       <fieldset class="settings-group">
         <legend>生成</legend>
-        <div class="form-grid four-columns">
+        <div class="form-grid two-columns">
           <label class="field"><span>提示词字符上限</span><input type="number" name="max_prompt_characters" min="1000" max="12000" required></label>
           <label class="field"><span>单批图片</span><input type="number" name="max_batch_images" min="1" max="100" required></label>
-          <label class="field"><span>动画帧数</span><input type="number" name="max_animation_frames" min="2" max="100" required></label>
-          <label class="field"><span>动画 FPS</span><input type="number" name="max_animation_fps" min="1" max="60" required></label>
         </div>
       </fieldset>
       <fieldset class="settings-group">
@@ -259,7 +257,6 @@
     <div class="modal-header"><div><span class="eyebrow">System Prompts</span><h2>提示词策略</h2></div><button class="icon-button" type="button" data-close-dialog="workspacePromptsDialog" aria-label="关闭"><i data-lucide="x"></i></button></div>
     <label class="field"><span>基础对话</span><textarea name="chat" rows="9" maxlength="20000" required></textarea></label>
     <label class="field"><span>图片工作站</span><textarea name="image" rows="9" maxlength="12000" required></textarea></label>
-    <label class="field"><span>帧动画工作站</span><textarea name="animation" rows="9" maxlength="12000" required></textarea></label>
     <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="workspacePromptsDialog">取消</button><button class="button primary" type="submit"><i data-lucide="save"></i>保存策略</button></div>
   </form>
 </dialog>

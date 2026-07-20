@@ -61,11 +61,6 @@ class GenerationDurationEstimator:
         return Decimal(str(round(estimate, 3)))
 
     def _duration_samples(self, job: GenerationJob, *, exact: bool) -> list[float]:
-        kinds = (
-            ("image", "animation_master")
-            if job.kind in {"image", "animation_master"}
-            else (job.kind,)
-        )
         query = (
             select(GenerationItem.elapsed_seconds)
             .join(GenerationJob)
@@ -74,7 +69,7 @@ class GenerationDurationEstimator:
                 GenerationItem.elapsed_seconds.is_not(None),
                 GenerationJob.channel_id == job.channel_id,
                 GenerationJob.model == job.model,
-                GenerationJob.kind.in_(kinds),
+                GenerationJob.kind == job.kind,
                 GenerationJob.mode == job.mode,
             )
             .order_by(GenerationItem.completed_at.desc())

@@ -49,9 +49,7 @@
         return;
       }
       const selectedIds = new Set(attachmentIds);
-      const selectedGenerationMode = workspace.kind === "animation"
-        ? "img2img"
-        : (this.el.modeSwitch.dataset.mode || "text2img");
+      const selectedGenerationMode = this.el.modeSwitch.dataset.mode || "text2img";
       const selectedGenerationReferences = [...this.currentSelection(workspaceId)];
       const generationMode = selectedGenerationMode === "img2img"
         && (selectedGenerationReferences.length || !attachmentIds.length)
@@ -187,10 +185,6 @@
       const requested = referenceIds === null
         ? [...this.currentChatSelection()]
         : [...new Set(referenceIds)];
-      if (this.isAnimationWorkspace() && !requested.length
-        && !this.currentSelection().size && this.activeWorkspace.assets.length === 1) {
-        requested.push(this.activeWorkspace.assets[0].id);
-      }
       if (prompt.length < draft.length) UI.toast("描述过长，已按提示词长度上限截取", "info");
       this.showGenerationComposer(prompt, requested.length ? requested : null);
       if (hadReviewedDraft) this.settingChanged();
@@ -209,11 +203,9 @@
         references.clear();
         requested.filter((id) => activeIds.has(id)).forEach((id) => references.add(id));
         this.trimReferenceSelection(references, this.generationReferenceLimit());
-        this.setMode(this.isAnimationWorkspace() || references.size ? "img2img" : "text2img", false);
+        this.setMode(references.size ? "img2img" : "text2img", false);
         this.renderReferences();
         omitted = requested.length - references.size;
-      } else if (this.isAnimationWorkspace()) {
-        this.setMode("img2img", false);
       }
       this.setComposerMode("generation");
       if (prompt || referenceIds !== null) this.settingChanged();
@@ -443,8 +435,6 @@
       setDisabled(this.el.translatePrompt, locked);
       setDisabled(this.el.chatReferenceButton, locked || referenceUploading);
       setDisabled(this.el.directGenerationButton, locked || referenceUploading);
-      setDisabled(this.el.animationParametersButton, locked || referenceUploading);
-      const missingAnimationMaster = this.isAnimationWorkspace() && this.currentSelection().size !== 1;
       const promptReviewed = Boolean(this.currentPromptDraft());
       this.el.promptReviewStatus.classList.toggle("is-reviewed", promptReviewed);
       setText(
@@ -455,19 +445,15 @@
         this.el.generateButton,
         submissionBusy
           ? false
-          : locked || referenceUploading || !this.currentChannel() || missingAnimationMaster,
+          : locked || referenceUploading || !this.currentChannel(),
       );
       this.setActionIcon(
         this.el.generateButton,
         submissionBusy ? "square" : "sparkles",
         submissionBusy ? "cancel" : "generate",
       );
-      setText(this.el.generateButtonLabel, submissionBusy ? "取消生成" : (
-        this.isAnimationWorkspace() ? "开始生成帧" : "开始生成"
-      ));
-      const generateTitle = submissionBusy
-        ? "取消生成"
-        : missingAnimationMaster ? "请先添加并选择一张母图" : "";
+      setText(this.el.generateButtonLabel, submissionBusy ? "取消生成" : "开始生成");
+      const generateTitle = submissionBusy ? "取消生成" : "";
       setAttribute(this.el.generateButton, "title", generateTitle);
       setDisabled(this.el.generationBackButton, submissionBusy);
       setDisabled(
@@ -505,15 +491,12 @@
       this.el.messageList.querySelectorAll("[data-use-prompt-draft]").forEach((button) => {
         setDisabled(button, locked);
       });
-      this.el.messageList.querySelectorAll("[data-retry-job]").forEach((button) => {
-        setDisabled(button, locked);
-      });
       const placeholder = noWorkspace ? "暂无工作站"
         : generationBusy
         ? "当前生成完成前不能继续对话，可在生成记录中取消任务"
         : submissionBusy ? "正在提交生成，可立即取消"
         : chatBusy ? `${operation.label}，可切换到其他工作站继续`
-        : this.isAnimationWorkspace() ? "描述画面、动作和循环方式..." : "描述你想生成的画面...";
+        : "描述你想生成的画面...";
       if (this.el.chatInput.placeholder !== placeholder) this.el.chatInput.placeholder = placeholder;
     },
 

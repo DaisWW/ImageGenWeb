@@ -238,9 +238,6 @@ class GenerationJob(TimestampMixin, db.Model):
     output_format: Mapped[str] = mapped_column(db.String(20))
     compression: Mapped[int]
     transparent_background: Mapped[bool] = mapped_column(default=False)
-    animation_fps: Mapped[int] = mapped_column(default=8)
-    animation_loop: Mapped[bool] = mapped_column(default=True)
-    animation_format: Mapped[str] = mapped_column(db.String(20), default="webp")
     requested_count: Mapped[int]
     price_per_image_rmb: Mapped[Decimal] = mapped_column(MONEY_TYPE)
     reserved_rmb: Mapped[Decimal] = mapped_column(MONEY_TYPE)
@@ -258,15 +255,6 @@ class GenerationJob(TimestampMixin, db.Model):
     items: Mapped[list[GenerationItem]] = relationship(
         back_populates="job", cascade="all, delete-orphan", order_by="GenerationItem.position"
     )
-
-    @property
-    def is_animation_retryable(self) -> bool:
-        return (
-            self.kind == "animation"
-            and self.status in {"failed", "partial"}
-            and self.cancel_requested_at is None
-            and any(item.status in {"failed", "interrupted"} for item in self.items)
-        )
 
 
 class GenerationReference(db.Model):

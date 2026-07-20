@@ -52,10 +52,6 @@
   gap: 8px;
 }
 
-.animation-workflow .composer-controls {
-  grid-template-columns: auto minmax(190px, 1.25fr) minmax(150px, 1fr) repeat(4, minmax(88px, .6fr));
-}
-
 .generation-composer {
   position: fixed;
   z-index: 30;
@@ -205,8 +201,12 @@
   transform: translateX(100%);
 }
 
-.workspace-kind-switch[data-kind="animation"]::before {
-  transform: translateX(100%);
+.workspace-kind-switch {
+  grid-template-columns: 1fr;
+}
+
+.workspace-kind-switch::before {
+  width: calc(100% - 6px);
 }
 
 .mode-button {

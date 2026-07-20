@@ -15,22 +15,6 @@ class GenerationRequestValidator:
     def __init__(self, settings: SystemSettingsService):
         self.settings = settings
 
-    def job_shape(
-        self,
-        workspace_kind: str,
-        request: SubmitGeneration,
-        references: list[Asset],
-    ) -> tuple[str, int]:
-        if workspace_kind != "animation":
-            return "image", request.batch_count
-        if not references:
-            raise ServiceError("请先上传或选择一张母图")
-        if request.mode != "img2img":
-            raise ServiceError("帧动画工作站只能使用指定母图生成帧动画")
-        if len(references) != 1:
-            raise ServiceError("帧动画任务必须且只能选择一张母图")
-        return "animation", request.frame_count
-
     def load_references(self, workspace: Workspace, reference_ids: tuple[str, ...]) -> list[Asset]:
         if len(reference_ids) != len(set(reference_ids)):
             raise ServiceError("垫图不能重复")
@@ -54,7 +38,7 @@ class GenerationRequestValidator:
         self, channel: Channel, request: SubmitGeneration, workspace_kind: str
     ) -> str:
         runtime = self.settings.runtime()
-        if workspace_kind not in {"image", "animation"}:
+        if workspace_kind != "image":
             raise ServiceError("工作站类型无效")
         if request.mode not in channel.capabilities.modes:
             raise ServiceError(f"{channel.label} 不支持当前生成模式")
@@ -72,12 +56,6 @@ class GenerationRequestValidator:
             raise ServiceError("压缩质量必须在 0 到 100 之间")
         if not 1 <= request.batch_count <= runtime.max_batch_images:
             raise ServiceError(f"单批生成张数必须在 1 到 {runtime.max_batch_images} 之间")
-        if not 2 <= request.frame_count <= runtime.max_animation_frames:
-            raise ServiceError(f"动画帧数必须在 2 到 {runtime.max_animation_frames} 之间")
-        if not 1 <= request.animation_fps <= runtime.max_animation_fps:
-            raise ServiceError(f"动画帧率必须在 1 到 {runtime.max_animation_fps} FPS 之间")
-        if request.animation_format not in {"webp", "gif"}:
-            raise ServiceError("动画导出格式仅支持 WebP 或 GIF")
         return normalized_size
 
     def validate_references(self, channel: Channel, mode: str, references: list[Asset]) -> None:

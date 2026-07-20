@@ -56,7 +56,7 @@
           select.setAttribute("aria-current", workspace.id === this.activeWorkspace?.id ? "true" : "false");
           const icon = document.createElement("span");
           icon.className = "workspace-icon";
-          const workspaceIcon = workspace.kind === "animation" ? "film" : "image";
+          const workspaceIcon = workspace.kind === "image" ? "image" : "box";
           icon.innerHTML = `<i data-lucide="${operation ? "loader-circle" : workspaceIcon}"></i>`;
           const copy = document.createElement("span");
           copy.className = "workspace-copy";
@@ -140,7 +140,7 @@
       if (!job) {
         setHidden(progress, true);
         setHidden(timing, true);
-        const typeLabel = workspace.kind === "animation" ? "帧动画" : "图片";
+        const typeLabel = workspace.kind === "image" ? "图片" : "工作站";
         setText(meta, typeLabel);
         setAttribute(meta, "title", typeLabel);
         return;

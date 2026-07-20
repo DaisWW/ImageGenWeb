@@ -11,20 +11,14 @@
     setText,
     setHidden,
     setDisabled,
-    setAttribute,
   } = window.ImageGenStudio;
 
   Object.assign(StudioApp.prototype, {
     updatePrice() {
-      const count = this.isAnimationWorkspace()
-        ? Math.min(
-          this.limits.max_animation_frames,
-          Math.max(2, Number(this.el.animationFrameCount.value || 8)),
-        )
-        : Math.min(
-          this.limits.max_batch_images, Math.max(1, Number(this.el.batchCount.value || 1)),
-        );
-      const unit = this.isAnimationWorkspace() ? "帧" : "张";
+      const count = Math.min(
+        this.limits.max_batch_images, Math.max(1, Number(this.el.batchCount.value || 1)),
+      );
+      const unit = "张";
       const price = Number(this.currentChannel()?.price_rmb || 0);
       this.el.priceEstimateLabel.textContent = `${count} ${unit}预计总价`;
       this.el.priceEstimate.textContent = UI.money(price * count);
@@ -90,11 +84,6 @@
         }
         const referenceIds = [...selection];
         const settings = this.collectSettings();
-        if (this.isAnimationWorkspace()) settings.mode = "img2img";
-        if (this.isAnimationWorkspace() && referenceIds.length !== 1) {
-          UI.toast("请先添加并选择一张母图", "error");
-          return;
-        }
         if (!settings.prompt.trim()) {
           UI.toast("请输入提示词", "error");
           this.el.promptInput.focus();
@@ -249,7 +238,6 @@
           </div>
           <div class="job-actions">
             <span data-job-eta hidden><i data-lucide="clock-3"></i><span></span></span>
-            <button class="button ghost small" type="button" data-job-retry hidden><i data-lucide="refresh-cw"></i>继续生成</button>
             <button class="button danger small" type="button" data-job-cancel hidden><i data-lucide="square"></i>取消</button>
           </div>
         </header>
@@ -265,13 +253,6 @@
             <div class="job-error" data-job-error role="alert" hidden>
               <i data-lucide="circle-alert"></i>
               <span><strong>失败原因：</strong><span data-job-error-message></span></span>
-            </div>
-          </div>
-          <div class="animation-result" data-animation-result hidden>
-            <div class="animation-preview"><img data-animation-image alt="动画预览" decoding="async"></div>
-            <div class="animation-result-bar">
-              <span data-animation-meta></span>
-              <a class="icon-button" data-animation-download download title="下载动画" aria-label="下载动画"><i data-lucide="download"></i></a>
             </div>
           </div>
           <div class="output-grid"></div>
@@ -297,7 +278,6 @@
         time: fields.jobTime,
         eta: fields.jobEta,
         etaLabel: fields.jobEta.querySelector("span"),
-        retry: fields.jobRetry,
         cancel: fields.jobCancel,
         progress: fields.jobProgress,
         prompt: fields.jobPrompt,
@@ -309,10 +289,6 @@
         charge: fields.jobCharge,
         error: fields.jobError,
         errorMessage: fields.jobErrorMessage,
-        animationResult: fields.animationResult,
-        animationImage: fields.animationImage,
-        animationMeta: fields.animationMeta,
-        animationDownload: fields.animationDownload,
         outputGrid: fields.outputGrid,
       };
       this.jobElementCache.set(article, elements);
@@ -322,9 +298,7 @@
     updateJobCard(article, job) {
       const [statusLabel, statusClass] = STATUS[job.status] || [job.status, ""];
       const enteringClass = article.classList.contains("timeline-enter") ? " timeline-enter" : "";
-      const animationClass = job.kind === "animation" ? " animation-job" : "";
-      const resultClass = job.animation_url ? " has-animation-result" : "";
-      const className = `job-card timeline-job ${statusClass}${animationClass}${resultClass}${enteringClass}`;
+      const className = `job-card timeline-job ${statusClass}${enteringClass}`;
       if (article.className !== className) article.className = className;
       if (article.dataset.jobId !== String(job.id)) article.dataset.jobId = job.id;
       if (article.dataset.jobStatus !== job.status) article.dataset.jobStatus = job.status;
@@ -343,14 +317,6 @@
       setText(elements.etaLabel, job.estimated_end_at
         ? (job.is_over_estimate ? "仍在处理" : `预计 ${UI.timeOnly(job.estimated_end_at)}`)
         : "");
-      setHidden(elements.retry, !job.can_retry);
-      if (job.can_retry) {
-        if (elements.retry.dataset.retryJob !== String(job.id)) {
-          elements.retry.dataset.retryJob = job.id;
-        }
-      } else if ("retryJob" in elements.retry.dataset) {
-        delete elements.retry.dataset.retryJob;
-      }
       setHidden(elements.cancel, !job.can_cancel);
       if (job.can_cancel) {
         if (elements.cancel.dataset.cancelJob !== String(job.id)) {
@@ -369,10 +335,7 @@
       setText(elements.model, job.model);
       setText(elements.size, job.size);
       setText(elements.quality, job.quality);
-      const unit = job.kind === "animation"
-        ? "帧"
-        : job.kind === "animation_master" ? "张母图" : "张";
-      setText(elements.count, `${job.succeeded_count}/${job.requested_count} ${unit}`);
+      setText(elements.count, `${job.succeeded_count}/${job.requested_count} 张`);
       setText(elements.charge, `${UI.money(job.charged_rmb)} 已扣`);
       const failureReasons = [...new Set(
         (job.items || [])
@@ -382,26 +345,10 @@
       )];
       setHidden(elements.error, !failureReasons.length);
       setText(elements.errorMessage, failureReasons.join("；"));
-      setHidden(elements.animationResult, !job.animation_url);
-      if (job.animation_url) {
-        if (elements.animationImage.dataset.url !== job.animation_url) {
-          elements.animationImage.dataset.url = job.animation_url;
-          elements.animationImage.src = job.animation_url;
-          this.prepareImageReveal(elements.animationImage);
-        }
-        const loopLabel = job.animation_loop ? "循环" : "单次";
-        setText(
-          elements.animationMeta,
-          `${job.animation_fps} FPS · ${job.animation_duration_seconds} 秒 · ${loopLabel}`,
-        );
-        setAttribute(elements.animationDownload, "href", job.animation_download_url);
-      }
       this.reconcileOutputTiles(elements.outputGrid, job);
       if (!elements.eta.hidden) UI.icons(elements.eta);
-      if (!elements.retry.hidden) UI.icons(elements.retry);
       if (!elements.cancel.hidden) UI.icons(elements.cancel);
       if (!elements.error.hidden) UI.icons(elements.error);
-      if (!elements.animationResult.hidden) UI.icons(elements.animationDownload);
       return article;
     },
 
@@ -447,9 +394,7 @@
       if (imageUrl) {
         const image = document.createElement("img");
         image.src = imageUrl;
-        image.alt = job.kind === "animation"
-          ? `动画第 ${item.position + 1} 帧`
-          : job.kind === "animation_master" ? "帧动画母图" : `生成结果 ${item.position + 1}`;
+        image.alt = `生成结果 ${item.position + 1}`;
         image.loading = "lazy";
         image.decoding = "async";
         this.prepareImageReveal(image);
@@ -506,24 +451,6 @@
     },
 
     async handleJobClick(event) {
-      const retry = event.target.closest("[data-retry-job]");
-      if (retry) {
-        retry.disabled = true;
-        try {
-          const data = await UI.api(`/api/generations/${retry.dataset.retryJob}/retry`, {
-            method: "POST",
-          });
-          this.applyJobUpdate(data.job);
-          this.schedulePoll(ACTIVE_POLL_INTERVAL);
-          await this.refreshBalance();
-          const remaining = data.job.requested_count - data.job.succeeded_count;
-          UI.toast(`已保留 ${data.job.succeeded_count} 帧，继续生成剩余 ${remaining} 帧`, "success");
-        } catch (error) {
-          retry.disabled = false;
-          UI.toast(error.message, "error");
-        }
-        return;
-      }
       const cancel = event.target.closest("[data-cancel-job]");
       if (cancel) {
         const jobId = cancel.dataset.cancelJob;

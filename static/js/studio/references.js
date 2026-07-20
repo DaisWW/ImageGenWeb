@@ -164,9 +164,7 @@
           toggle.type = "button";
           toggle.className = "reference-toggle";
           toggle.dataset.referenceToggle = asset.id;
-          toggle.title = this.isAnimationWorkspace()
-            ? (selected.has(asset.id) ? "取消母图" : "选择为母图")
-            : (selected.has(asset.id) ? "取消选择" : "选择为垫图");
+          toggle.title = selected.has(asset.id) ? "取消选择" : "选择为垫图";
           const image = document.createElement("img");
           image.src = asset.url;
           image.alt = asset.name;
@@ -178,7 +176,7 @@
           remove.type = "button";
           remove.className = "reference-remove";
           remove.dataset.referenceRemove = asset.id;
-          remove.title = this.isAnimationWorkspace() ? "删除母图" : "删除垫图";
+          remove.title = "删除垫图";
           remove.setAttribute("aria-label", remove.title);
           remove.innerHTML = '<i data-lucide="x"></i>';
           card.append(toggle, this.librarySaveButton(asset), remove);
@@ -187,10 +185,6 @@
         ...uploads.map((pending) => this.referenceUploadCard(pending)),
       );
       UI.icons(this.el.referenceList);
-      if (this.isAnimationWorkspace() && this.el.modeSwitch.dataset.mode !== "img2img") {
-        this.setMode("img2img", false);
-      }
-      this.updateWorkspaceKindUI();
       this.updatePrice();
       this.updateInteractionState();
     },
@@ -302,7 +296,6 @@
       this.trimReferenceSelection(selection, limit);
       if (selection.size < limit) selection.add(asset.id);
       if (upload.target === "generation" && this.activeWorkspace?.id === workspace.id) {
-        if (workspace.kind === "animation") this.setMode("img2img", false);
         this.settingChanged();
       }
       this.renderWorkspaceList();
@@ -360,25 +353,18 @@
       else {
         const max = this.generationReferenceLimit();
         if (selection.size >= max) {
-          UI.toast(
-            this.isAnimationWorkspace()
-              ? "帧动画任务必须且只能选择一张母图"
-              : `当前渠道最多选择 ${max} 张垫图`,
-            "error",
-          );
+          UI.toast(`当前渠道最多选择 ${max} 张垫图`, "error");
           return;
         }
         selection.add(id);
       }
-      if (this.isAnimationWorkspace()) this.setMode("img2img", false);
       this.renderReferences();
       this.settingChanged();
     },
 
     async removeReference(id) {
       if (!this.activeWorkspace || this.workspaceChatBusy() || this.workspaceHasActiveJob()) return;
-      const referenceName = this.isAnimationWorkspace() ? "母图" : "垫图";
-      if (!window.confirm(`从工作站删除这张${referenceName}？历史消息和任务中的引用仍会保留。`)) return;
+      if (!window.confirm("从工作站删除这张垫图？历史消息和任务中的引用仍会保留。")) return;
       const workspace = this.activeWorkspace;
       try {
         await UI.api(`/api/workspaces/${workspace.id}/assets/${id}`, { method: "DELETE" });
@@ -386,7 +372,6 @@
         this.referenceSelections.get(workspace.id)?.delete(id);
         this.chatReferenceSelections.get(workspace.id)?.delete(id);
         if (this.activeWorkspace?.id === workspace.id) {
-          if (workspace.kind === "animation") this.setMode("img2img", false);
           this.renderReferences();
           this.renderChatReferences();
           this.settingChanged();

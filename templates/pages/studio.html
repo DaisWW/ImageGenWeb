@@ -67,8 +67,7 @@
             </label>
             <span class="context-meter" id="contextStatus" title="当前会话上下文"><i data-lucide="braces"></i><span>上下文 0%</span></span>
             <div class="chat-toolbar-actions">
-              <button class="button primary small" type="button" id="directGenerationButton" hidden><i data-lucide="image-plus"></i>直接生图</button>
-              <button class="button primary small" type="button" id="animationParametersButton" hidden><i data-lucide="sliders-horizontal"></i>动画参数</button>
+              <button class="button primary small" type="button" id="directGenerationButton"><i data-lucide="image-plus"></i>直接生图</button>
             </div>
           </div>
           <div class="chat-reference-strip" id="chatReferenceStrip" hidden>
@@ -106,16 +105,8 @@
             <label class="compact-field channel-field"><span>渠道</span><select id="channelSelect" required></select></label>
             <label class="compact-field model-field"><span>模型</span><select id="modelSelect" required></select></label>
             <label class="compact-field"><span>尺寸</span><input id="sizeInput" list="sizeOptions" maxlength="20" placeholder="1024x1024" autocomplete="off" required><datalist id="sizeOptions"></datalist></label>
-            <label class="compact-field"><span id="frameFormatLabel">格式</span><select id="formatSelect"></select></label>
-            <label class="compact-field number-field" id="imageCountControl"><span>张数</span><input id="batchCount" type="number" min="1" max="{{ runtime_settings.max_batch_images }}" value="1"></label>
-            <label class="compact-field number-field animation-control" hidden><span>帧数</span><input id="animationFrameCount" type="number" min="2" max="{{ runtime_settings.max_animation_frames }}" value="8"></label>
-            <label class="compact-field number-field animation-control" hidden><span>FPS</span><input id="animationFps" type="number" min="1" max="{{ runtime_settings.max_animation_fps }}" value="8"></label>
-            <label class="compact-field animation-control" hidden><span>导出</span><select id="animationFormat"><option value="webp">动态 WebP</option><option value="gif">GIF</option></select></label>
-            <label class="toggle-line generation-toggle animation-control" hidden>
-              <input type="checkbox" id="animationLoop" checked>
-              <span class="toggle-track"><span></span></span>
-              <span>循环</span>
-            </label>
+            <label class="compact-field"><span>格式</span><select id="formatSelect"></select></label>
+            <label class="compact-field number-field"><span>张数</span><input id="batchCount" type="number" min="1" max="{{ runtime_settings.max_batch_images }}" value="1"></label>
           </div>
 
           <div class="reference-strip" id="referenceStrip" hidden>
@@ -159,7 +150,6 @@
       <legend>类型</legend>
       <div class="mode-switch workspace-kind-switch" id="workspaceKindSwitch" data-kind="image">
         <button type="button" class="mode-button active" data-workspace-kind="image" aria-pressed="true"><i data-lucide="image"></i>图片</button>
-        <button type="button" class="mode-button" data-workspace-kind="animation" aria-pressed="false"><i data-lucide="film"></i>帧动画</button>
       </div>
     </fieldset>
     <div class="modal-actions">

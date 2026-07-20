@@ -211,9 +211,7 @@ class ConversationSupport:
         )
         if active:
             raise ServiceError(
-                "当前帧动画尚未生成完成，请等待完成或先取消任务"
-                if workspace.kind == "animation"
-                else "当前图片尚未生成完成，请等待完成或先取消任务",
+                "当前图片尚未生成完成，请等待完成或先取消任务",
                 code="workspace_generation_active",
                 status_code=409,
             )

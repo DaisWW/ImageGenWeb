@@ -185,8 +185,6 @@ class TestAdminAndMaintenance(PlatformTestCase):
                 "max_workspaces_per_user": 2,
                 "max_message_characters": 100,
                 "max_batch_images": 2,
-                "max_animation_frames": 3,
-                "max_animation_fps": 12,
                 "worker_poll_milliseconds": 900,
             }
         )

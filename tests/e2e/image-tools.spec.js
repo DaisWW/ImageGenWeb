@@ -66,10 +66,6 @@ test("image detail keeps its reference through multi-turn refinement", async ({
     output_format: "png",
     compression: 90,
     transparent_background: false,
-    animation_fps: null,
-    animation_loop: null,
-    animation_format: null,
-    animation_duration_seconds: null,
     requested_count: 1,
     price_per_image_rmb: "0.0300",
     charged_rmb: "0.0300",
@@ -81,7 +77,6 @@ test("image detail keeps its reference through multi-turn refinement", async ({
     failed_count: 0,
     canceled_count: 0,
     can_cancel: false,
-    can_retry: false,
     references: [],
     items: [{
       id: itemId,
@@ -102,8 +97,6 @@ test("image detail keeps its reference through multi-turn refinement", async ({
       thumbnail_url: imageUrl,
       download_url: imageUrl,
     }],
-    animation_url: null,
-    animation_download_url: null,
   };
 
   await page.route("**/api/chat-models", (route) => route.fulfill({
@@ -269,10 +262,6 @@ test("smart slicer detects, adjusts, selects and exports atlas tiles", {
     output_format: "png",
     compression: 90,
     transparent_background: false,
-    animation_fps: null,
-    animation_loop: null,
-    animation_format: null,
-    animation_duration_seconds: null,
     requested_count: 1,
     price_per_image_rmb: "0.0300",
     charged_rmb: "0.0300",
@@ -284,7 +273,6 @@ test("smart slicer detects, adjusts, selects and exports atlas tiles", {
     failed_count: 0,
     canceled_count: 0,
     can_cancel: false,
-    can_retry: false,
     references: [],
     items: [{
       id: itemId,
@@ -305,8 +293,6 @@ test("smart slicer detects, adjusts, selects and exports atlas tiles", {
       thumbnail_url: imageUrl,
       download_url: imageUrl,
     }],
-    animation_url: null,
-    animation_download_url: null,
   };
   const analysis = {
     width: 248,

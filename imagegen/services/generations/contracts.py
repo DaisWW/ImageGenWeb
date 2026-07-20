@@ -23,10 +23,6 @@ class SubmitGeneration:
     quality: str = "high"
     workflow: dict[str, object] = field(default_factory=dict)
     transparent_background: bool = False
-    frame_count: int = 8
-    animation_fps: int = 8
-    animation_loop: bool = True
-    animation_format: str = "webp"
 
 
 @dataclass(frozen=True, slots=True)

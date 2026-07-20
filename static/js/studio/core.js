@@ -27,7 +27,6 @@
     "[data-job-queue]",
     "[data-job-time]",
     "[data-job-eta]",
-    "[data-job-retry]",
     "[data-job-cancel]",
     "[data-job-progress]",
     "[data-job-prompt]",
@@ -39,10 +38,6 @@
     "[data-job-charge]",
     "[data-job-error]",
     "[data-job-error-message]",
-    "[data-animation-result]",
-    "[data-animation-image]",
-    "[data-animation-meta]",
-    "[data-animation-download]",
     ".output-grid",
   ].join(",");
 
@@ -78,8 +73,6 @@
         max_attachment_total_mb: 40,
         max_prompt_characters: 8000,
         max_batch_images: 20,
-        max_animation_frames: 20,
-        max_animation_fps: 24,
       };
       this.maxWorkspaces = this.limits.max_workspaces_per_user;
       this.historyRetentionDays = this.bootstrap.history_retention_days;
@@ -229,7 +222,6 @@
         translatePrompt: byId("translatePrompt"),
         contextStatus: byId("contextStatus"),
         directGenerationButton: byId("directGenerationButton"),
-        animationParametersButton: byId("animationParametersButton"),
         chatReferenceStrip: byId("chatReferenceStrip"),
         chatReferenceList: byId("chatReferenceList"),
         chatReferenceButton: byId("chatReferenceButton"),
@@ -239,8 +231,6 @@
         generationBackdrop: byId("generationBackdrop"),
         generationForm: byId("generationForm"),
         generationBackButton: byId("generationBackButton"),
-        generationHeadingTitle: byId("generationHeadingTitle"),
-        generationHeadingSubtitle: byId("generationHeadingSubtitle"),
         promptReviewStatus: byId("promptReviewStatus"),
         modeSwitch: byId("modeSwitch"),
         channelSelect: byId("channelSelect"),
@@ -250,19 +240,11 @@
         formatSelect: byId("formatSelect"),
         transparentBackground: byId("transparentBackground"),
         transparentBackgroundControl: byId("transparentBackgroundControl"),
-        frameFormatLabel: byId("frameFormatLabel"),
-        imageCountControl: byId("imageCountControl"),
         batchCount: byId("batchCount"),
-        animationControls: [...document.querySelectorAll(".animation-control")],
-        animationFrameCount: byId("animationFrameCount"),
-        animationFps: byId("animationFps"),
-        animationFormat: byId("animationFormat"),
-        animationLoop: byId("animationLoop"),
         referenceStrip: byId("referenceStrip"),
         referenceInput: byId("referenceInput"),
         referenceAdd: byId("referenceAdd"),
         referenceLibrary: byId("referenceLibrary"),
-        referenceAddLabel: byId("referenceAddLabel"),
         referenceList: byId("referenceList"),
         referenceLimit: byId("referenceLimit"),
         promptInput: byId("promptInput"),
@@ -281,7 +263,6 @@
         detailSlice: byId("detailSlice"),
         detailSaveLibrary: byId("detailSaveLibrary"),
         detailReuse: byId("detailReuse"),
-        detailReuseLabel: byId("detailReuseLabel"),
         detailDownload: byId("detailDownload"),
         sliceDialog: byId("sliceDialog"),
         slicePreviewTitle: byId("slicePreviewTitle"),
@@ -329,8 +310,6 @@
       this.el.chatInput.maxLength = this.limits.max_message_characters;
       this.el.promptInput.maxLength = this.limits.max_prompt_characters;
       this.el.batchCount.max = this.limits.max_batch_images;
-      this.el.animationFrameCount.max = this.limits.max_animation_frames;
-      this.el.animationFps.max = this.limits.max_animation_fps;
       for (const selection of this.chatReferenceSelections.values()) {
         this.trimReferenceSelection(selection, this.limits.max_chat_attachments);
       }
@@ -405,9 +384,7 @@
         this.updatePromptReviewState();
       });
       this.el.translatePrompt.addEventListener("change", () => this.settingChanged());
-      [this.el.directGenerationButton, this.el.animationParametersButton].forEach((button) => {
-        button.addEventListener("click", () => this.openGenerationComposer());
-      });
+      this.el.directGenerationButton.addEventListener("click", () => this.openGenerationComposer());
       this.el.chatReferenceButton.addEventListener("click", () => this.toggleChatReferences());
       this.el.chatReferenceList.addEventListener("click", (event) => this.handleChatReferenceClick(event));
       this.el.messageList.addEventListener("click", (event) => {
@@ -468,15 +445,6 @@
       this.el.batchCount.addEventListener("input", () => {
         this.updatePrice();
         this.settingChanged();
-      });
-      [this.el.animationFrameCount, this.el.animationFps].forEach((field) => {
-        field.addEventListener("input", () => {
-          this.updatePrice();
-          this.settingChanged();
-        });
-      });
-      [this.el.animationFormat, this.el.animationLoop].forEach((field) => {
-        field.addEventListener("change", () => this.settingChanged());
       });
       this.el.promptInput.addEventListener("input", () => {
         window.clearTimeout(this.promptCounterTimer);

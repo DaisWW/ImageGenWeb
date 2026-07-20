@@ -70,7 +70,6 @@
         savedReferenceIds.filter((id) => activeAssetIds.has(id)),
       );
       this.referenceSelections.set(this.activeWorkspace.id, referenceSelection);
-      this.updateWorkspaceKindUI();
       this.renderChatModelOptions(settings.chat_model_id);
       this.renderCreativeDirectionOptions(settings.creative_direction_id || "auto");
       this.el.translatePrompt.checked = settings.translate_prompt === true;
@@ -80,50 +79,14 @@
       this.el.batchCount.value = Math.min(
         this.limits.max_batch_images, Math.max(1, Number(settings.batch_count || 1)),
       );
-      this.el.animationFrameCount.value = Math.min(
-        this.limits.max_animation_frames, Math.max(2, Number(settings.animation_frame_count || 8)),
-      );
-      this.el.animationFps.value = Math.min(
-        this.limits.max_animation_fps, Math.max(1, Number(settings.animation_fps || 8)),
-      );
-      this.el.animationFormat.value = ["webp", "gif"].includes(settings.animation_format)
-        ? settings.animation_format
-        : "webp";
-      this.el.animationLoop.checked = settings.animation_loop !== false;
       const preferred = this.channels.find((channel) => channel.id === settings.channel_id && channel.configured)
         || this.channels.find((channel) => channel.configured)
         || this.channels[0];
       this.renderChannelOptions(preferred?.id);
       this.applyChannel(settings, false);
-      const mode = this.isAnimationWorkspace() ? "img2img" : (settings.mode || "text2img");
-      this.setMode(mode, false);
+      this.setMode(settings.mode || "text2img", false);
       this.el.saveState.textContent = "参数已保存";
       this.updatePromptReviewState();
-    },
-
-    isAnimationWorkspace() {
-      return this.activeWorkspace?.kind === "animation";
-    },
-
-    updateWorkspaceKindUI() {
-      const animation = this.isAnimationWorkspace();
-      this.el.modeSwitch.hidden = animation;
-      this.el.imageCountControl.hidden = animation;
-      this.el.animationControls.forEach((control) => {
-        control.hidden = !animation;
-      });
-      this.el.generationForm.classList.toggle("animation-workflow", animation);
-      this.el.generationHeadingTitle.textContent = animation ? "确认帧动画参数" : "确认生图参数";
-      this.el.generationHeadingSubtitle.textContent = animation
-        ? "选择一张母图并确认帧参数"
-        : "确认最终提示词、垫图和生成参数";
-      this.el.frameFormatLabel.textContent = animation ? "帧格式" : "格式";
-      this.el.generateButtonLabel.textContent = animation ? "开始生成帧" : "开始生成";
-      this.el.promptInput.placeholder = animation ? "输入画面与完整动作描述..." : "输入画面描述...";
-      this.el.directGenerationButton.hidden = animation;
-      this.el.animationParametersButton.hidden = !animation;
-      this.el.referenceAddLabel.textContent = animation ? "添加母图" : "添加垫图";
-      this.el.referenceStrip.hidden = !animation && this.el.modeSwitch.dataset.mode !== "img2img";
     },
 
     renderChatModelOptions(selectedId = this.el.chatModelSelect.value) {
@@ -268,8 +231,7 @@
         button.classList.toggle("active", active);
         button.setAttribute("aria-pressed", String(active));
       });
-      this.el.referenceStrip.hidden = !this.isAnimationWorkspace() && mode !== "img2img";
-      this.updateWorkspaceKindUI();
+      this.el.referenceStrip.hidden = mode !== "img2img";
       this.updatePrice();
       this.updatePromptReviewState();
       if (shouldSave) this.settingChanged();
@@ -282,7 +244,7 @@
       const payload = draft?.payload || {};
       if (draft?.kind !== "prompt_draft" || payload.status !== "ready") return null;
       if ((payload.prompt || "").trim() !== this.el.promptInput.value.trim()) return null;
-      const mode = this.isAnimationWorkspace() ? "img2img" : this.el.modeSwitch.dataset.mode;
+      const mode = this.el.modeSwitch.dataset.mode;
       if (payload.generation_mode !== mode) return null;
       const selectedDirection = this.el.creativeDirectionSelect.value || "auto";
       if (selectedDirection !== "auto" && payload.creative_direction !== selectedDirection) {
@@ -315,15 +277,6 @@
         batch_count: Math.min(
           this.limits.max_batch_images, Math.max(1, Number(this.el.batchCount.value || 1)),
         ),
-        animation_frame_count: Math.min(
-          this.limits.max_animation_frames,
-          Math.max(2, Number(this.el.animationFrameCount.value || 8)),
-        ),
-        animation_fps: Math.min(
-          this.limits.max_animation_fps, Math.max(1, Number(this.el.animationFps.value || 8)),
-        ),
-        animation_loop: this.el.animationLoop.checked,
-        animation_format: this.el.animationFormat.value,
         chat_model_id: this.el.chatModelSelect.value,
         translate_prompt: this.el.translatePrompt.checked,
         creative_direction_id: this.el.creativeDirectionSelect.value || "auto",

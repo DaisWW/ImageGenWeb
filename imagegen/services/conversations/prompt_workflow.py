@@ -11,7 +11,7 @@ from ...models import Asset, ConversationMessage, Workspace, utcnow
 from ..creative import get_creative_direction
 from ..prompt_drafts import PromptDraftReview
 from .operations import ConversationOperationRegistry
-from .prompts import animation_runtime_prompt, generation_mode_prompt
+from .prompts import generation_mode_prompt
 from .support import ConversationDependencies, ConversationSupport
 
 
@@ -34,12 +34,9 @@ class PromptDraftWorkflow(ConversationSupport):
         reference_ids: tuple[str, ...] = (),
         creative_direction_id: str = "auto",
     ) -> ConversationMessage:
-        label = (
-            "正在检查并总结帧动画需求"
-            if workspace.kind == "animation"
-            else "正在检查并总结生图需求"
-        )
-        with self.operations.workspace_operation(workspace, "prompt_draft", label):
+        with self.operations.workspace_operation(
+            workspace, "prompt_draft", "正在检查并总结生图需求"
+        ):
             return self._create_prompt_draft(
                 workspace,
                 model_id=model_id,
@@ -69,27 +66,21 @@ class PromptDraftWorkflow(ConversationSupport):
             )
             .limit(1)
         ):
-            subject = "帧动画" if workspace.kind == "animation" else "图片"
-            raise ServiceError(f"请先通过对话描述需要生成的{subject}")
+            raise ServiceError("请先通过对话描述需要生成的图片")
         effective_mode, attachments = self._prompt_draft_inputs(
             workspace,
             mode=mode,
             reference_ids=reference_ids,
             creative_direction_id=creative_direction_id,
         )
-        request_text = (
-            "请基于以上会话整理当前已确认的最终帧动画需求。"
-            if workspace.kind == "animation"
-            else "请基于以上会话整理当前已确认的最终生图需求。"
+        pending = self._user_model_message(
+            "请基于以上会话整理当前已确认的最终生图需求。", attachments
         )
-        pending = self._user_model_message(request_text, attachments)
         review = PromptDraftReview(
             translate_to_english=translate_to_english,
             workspace_kind=workspace.kind,
             workspace_prompt=self.chat_models.workspace_prompt(workspace.kind),
-            runtime_prompt=animation_runtime_prompt(workspace.kind, workspace.settings),
             generation_prompt=generation_mode_prompt(
-                workspace.kind,
                 effective_mode,
                 len(attachments),
             ),
@@ -169,25 +160,17 @@ class PromptDraftWorkflow(ConversationSupport):
     ) -> tuple[str, list[Asset]]:
         if mode and mode not in {"text2img", "img2img"}:
             raise ServiceError("生成模式无效")
-        if workspace.kind == "animation" and mode and mode != "img2img":
-            raise ServiceError("帧动画工作站固定使用一张用户指定的母图")
         try:
             get_creative_direction(creative_direction_id)
         except ValueError as exc:
             raise ServiceError(str(exc)) from exc
-        requested_mode = (
-            "img2img"
-            if workspace.kind == "animation"
-            else mode or str((workspace.settings or {}).get("mode", "text2img"))
-        )
+        requested_mode = mode or str((workspace.settings or {}).get("mode", "text2img"))
         requested_mode = "img2img" if requested_mode == "img2img" else "text2img"
         attachments = self._load_assets(workspace, reference_ids) if reference_ids else []
         if not mode and attachments and requested_mode == "text2img":
             requested_mode = "img2img"
         if requested_mode == "text2img" and attachments:
             raise ServiceError("文生图提示词草稿不能携带参考图")
-        if workspace.kind == "animation" and len(attachments) != 1:
-            raise ServiceError("帧动画提示词草稿必须且只能选择一张母图")
         return requested_mode, attachments
 
     def validate_generation_draft(

@@ -23,9 +23,6 @@
 # 当前领域
 .\.venv\Scripts\python.exe -m pytest tests/integration/test_generations.py -q
 
-# 按行为筛选
-.\.venv\Scripts\python.exe -m pytest -k "animation and retry" -q
-
 # 完整 Python 回归和覆盖率门槛
 .\.venv\Scripts\python.exe -m coverage run -m pytest -q
 .\.venv\Scripts\python.exe -m coverage report

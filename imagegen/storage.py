@@ -16,10 +16,6 @@ IMAGE_FORMATS = {
     "jpeg": ("jpg", "image/jpeg"),
     "webp": ("webp", "image/webp"),
 }
-ANIMATION_FORMATS = {
-    "webp": ("webp", "image/webp"),
-    "gif": ("gif", "image/gif"),
-}
 MAX_IMAGE_DIMENSION = 8192
 MAX_IMAGE_PIXELS = 40_000_000
 
@@ -47,14 +43,6 @@ class StoredImage:
 class StoredOutput:
     image: StoredImage
     thumbnail_path: str
-
-
-@dataclass(frozen=True)
-class StoredAnimation:
-    relative_path: str
-    mime_type: str
-    extension: str
-    byte_count: int
 
 
 class ImageStorage:
@@ -161,71 +149,6 @@ class ImageStorage:
         return StoredOutput(
             image=replace(inspected, relative_path=relative.as_posix()),
             thumbnail_path=thumbnail.as_posix(),
-        )
-
-    def save_animation(
-        self,
-        *,
-        user_id: int,
-        workspace_id: str,
-        job_id: str,
-        frame_paths: list[str],
-        output_format: str,
-        fps: int,
-        loop: bool,
-    ) -> StoredAnimation:
-        if output_format not in ANIMATION_FORMATS:
-            raise StorageError("动画导出格式无效")
-        if not frame_paths:
-            raise StorageError("动画没有可用帧")
-        extension, mime_type = ANIMATION_FORMATS[output_format]
-        directory = Path("users") / str(user_id) / "workspaces" / workspace_id
-        relative = directory / "generations" / job_id / f"animation.{extension}"
-        target = self._resolve(relative.as_posix())
-        if target.is_file():
-            return StoredAnimation(
-                relative_path=relative.as_posix(),
-                mime_type=mime_type,
-                extension=extension,
-                byte_count=target.stat().st_size,
-            )
-
-        frames: list[Image.Image] = []
-        expected_size: tuple[int, int] | None = None
-        for frame_path in frame_paths:
-            with Image.open(self.read(frame_path)) as source:
-                source.seek(0)
-                frame = ImageOps.exif_transpose(source)
-                frame.load()
-                frame = frame.convert("RGBA" if "A" in frame.getbands() else "RGB")
-                if expected_size is None:
-                    expected_size = frame.size
-                elif frame.size != expected_size:
-                    raise StorageError("动画帧尺寸不一致")
-                frames.append(frame.copy())
-
-        duration = max(1, round(1000 / max(1, fps)))
-        output = io.BytesIO()
-        options = {
-            "save_all": True,
-            "append_images": frames[1:],
-            "duration": duration,
-        }
-        if output_format == "gif":
-            options["disposal"] = 2
-            if loop:
-                options["loop"] = 0
-            frames[0].save(output, format="GIF", **options)
-        else:
-            options.update(lossless=True, quality=90, method=4, loop=0 if loop else 1)
-            frames[0].save(output, format="WEBP", **options)
-        content = output.getvalue()
-        self._atomic_write(relative, content)
-        return StoredAnimation(
-            relative_path=relative.as_posix(),
-            mime_type=mime_type,
-            extension=extension,
-            byte_count=len(content),
         )
 
     def read(self, relative_path: str) -> Path:

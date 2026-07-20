@@ -196,12 +196,6 @@ def job_dict(
         "output_format": job.output_format,
         "compression": job.compression,
         "transparent_background": job.transparent_background,
-        "animation_fps": job.animation_fps,
-        "animation_loop": job.animation_loop,
-        "animation_format": job.animation_format,
-        "animation_duration_seconds": round(job.requested_count / job.animation_fps, 3)
-        if job.kind == "animation" and job.animation_fps
-        else None,
         "requested_count": job.requested_count,
         "price_per_image_rmb": _amount(job.price_per_image_rmb),
         "charged_rmb": _amount(job.charged_rmb),
@@ -213,15 +207,8 @@ def job_dict(
         "failed_count": failed,
         "canceled_count": canceled,
         "can_cancel": job.status in {"queued", "running", "canceling"},
-        "can_retry": job.is_animation_retryable,
         "references": [asset_dict(reference.asset) for reference in job.references],
         "items": item_results,
-        "animation_url": url_for("web.animation_file", job_id=job.id)
-        if job.kind == "animation" and job.status == "succeeded"
-        else None,
-        "animation_download_url": url_for("web.animation_file", job_id=job.id, download=1)
-        if job.kind == "animation" and job.status == "succeeded"
-        else None,
     }
     if admin:
         result["user"] = user_dict(job.user, include_private=False)
@@ -316,11 +303,7 @@ def _job_estimated_end(
             if generation_concurrency is not None
             else job.user.generation_concurrency
         )
-        slots = (
-            1
-            if job.kind == "animation"
-            else max(1, min(channel.limits.max_concurrency, concurrency))
-        )
+        slots = max(1, min(channel.limits.max_concurrency, concurrency))
     except ValueError:
         slots = 1
     waves = math.ceil(queued / slots)

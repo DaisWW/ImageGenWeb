@@ -5,9 +5,7 @@
     StudioApp,
     UI,
     setText,
-    setHidden,
     setDisabled,
-    setAttribute,
   } = window.ImageGenStudio;
 
   Object.assign(StudioApp.prototype, {
@@ -18,15 +16,12 @@
       this.prepareImageReveal(this.el.detailImage);
       this.el.detailPrompt.textContent = job.prompt;
       const transparentLabel = job.transparent_background ? " · 透明背景" : "";
-      const animationLabel = job.kind === "animation"
-        ? ` · 第 ${item.position + 1}/${job.requested_count} 帧 · ${job.animation_fps} FPS`
-        : "";
       const stageLabel = { draft: "草稿", refine: "精修", final: "成品" }[
         job.workflow?.generation_stage
       ] || "未标记";
       const details = [
         ["渠道", `${job.channel} · ${job.model}`],
-        ["参数", `${job.size} · ${job.quality} · ${job.output_format.toUpperCase()}${transparentLabel}${animationLabel}`],
+        ["参数", `${job.size} · ${job.quality} · ${job.output_format.toUpperCase()}${transparentLabel}`],
         ["流程", [
           job.workflow?.creative_direction_label || "历史任务",
           job.workflow?.template_label,
@@ -44,7 +39,6 @@
         ? `<span>垫图</span><div>${job.references.map((asset) => `<img src="${asset.url}" alt="${UI.escapeHtml(asset.name)}" decoding="async">`).join("")}</div>`
         : "";
       this.el.detailReferences.querySelectorAll("img").forEach((image) => this.prepareImageReveal(image));
-      this.el.detailReuseLabel.textContent = this.isAnimationWorkspace() ? "设为母图" : "基于此图继续";
       this.el.detailDownload.href = item.download_url;
       UI.openDialog(this.el.imageDialog);
     },
@@ -281,7 +275,6 @@
         workspace = this.activeWorkspace,
         dialog,
         prompt = "请基于这张图继续调整：",
-        animationToast = "已设为母图，可以调整帧动画参数",
         imageToast = "",
       },
     ) {
@@ -291,21 +284,6 @@
       }
       this.renderWorkspaceList();
       if (this.activeWorkspace?.id !== workspace.id) return;
-      if (workspace.kind === "animation") {
-        const selection = this.currentSelection(workspace.id);
-        selection.clear();
-        selection.add(asset.id);
-        this.setMode("img2img", false);
-        this.renderReferences();
-        this.settingChanged();
-        await this.flushSettings(workspace.id);
-        if (this.activeWorkspace?.id !== workspace.id) return;
-        UI.closeDialog(dialog);
-        this.setComposerMode("generation");
-        this.el.promptInput.focus();
-        if (animationToast) UI.toast(animationToast, "success");
-        return;
-      }
       const chatSelection = this.currentChatSelection(workspace.id);
       chatSelection.clear();
       chatSelection.add(asset.id);
@@ -329,7 +307,6 @@
         workspace,
         dialog: this.el.sliceDialog,
         prompt: "请基于这个切片继续调整：",
-        animationToast: "已将切片设为母图",
         imageToast: "已选择切片，可以继续调整",
       });
     },

@@ -180,86 +180,6 @@ class TestPromptDrafts(PlatformTestCase):
         self.assertEqual(ready.payload["reference_ids"], [])
         self.assertIn("银色运动鞋", ready.payload["prompt"])
 
-    def test_animation_prompt_draft_gate_checks_motion_plan_with_runtime_parameters(self):
-        workspace = self.create_workspace("模糊动作", kind="animation")
-        master = self.services.workspaces.add_assets(
-            workspace,
-            [("master.png", png_bytes())],
-        )[0]
-        self.services.conversations.send(
-            workspace,
-            model_id="test-chat",
-            content="让这个角色动起来",
-            attachment_ids=(master.id,),
-        )
-        self.chat_client.prompt_draft_content = json.dumps(
-            {
-                "status": "needs_clarification",
-                "questions": ["角色要做哪种主动作：原地挥手、转身，还是由我选择一个稳定动作？"],
-            },
-            ensure_ascii=False,
-        )
-
-        clarification = self.services.conversations.create_prompt_draft(
-            workspace,
-            model_id="test-chat",
-            translate_to_english=False,
-            mode="img2img",
-            reference_ids=(master.id,),
-        )
-
-        self.assertEqual(clarification.kind, "message")
-        self.assertEqual(clarification.payload["status"], "needs_clarification")
-        system = self.chat_client.calls[-1]["system"]
-        self.assertIn("主动作只有“动起来”等抽象描述", system)
-        self.assertIn("帧数：8 帧", system)
-        self.assertIn("帧率：8 FPS", system)
-        self.assertIn("当前任务固定为 img2img", system)
-        self.assertIn("禁止生成母图", system)
-        self.assertIn('"status":"needs_clarification"', system)
-
-    def test_animation_prompt_draft_requires_exactly_one_user_selected_master(self):
-        workspace = self.create_workspace("母图约束", kind="animation")
-        self.services.conversations.send(
-            workspace,
-            model_id="test-chat",
-            content="角色原地挥手并循环。",
-        )
-
-        with self.assertRaisesRegex(ServiceError, "固定使用一张用户指定的母图"):
-            self.services.conversations.create_prompt_draft(
-                workspace,
-                model_id="test-chat",
-                translate_to_english=False,
-                mode="text2img",
-            )
-
-        calls_before_missing_master = len(self.chat_client.calls)
-        with self.assertRaisesRegex(ServiceError, "必须且只能选择一张母图"):
-            self.services.conversations.create_prompt_draft(
-                workspace,
-                model_id="test-chat",
-                translate_to_english=False,
-                mode="img2img",
-            )
-        self.assertEqual(len(self.chat_client.calls), calls_before_missing_master)
-
-        masters = self.services.workspaces.add_assets(
-            workspace,
-            [
-                ("master-a.png", png_bytes()),
-                ("master-b.png", png_bytes((40, 90, 180))),
-            ],
-        )
-        with self.assertRaisesRegex(ServiceError, "必须且只能选择一张母图"):
-            self.services.conversations.create_prompt_draft(
-                workspace,
-                model_id="test-chat",
-                translate_to_english=False,
-                mode="img2img",
-                reference_ids=tuple(asset.id for asset in masters),
-            )
-
     def test_img2img_prompt_draft_uses_selected_generation_references(self):
         workspace = self.create_workspace("产品换场景")
         assets = self.services.workspaces.add_assets(
@@ -409,14 +329,8 @@ class TestPromptDrafts(PlatformTestCase):
             "chat": "自定义基础对话规则：先准确理解用户，再提出必要问题。",
         }
         self.assertIn("当前是静态图片工作站", config["workspace_prompts"]["image"])
-        self.assertIn(
-            "帧动画工作站只能生成帧动画",
-            config["workspace_prompts"]["animation"],
-        )
-        self.assertIn("严禁用换颜色", config["workspace_prompts"]["animation"])
         config["workspace_prompts"] = {
             "image": "自定义图片规则：画面只采用一个明确的视觉中心。",
-            "animation": "自定义动画规则：角色造型和镜头必须逐帧稳定。",
         }
 
         response = client.put("/api/admin/chat-models", json=config)
@@ -439,33 +353,6 @@ class TestPromptDrafts(PlatformTestCase):
         )
         self.assertIn("自定义图片规则", self.chat_client.calls[-1]["system"])
         self.assertIn("只输出一个 JSON 对象", self.chat_client.calls[-1]["system"])
-
-        animation_workspace = self.create_workspace("自定义动画", kind="animation")
-        self.services.conversations.send(
-            animation_workspace,
-            model_id="test-chat",
-            content="角色转身后挥手",
-        )
-        self.assertIn("自定义动画规则", self.chat_client.calls[-1]["system"])
-        self.assertNotIn("自定义图片规则", self.chat_client.calls[-1]["system"])
-        self.assertIn("帧数：8 帧", self.chat_client.calls[-1]["system"])
-        self.assertIn("帧率：8 FPS", self.chat_client.calls[-1]["system"])
-        self.assertIn("总时长：1.000 秒", self.chat_client.calls[-1]["system"])
-        self.assertIn("循环：末帧应自然衔接回第 1 帧", self.chat_client.calls[-1]["system"])
-        master = self.services.workspaces.add_assets(
-            animation_workspace,
-            [("master.png", png_bytes())],
-        )[0]
-        self.services.conversations.create_prompt_draft(
-            animation_workspace,
-            model_id="test-chat",
-            translate_to_english=False,
-            mode="img2img",
-            reference_ids=(master.id,),
-        )
-        self.assertIn("自定义动画规则", self.chat_client.calls[-1]["system"])
-        self.assertIn("帧数：8 帧", self.chat_client.calls[-1]["system"])
-        self.assertIn("帧率：8 FPS", self.chat_client.calls[-1]["system"])
 
     def test_conversation_and_prompt_draft_use_selected_chat_model(self):
         config = self.admin_client().get("/api/admin/chat-models").json["config"]

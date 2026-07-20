@@ -65,12 +65,8 @@
   .composer-controls {
     grid-template-columns: auto minmax(170px, 1.2fr) minmax(135px, 1fr) repeat(3, minmax(88px, .65fr)) minmax(80px, .55fr) 65px;
   }
-  .animation-workflow .composer-controls { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .mode-button { min-width: 72px; padding-inline: 7px; }
-  .job-body,
-  .animation-job .job-body,
-  .animation-job.has-animation-result .job-body { grid-template-columns: 1fr; }
-  .animation-result { width: 160px; }
+  .job-body { grid-template-columns: 1fr; }
   .output-grid { grid-template-columns: repeat(10, 52px); }
   .output-tile { width: 52px; }
   .chat-toolbar { flex-wrap: wrap; }
@@ -88,8 +84,7 @@
   .stage-title { grid-column: 1; grid-row: 1; }
   .stage-tools { grid-column: 2; grid-row: 1; }
   .stage-metrics { display: none; }
-  .composer-controls,
-  .animation-workflow .composer-controls { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .composer-controls { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .mode-switch { grid-column: span 2; }
   .channel-field { grid-column: span 1; }
   .model-field { grid-column: span 1; }
@@ -151,11 +146,9 @@
   .job-actions > span { display: none; }
   .job-body { gap: 12px; }
   .output-grid { grid-template-columns: repeat(5, minmax(44px, 1fr)); }
-  .animation-result { width: min(180px, 100%); }
   .output-tile { width: 100%; }
   .composer { padding: 10px; }
-  .composer-controls,
-  .animation-workflow .composer-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .composer-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mode-switch { grid-column: 1 / -1; }
   .channel-field,
   .model-field { grid-column: span 1; }

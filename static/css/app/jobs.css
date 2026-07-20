@@ -219,65 +219,6 @@
   gap: 6px;
 }
 
-.animation-job .job-body {
-  grid-template-columns: minmax(240px, 1fr) auto;
-}
-
-.animation-job.has-animation-result .job-body {
-  grid-template-columns: minmax(240px, 1fr) 148px auto;
-}
-
-.animation-result {
-  display: grid;
-  width: 148px;
-  gap: 6px;
-}
-
-.animation-preview {
-  display: grid;
-  overflow: hidden;
-  aspect-ratio: 1;
-  place-items: center;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background-color: #202427;
-  background-image:
-    linear-gradient(45deg, rgb(255 255 255 / 5%) 25%, transparent 25%),
-    linear-gradient(-45deg, rgb(255 255 255 / 5%) 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, rgb(255 255 255 / 5%) 75%),
-    linear-gradient(-45deg, transparent 75%, rgb(255 255 255 / 5%) 75%);
-  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
-  background-size: 16px 16px;
-}
-
-.animation-preview img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-.animation-result-bar {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 5px;
-  color: var(--muted);
-  font-size: 9px;
-}
-
-.animation-result-bar span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.animation-result-bar .icon-button {
-  width: 28px;
-  height: 28px;
-  flex: 0 0 28px;
-}
-
 .output-tile {
   position: relative;
   width: 64px;

@@ -20,7 +20,7 @@ from ...models import (
 )
 from ..prompt_drafts import PromptDraftReview
 from .operations import ConversationOperation, ConversationOperationRegistry
-from .prompts import animation_runtime_prompt, generation_mode_prompt
+from .prompts import generation_mode_prompt
 from .support import ConversationDependencies, ConversationSupport
 
 
@@ -137,15 +137,11 @@ class ConversationReplyService(ConversationSupport):
         content = self._validate_message(content, has_attachments=bool(attachment_ids))
         requested_mode = str(generation_mode or "").strip().lower()
         if not requested_mode:
-            configured_mode = (
-                "img2img"
-                if workspace.kind == "animation"
-                else str((workspace.settings or {}).get("mode", "text2img"))
-            )
+            configured_mode = str((workspace.settings or {}).get("mode", "text2img"))
             requested_mode = (
                 "auto" if attachment_ids and configured_mode != "img2img" else configured_mode
             )
-        generation_mode = self._normalize_generation_mode(workspace, requested_mode)
+        generation_mode = self._normalize_generation_mode(requested_mode)
         if generation_mode == "text2img" and generation_reference_ids:
             raise ServiceError("文生图消息不能携带垫图")
         if generation_mode == "auto" and generation_reference_ids:
@@ -251,9 +247,7 @@ class ConversationReplyService(ConversationSupport):
             workspace_kind=workspace.kind,
             workspace_prompt=self.chat_models.workspace_prompt(workspace.kind),
             conversation_prompt=self.chat_models.system_prompt("chat"),
-            runtime_prompt=animation_runtime_prompt(workspace.kind, settings),
             generation_prompt=generation_mode_prompt(
-                workspace.kind,
                 review_mode,
                 len(candidate_references),
             ),
@@ -339,12 +333,8 @@ class ConversationReplyService(ConversationSupport):
         return assistant_message
 
     @staticmethod
-    def _normalize_generation_mode(workspace: Workspace, value: str) -> str:
+    def _normalize_generation_mode(value: str) -> str:
         mode = str(value or "").strip().lower()
-        if workspace.kind == "animation":
-            if mode not in {"", "img2img"}:
-                raise ServiceError("帧动画工作站固定使用 img2img")
-            return "img2img"
         if mode not in {"", "auto", "text2img", "img2img"}:
             raise ServiceError("生成模式无效")
         return mode or "text2img"
@@ -359,10 +349,8 @@ class ConversationReplyService(ConversationSupport):
     ) -> str:
         raw_mode = str(payload.get("generation_mode", "")).strip().lower()
         if raw_mode:
-            return self._normalize_generation_mode(workspace, raw_mode)
+            return self._normalize_generation_mode(raw_mode)
         if generation_reference_ids:
-            return "img2img"
-        if workspace.kind == "animation":
             return "img2img"
         configured_mode = str((workspace.settings or {}).get("mode", "text2img"))
         if configured_mode == "img2img":

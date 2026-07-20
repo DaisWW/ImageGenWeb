@@ -153,26 +153,15 @@ class TestAuthAndWorkspaces(PlatformTestCase):
         self.assertIn("当前是静态图片工作站", system)
         self.assertIn("以下情况必须先澄清", system)
         self.assertIn("一张完整画面", system)
-        self.assertNotIn("帧动画工作站只能生成帧动画", system)
 
-    def test_animation_workspace_chat_uses_motion_specific_guidance(self):
-        workspace = self.create_workspace("动作讨论", kind="animation")
-
-        self.services.conversations.send(
-            workspace,
-            model_id="test-chat",
-            content="角色原地挥手并循环",
+    def test_unsupported_workspace_kind_is_rejected(self):
+        response = self.user_client().post(
+            "/api/workspaces",
+            json={"name": "未知类型", "kind": "unsupported"},
         )
 
-        system = self.chat_client.calls[-1]["system"]
-        self.assertIn("帧动画工作站只能生成帧动画", system)
-        self.assertIn("禁止生成母图", system)
-        self.assertIn("当前任务固定为 img2img", system)
-        self.assertNotIn("当前尚未进入带参考图的帧生成阶段", system)
-        self.assertIn("动作起点", system)
-        self.assertIn("主动作只有“动起来”等抽象描述", system)
-        self.assertIn("运行时参数不需要用户在对话中重复说明", system)
-        self.assertIn("首尾衔接", system)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json["error"], "工作站类型无效")
 
     def test_admin_creates_user_and_balance_ledger_is_immutable_history(self):
         self.services.billing.adjust(

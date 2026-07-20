@@ -357,9 +357,7 @@
       summary.textContent = payload.summary_zh || "";
       const promptLabel = document.createElement("span");
       promptLabel.className = "message-section-label";
-      promptLabel.textContent = payload.language === "en"
-        ? "English prompt"
-        : this.isAnimationWorkspace() ? "帧动画提示词" : "生图提示词";
+      promptLabel.textContent = payload.language === "en" ? "English prompt" : "生图提示词";
       const prompt = document.createElement("p");
       prompt.className = "prompt-draft-text";
       prompt.textContent = payload.prompt || "";
@@ -395,9 +393,7 @@
       action.type = "button";
       action.className = "button primary small";
       action.dataset.usePromptDraft = message.id;
-      action.innerHTML = this.isAnimationWorkspace()
-        ? '<i data-lucide="film"></i>使用此提示词制作帧动画'
-        : '<i data-lucide="image-plus"></i>使用此提示词生图';
+      action.innerHTML = '<i data-lucide="image-plus"></i>使用此提示词生图';
       wrap.append(summaryLabel, summary, promptLabel, prompt, meta, selection, action);
       return wrap;
     },

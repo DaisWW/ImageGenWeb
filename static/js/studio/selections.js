@@ -30,7 +30,6 @@
         : workspace?.settings?.channel_id;
       const channel = this.channels.find((item) => item.id === channelId);
       const limit = channel?.capabilities.max_reference_images || 0;
-      if (workspace?.kind === "animation") return channel ? Math.min(1, limit) : 1;
       return limit;
     },
 

@@ -8,20 +8,17 @@
     REFERENCE_IMAGE_EXTENSION,
     setHidden,
     setDisabled,
-    setAttribute,
   } = window.ImageGenStudio;
 
   Object.assign(StudioApp.prototype, {
     libraryTargetLabel() {
-      return this.libraryTarget === "chat"
-        ? "随消息发送"
-        : this.isAnimationWorkspace() ? "设为母图" : "设为垫图";
+      return this.libraryTarget === "chat" ? "随消息发送" : "设为垫图";
     },
 
     async openLibrary(target = "") {
       if (!this.activeWorkspace) return;
       this.libraryTarget = target || (
-        this.isAnimationWorkspace() || !this.el.generationForm.hidden ? "generation" : "chat"
+        !this.el.generationForm.hidden ? "generation" : "chat"
       );
       this.librarySelection.clear();
       this.el.libraryTargetLabel.textContent = this.libraryTargetLabel();
@@ -106,24 +103,19 @@
       const target = this.libraryTarget;
       const rawLimit = Number(this.referenceSelectionLimit(target, workspace));
       const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 0;
-      const replacesAnimationMaster = workspace?.kind === "animation"
-        && target === "generation";
       const selection = target === "chat"
         ? this.currentChatSelection(workspace?.id)
         : this.currentSelection(workspace?.id);
-      const available = replacesAnimationMaster
-        ? 1
-        : Math.max(0, limit - selection.size);
-      return { target, limit, selection, replacesAnimationMaster, available };
+      const available = Math.max(0, limit - selection.size);
+      return { target, limit, selection, available };
     },
 
     updateLibrarySelectionUI() {
       if (!this.el?.librarySelectionSummary) return;
-      const { limit, selection, replacesAnimationMaster } = this.librarySelectionContext();
+      const { limit, selection } = this.librarySelectionContext();
       const selectionCount = this.librarySelection.size;
-      const existing = replacesAnimationMaster ? 0 : selection.size;
       this.el.librarySelectionSummary.textContent = limit > 0
-        ? `已选择 ${existing + selectionCount} / ${limit} 张`
+        ? `已选择 ${selection.size + selectionCount} / ${limit} 张`
         : `已选择 ${selectionCount} 张`;
       const hasImages = (this.libraryImages || []).length > 0;
       setDisabled(this.el.librarySelectAllButton, this.libraryBusy || this.libraryLoading || !hasImages);
@@ -299,7 +291,6 @@
         target,
         limit,
         selection,
-        replacesAnimationMaster,
         available,
       } = this.librarySelectionContext(workspace);
       const requested = [...new Set(imageIds)].slice(0, available);
@@ -316,7 +307,6 @@
         for (const imageId of requested) {
           try {
             const asset = await this.importLibraryAsset(workspace, imageId);
-            if (replacesAnimationMaster) selection.clear();
             selection.add(asset.id);
             imported.push(asset);
           } catch (error) {
@@ -357,12 +347,7 @@
           this.renderReferences();
           this.el.promptInput.focus();
         }
-        UI.toast(
-          workspace.kind === "animation"
-            ? "已设为母图"
-            : imported.length === 1 ? "已选择垫图" : `已选择 ${imported.length} 张垫图`,
-          "success",
-        );
+        UI.toast(imported.length === 1 ? "已选择垫图" : `已选择 ${imported.length} 张垫图`, "success");
       }
       if (failures.length) UI.toast(`有 ${failures.length} 张图片导入失败`, "error");
     },

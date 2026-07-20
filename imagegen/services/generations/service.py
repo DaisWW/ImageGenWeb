@@ -54,8 +54,8 @@ class GenerationService:
             raise ServiceError(str(exc)) from exc
         normalized_size = self.validator.validate_request(channel, request, workspace.kind)
         references = self.validator.load_references(workspace, request.reference_ids)
-        job_kind, requested_count = self.validator.job_shape(workspace.kind, request, references)
         self.validator.validate_references(channel, request.mode, references)
+        requested_count = request.batch_count
 
         user = self.billing.lock_user(user_id)
         if not user.is_active:
@@ -67,7 +67,7 @@ class GenerationService:
         )
         if locked_workspace_id is None:
             raise ServiceError("工作站不存在", status_code=404)
-        self._ensure_workspace_generation_idle(workspace.id, workspace.kind)
+        self._ensure_workspace_generation_idle(workspace.id)
         self._ensure_queue_capacity(user_id, requested_count)
 
         reserved = money(channel.price_rmb * requested_count)
@@ -79,7 +79,7 @@ class GenerationService:
             channel_id=channel.identifier,
             channel_label=channel.label,
             channel_config_version=self.channels.version,
-            kind=job_kind,
+            kind=workspace.kind,
             mode=request.mode,
             prompt=request.prompt.strip(),
             model=selected_model.identifier,
@@ -89,9 +89,6 @@ class GenerationService:
             output_format=request.output_format,
             compression=request.compression,
             transparent_background=request.transparent_background,
-            animation_fps=request.animation_fps,
-            animation_loop=request.animation_loop,
-            animation_format=request.animation_format,
             requested_count=requested_count,
             price_per_image_rmb=money(channel.price_rmb),
             reserved_rmb=reserved,
@@ -103,7 +100,7 @@ class GenerationService:
             db.session.flush()
         except IntegrityError as exc:
             db.session.rollback()
-            raise self._workspace_active_error(workspace.kind) from exc
+            raise self._workspace_active_error() from exc
         for position, asset in enumerate(references):
             db.session.add(
                 GenerationReference(
@@ -135,10 +132,6 @@ class GenerationService:
                 "compression": request.compression,
                 "transparent_background": request.transparent_background,
                 "batch_count": request.batch_count,
-                "animation_frame_count": request.frame_count,
-                "animation_fps": request.animation_fps,
-                "animation_loop": request.animation_loop,
-                "animation_format": request.animation_format,
                 "generation_stage": workflow["generation_stage"],
                 "prompt_draft_id": workflow["prompt_draft_id"],
                 "creative_direction_id": workflow["creative_direction_id"],
@@ -174,58 +167,6 @@ class GenerationService:
         self.refresh_job_status(job)
         db.session.commit()
         return job
-
-    def retry_animation(
-        self,
-        job_id: str,
-        *,
-        user_id: int,
-    ) -> GenerationJob:
-        user, job = self._lock_job_and_owner(job_id, user_id=user_id)
-        if not job.is_animation_retryable:
-            raise ServiceError(
-                "当前帧动画任务不能继续生成",
-                code="generation_not_retryable",
-                status_code=409,
-            )
-        self._ensure_workspace_generation_idle(job.workspace_id, "animation")
-        try:
-            channel = self.channels.get(job.channel_id)
-            channel.get_model(job.model)
-        except ValueError as exc:
-            raise ServiceError(str(exc), status_code=409) from exc
-
-        retry_items = [item for item in job.items if item.status != "succeeded"]
-        retry_count = len(retry_items)
-        if not user.is_active:
-            raise ServiceError("账户已被禁用", status_code=403)
-        self._ensure_queue_capacity(user.id, retry_count)
-
-        reserved = money(job.price_per_image_rmb * retry_count)
-        self.billing.reserve(user, reserved)
-        job.reserved_rmb = money(job.reserved_rmb + reserved)
-        job.cancel_requested_at = None
-        job.completed_at = None
-        for item in retry_items:
-            item.status = "queued"
-            item.cancel_requested_at = None
-            item.claimed_by = None
-            item.heartbeat_at = None
-            item.started_at = None
-            item.completed_at = None
-            item.estimated_seconds = None
-            item.error_code = None
-            item.error_message = None
-            item.upstream_status = None
-            item.upstream_request_id = None
-            item.elapsed_seconds = None
-        self.refresh_job_status(job)
-        try:
-            db.session.commit()
-        except IntegrityError as exc:
-            db.session.rollback()
-            raise self._workspace_active_error("animation") from exc
-        return self.get_job(job.id, user_id=user.id)
 
     def get_job(
         self,
@@ -323,7 +264,7 @@ class GenerationService:
     def estimate_seconds(self, job: GenerationJob, channel: Channel) -> Decimal:
         return self.duration_estimator.estimate_seconds(job, channel)
 
-    def _ensure_workspace_generation_idle(self, workspace_id: str, workspace_kind: str) -> None:
+    def _ensure_workspace_generation_idle(self, workspace_id: str) -> None:
         active_job = db.session.scalar(
             select(GenerationJob.id)
             .where(
@@ -333,7 +274,7 @@ class GenerationService:
             .limit(1)
         )
         if active_job:
-            raise self._workspace_active_error(workspace_kind)
+            raise self._workspace_active_error()
 
     def _ensure_queue_capacity(self, user_id: int, requested_count: int) -> None:
         lock_result = db.session.execute(
@@ -392,10 +333,9 @@ class GenerationService:
         return user, job
 
     @staticmethod
-    def _workspace_active_error(workspace_kind: str) -> ServiceError:
-        subject = "帧动画" if workspace_kind == "animation" else "图片"
+    def _workspace_active_error() -> ServiceError:
         return ServiceError(
-            f"当前工作站已有{subject}任务，请等待完成或先取消",
+            "当前工作站已有生成任务，请等待完成或先取消",
             code="workspace_generation_active",
             status_code=409,
         )
@@ -407,11 +347,7 @@ class GenerationService:
             job.status = "canceling" if job.cancel_requested_at else "running"
             return
         if any(status == "queued" for status in statuses):
-            job.status = (
-                "running"
-                if job.kind == "animation" and any(status == "succeeded" for status in statuses)
-                else "queued"
-            )
+            job.status = "queued"
             return
         succeeded = statuses.count("succeeded")
         failed = statuses.count("failed") + statuses.count("interrupted")

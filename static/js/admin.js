@@ -992,7 +992,6 @@
       if (!prompts || !systemPrompts) return;
       this.el.workspacePromptsForm.elements.chat.value = systemPrompts.chat;
       this.el.workspacePromptsForm.elements.image.value = prompts.image;
-      this.el.workspacePromptsForm.elements.animation.value = prompts.animation;
       UI.openDialog(this.el.workspacePromptsDialog);
     }
 
@@ -1007,7 +1006,6 @@
         };
         next.workspace_prompts = {
           image: this.el.workspacePromptsForm.elements.image.value.trim(),
-          animation: this.el.workspacePromptsForm.elements.animation.value.trim(),
         };
         await this.persistChatModels(next, "提示词策略已更新");
         UI.closeDialog(this.el.workspacePromptsDialog);

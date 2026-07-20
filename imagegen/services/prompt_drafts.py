@@ -34,7 +34,7 @@ class PromptDraftReview:
             if self.translate_to_english
             else "prompt 必须是自然、具体、结构清晰的中文生图提示词"
         )
-        task = "帧动画" if self.workspace_kind == "animation" else "静态图片"
+        task = "静态图片" if self.workspace_kind == "image" else "视觉内容"
         runtime_section = (
             f"\n本次任务的运行参数如下：\n{self.runtime_prompt.strip()}"
             if self.runtime_prompt.strip()
@@ -122,11 +122,7 @@ ready 时还必须完成一次交付前审查：
                 f"{index}. {question}" for index, question in enumerate(draft["questions"], 1)
             )
             return f"为了让生成结果更符合预期，还需要确认：\n{questions}", "message"
-        label = (
-            "English prompt"
-            if self.translate_to_english
-            else ("帧动画提示词" if self.workspace_kind == "animation" else "生图提示词")
-        )
+        label = "English prompt" if self.translate_to_english else "生图提示词"
         return f"需求确认\n{draft['summary_zh']}\n\n{label}\n{draft['prompt']}", "prompt_draft"
 
     def _clarification(self, payload: dict[str, Any]) -> dict[str, Any] | None:

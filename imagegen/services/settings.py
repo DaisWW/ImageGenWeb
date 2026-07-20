@@ -33,8 +33,6 @@ class RuntimeSettings:
     max_concurrent_chats_per_user: int = 2
     max_prompt_characters: int = 8000
     max_batch_images: int = 20
-    max_animation_frames: int = 20
-    max_animation_fps: int = 24
     worker_poll_milliseconds: int = 500
     worker_heartbeat_seconds: int = 15
     worker_recovery_seconds: int = 60
@@ -62,8 +60,6 @@ class RuntimeSettings:
             "max_attachment_total_mb",
             "max_prompt_characters",
             "max_batch_images",
-            "max_animation_frames",
-            "max_animation_fps",
         }
         return {key: value for key, value in self.as_dict().items() if key in keys}
 
@@ -297,8 +293,6 @@ def _parse_runtime_settings(raw: dict[str, Any]) -> RuntimeSettings:
         max_concurrent_chats_per_user=_bounded_int(raw, "max_concurrent_chats_per_user", 2, 1, 16),
         max_prompt_characters=_bounded_int(raw, "max_prompt_characters", 8000, 1000, 12000),
         max_batch_images=_bounded_int(raw, "max_batch_images", 20, 1, 100),
-        max_animation_frames=_bounded_int(raw, "max_animation_frames", 20, 2, 100),
-        max_animation_fps=_bounded_int(raw, "max_animation_fps", 24, 1, 60),
         worker_poll_milliseconds=_bounded_int(raw, "worker_poll_milliseconds", 500, 100, 10000),
         worker_heartbeat_seconds=_bounded_int(raw, "worker_heartbeat_seconds", 15, 5, 120),
         worker_recovery_seconds=_bounded_int(raw, "worker_recovery_seconds", 60, 10, 3600),

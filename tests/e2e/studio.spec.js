@@ -83,7 +83,6 @@ test("new workspace is interactive while history is delayed", async ({ studioPag
   try {
     await createWorkspace(page, name);
     await expect(page.locator("#chatInput")).toBeEditable({ timeout: 1000 });
-    await expect(page.locator("#animationParametersButton")).toBeHidden();
     expect(await page.evaluate(() => {
       window.__workspaceLockObserver.disconnect();
       return window.__workspaceLockTransitions;
@@ -316,7 +315,6 @@ test("workspace lifecycle remains usable", { tag: "@responsive" }, async ({
   await expect(chatInput).toBeEditable();
   await chatInput.fill("新工作站无需刷新即可输入");
   await expect(chatInput).toHaveValue("新工作站无需刷新即可输入");
-  await expect(page.locator("#animationParametersButton")).toBeHidden();
   await expect(page.locator("#promptGalleryLink"))
     .toHaveAttribute("href", "https://gpt-image2.canghe.ai/");
   await expect(page.locator("#promptGalleryLink")).toHaveAttribute("target", "_blank");
@@ -334,11 +332,11 @@ test("composer close fallback keeps workspace switching interactive", {
   tag: "@responsive",
 }, async ({ studioPage: page }, testInfo) => {
   const workspaceName = `E2E-Close-${testInfo.project.name}-${Date.now()}`;
-  await createWorkspace(page, workspaceName, "animation");
+  await createWorkspace(page, workspaceName);
   const target = page.locator("#workspaceList .workspace-item:not(.active)").first();
   const targetName = await target.locator(".workspace-copy strong").textContent();
 
-  await page.locator("#animationParametersButton").click();
+  await page.locator("#directGenerationButton").click();
   await expect(page.locator("#generationForm")).toBeVisible();
   await page.locator("#generationForm").evaluate((form) => {
     form.style.animationName = "none";
@@ -382,10 +380,6 @@ test("active generation locks prompt reuse and cancellation unlocks immediately"
     output_format: "png",
     compression: null,
     transparent_background: false,
-    animation_fps: null,
-    animation_loop: null,
-    animation_format: null,
-    animation_duration_seconds: null,
     requested_count: 1,
     price_per_image_rmb: "0.0300",
     charged_rmb: "0.0000",
@@ -397,11 +391,8 @@ test("active generation locks prompt reuse and cancellation unlocks immediately"
     failed_count: 0,
     canceled_count: 0,
     can_cancel: true,
-    can_retry: false,
     references: [],
     items: [],
-    animation_url: null,
-    animation_download_url: null,
   };
   const canceledJob = {
     ...activeJob,
@@ -511,9 +502,7 @@ test("failed generation shows the provider reason once", {
     created_at: createdAt,
     succeeded_count: 0,
     can_cancel: false,
-    can_retry: false,
     transparent_background: false,
-    animation_url: null,
     items: [0, 1].map((position) => ({
       id: `e2e-failed-item-${position}`,
       position,
@@ -547,9 +536,9 @@ test("failed generation shows the provider reason once", {
 test("latest toast does not cover the generation composer", {
   tag: "@responsive",
 }, async ({ studioPage: page }) => {
-  const workspaceName = `E2E-Toast-Animation-${Date.now()}`;
-  await createWorkspace(page, workspaceName, "animation");
-  await page.locator("#animationParametersButton").click();
+  const workspaceName = `E2E-Toast-${Date.now()}`;
+  await createWorkspace(page, workspaceName);
+  await page.locator("#directGenerationButton").click();
   await expect(page.locator("#generationForm")).toBeVisible();
 
   await page.evaluate(() => {
