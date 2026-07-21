@@ -396,16 +396,11 @@ tbody tr:hover td {
 
 .admin-media-stack {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   width: 100%;
-  max-width: 760px;
   min-width: 0;
   gap: 14px;
   padding-top: 2px;
-}
-
-.admin-media-group:only-child {
-  grid-column: 1 / -1;
 }
 
 .admin-media-group {
@@ -443,7 +438,7 @@ tbody tr:hover td {
 .admin-media-tile {
   position: relative;
   display: grid;
-  width: 176px;
+  width: 100%;
   aspect-ratio: 4 / 3;
   overflow: hidden;
   padding: 0;

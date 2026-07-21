@@ -183,10 +183,7 @@
   .config-model-row .icon-button { grid-column: 2; }
   .admin-job-top { align-items: flex-start; }
   .admin-job-owner small { max-width: 50vw; }
-  .admin-media-stack { grid-template-columns: 1fr; }
-  .admin-media-group:only-child { grid-column: auto; }
   .admin-media-grid { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); }
-  .admin-media-tile { width: 100%; }
 }
 
 @media (max-width: 430px) {
