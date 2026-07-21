@@ -17,12 +17,12 @@
 当前工作流兼顾直接生成与 AI 优化：
 
 1. 用户先用自然语言描述目标；需求通常允许模糊，但主体、用途、精确文字或参考图职责存在关键分支时，AI 会集中提出最多四个高信息量问题。
-2. 创作方向默认由 AI 自动匹配。AI 按“15 类交付物 → 31 类 Gallery Atlas → 47 个风格标签 → 15 个场景标签 → 42 个模板 → 相近 Case”筛选；普通任务只选一个 Gallery 类别，明确的混合任务最多选择三个。保留“AI 自动匹配”快捷入口后，前两个具体方向是“游戏 UI / HUD”和“游戏原画 / 概念设计”。游戏 UI 先锁平台、画布、安全区和 HUD 分区；完整界面转开发 UI Kit 时不做抠图，把原图作为结构和风格参考，先确认组件树，再逐次重建一个无文字、透明背景的原子资源。游戏原画先锁制作阶段、身份锚点、镜头动作和面板职责。
-3. Gallery Atlas 完整覆盖 [GPT-Image2-Skill Gallery](https://github.com/wuyoscar/GPT-Image2-Skill/blob/main/skills/gpt-image/references/gallery.md) 的 31 类、162 个 Case 范围，并在本地保存每类的画布、布局、媒介、标注和一致性语法。用户也可从 [GPT-Image2 Prompt Gallery](https://gpt-image2.canghe.ai/) 浏览并复制案例提示词；AI 只复用结构，以当前需求覆盖案例中的主体、文字、品牌和参考图职责。
-4. 对话 AI 判断需求足够完整后，系统会自动生成可追溯的最终提示词卡片，包含结构化 brief、方向/Gallery/模板选择理由、固定版本的类别来源、参考图顺序和 2～6 个图片硬门槛；用户可以进入生图参数，也可以继续沟通。从已有成图继续时，该图片会在后续对话、最终提示词和生成参数间持续作为垫图。提示词、模式或参考图顺序变化后只会取消“最终提示词已就绪”标记；若请求明确使用某份最终提示词草稿，服务端仍会校验内容完全一致。对话明确提出画幅或分辨率时，草稿会保存结构化 `canvas_request`；它与工作站尺寸冲突时，生成前必须由用户选择应用对话画幅或保持当前尺寸。
+2. 创作方向默认由 AI 自动匹配。本地路由先按“15 类交付物 → 31 类 Gallery Atlas → 47 个风格标签 → 15 个场景标签 → 42 个模板”选出最多三个模板候选，再检索相近 Case；普通任务只选一个 Gallery 类别，明确的混合任务最多选择三个。这避免每轮把完整目录交给 AI，同时保留“游戏 UI / HUD”和“游戏原画 / 概念设计”等严格分流。游戏 UI 先锁平台、画布、安全区和 HUD 分区；完整界面转开发 UI Kit 时不做抠图，把原图作为结构和风格参考，先确认组件树，再逐次重建一个无文字、透明背景的原子资源。游戏原画先锁制作阶段、身份锚点、镜头动作和面板职责。
+3. Gallery Atlas 完整覆盖 [GPT-Image2-Skill Gallery](https://github.com/wuyoscar/GPT-Image2-Skill/blob/main/skills/gpt-image/references/gallery.md) 的 31 类、162 个 Case 范围，并在本地保存每类的画布、布局、媒介、标注和一致性语法。CaseCatalog 还收录 [awesome-gpt-image-2](https://github.com/freestylefly/awesome-gpt-image-2) 与 GPT-Image2-Skill 固定版本共 679 条案例；普通聊天和显式提示词整理共用同一套 Top 3 检索。第三方案例只作为不可信结构参考，当前需求始终覆盖其中的主体、文字、品牌、IP 和参考图职责。
+4. 对话 AI 判断需求足够完整后，系统会自动生成可追溯的最终提示词卡片，包含结构化 brief、方向/Gallery/模板选择理由、检索案例、固定版本来源、参考图顺序和 2～6 个图片硬门槛。系统会把精确文字、逐图职责、唯一改变、必须保持、禁止项和 production spec 渲染为真正发送给生图接口的制作契约，而不只保存为元数据。参考图编辑会额外选择翻译、风格迁移、换装、对象替换、光线天气、草图渲染、商品清理、多图合成等 EditRecipe；生成完成后可按硬门槛执行 AI 验收，精确文字任务还会单独抽取可见文字并确定性判定缺失项，再把最高优先级的单点修正建议带入下一轮。提示词、模式或参考图顺序变化后只会取消“最终提示词已就绪”标记；若请求明确使用某份最终提示词草稿，服务端仍会校验内容完全一致。对话明确提出画幅或分辨率时，草稿会保存结构化 `canvas_request`；它与工作站尺寸冲突时，生成前必须由用户选择应用对话画幅或保持当前尺寸。
 5. 生成阶段仍由服务端固定映射为 `low`、`medium`、`high`，工作站沿用已保存的阶段值；前端不再提供手动阶段切换。前端传入其他 `quality` 值不能绕过映射；仍保持每张图一个独立请求，以保留逐张取消、结算和部分成功。
 
-工作流知识来自 [OpenAI Cookbook](https://github.com/openai/openai-cookbook)、[awesome-gpt-image-2](https://github.com/freestylefly/awesome-gpt-image-2) 和 [GPT-Image2-Skill](https://github.com/wuyoscar/GPT-Image2-Skill)。应用内置固定版本的完整类别路由、模板元数据、类别语法和 Craft 规则，不镜像第三方图片或完整案例 Prompt，也不安装第三方 CLI；现有渠道、队列、计费、素材和审计仍是唯一执行入口。`prompt-optimizer` 不在此工作流中。
+工作流知识来自 [OpenAI Cookbook](https://github.com/openai/openai-cookbook)、[awesome-gpt-image-2](https://github.com/freestylefly/awesome-gpt-image-2) 和 [GPT-Image2-Skill](https://github.com/wuyoscar/GPT-Image2-Skill)。应用内置固定版本的完整类别路由、模板元数据、类别语法、Craft 规则和文本案例目录，不镜像第三方图片，也不安装第三方 CLI；现有渠道、队列、计费、素材和审计仍是唯一执行入口。`prompt-optimizer` 不在此工作流中。
 
 ## 工程结构
 
