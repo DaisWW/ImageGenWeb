@@ -351,6 +351,32 @@ class TestAuthAndWorkspaces(PlatformTestCase):
             ["海风与远方", "参考图再创作"],
         )
 
+    def test_admin_can_create_user_with_email_username(self):
+        username = "jj+image@example.com"
+        created = self.admin_client().post(
+            "/api/admin/users",
+            json={"username": username, "password": "EmailUserPass123!"},
+        )
+
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(created.json["user"]["username"], username)
+        login = self.app.test_client().post(
+            "/login",
+            data={"username": username, "password": "EmailUserPass123!"},
+        )
+        self.assertEqual(login.status_code, 302)
+
+    def test_admin_rejects_username_with_whitespace_or_control_characters(self):
+        for username in ("invalid user", "invalid\x00user"):
+            with self.subTest(username=repr(username)):
+                created = self.admin_client().post(
+                    "/api/admin/users",
+                    json={"username": username, "password": "InvalidUserPass123!"},
+                )
+
+                self.assertEqual(created.status_code, 400)
+                self.assertEqual(created.json["error"], "用户名不能包含空白或控制字符")
+
     def test_admin_user_creation_rolls_back_when_starter_workspaces_fail(self):
         client = self.admin_client()
         with patch.object(

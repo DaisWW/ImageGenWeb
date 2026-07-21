@@ -90,6 +90,7 @@
       this.outgoingMessages = new Map();
       this.canceledChatOperationIds = new Map();
       this.generationSubmissions = new Map();
+      this.canvasConflict = null;
       this.cancelingJobs = new Set();
       this.saveTimer = null;
       this.workspaceSettingSaves = new Map();
@@ -230,6 +231,10 @@
         generationForm: byId("generationForm"),
         generationBackButton: byId("generationBackButton"),
         promptReviewStatus: byId("promptReviewStatus"),
+        canvasConflict: byId("canvasConflict"),
+        canvasConflictMessage: byId("canvasConflictMessage"),
+        canvasConflictApply: byId("canvasConflictApply"),
+        canvasConflictKeep: byId("canvasConflictKeep"),
         modeSwitch: byId("modeSwitch"),
         channelSelect: byId("channelSelect"),
         modelSelect: byId("modelSelect"),
@@ -379,6 +384,8 @@
       });
       this.el.translatePrompt.addEventListener("change", () => this.settingChanged());
       this.el.directGenerationButton.addEventListener("click", () => this.openGenerationComposer());
+      this.el.canvasConflictApply.addEventListener("click", () => this.applyCanvasRequest());
+      this.el.canvasConflictKeep.addEventListener("click", () => this.keepPanelCanvas());
       this.el.chatReferenceButton.addEventListener("click", () => this.toggleChatReferences());
       this.el.chatReferenceList.addEventListener("click", (event) => this.handleChatReferenceClick(event));
       this.el.messageList.addEventListener("click", (event) => {
@@ -444,7 +451,10 @@
       this.el.transparentBackground.addEventListener("change", () => this.settingChanged());
       this.el.sizeInput.addEventListener("input", () => this.el.sizeInput.setCustomValidity(""));
       this.el.sizeInput.addEventListener("change", () => {
-        if (this.validateSizeInput(true)) this.settingChanged();
+        if (this.validateSizeInput(true)) {
+          this.updateInteractionState();
+          this.settingChanged();
+        }
       });
       this.el.batchCount.addEventListener("input", () => {
         this.updatePrice();

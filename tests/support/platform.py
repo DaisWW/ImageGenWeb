@@ -474,6 +474,7 @@ class PlatformTestCase(unittest.TestCase):
         creative_direction_id="auto",
         template_id="custom",
         hard_checks=None,
+        canvas_request=None,
     ):
         direction = creative_direction_id if creative_direction_id != "auto" else "other"
         self.services.conversations.send(
@@ -492,6 +493,7 @@ class PlatformTestCase(unittest.TestCase):
                 "scene_tags": [],
                 "selection_reason": "按交付物和场景选择最接近的提示词结构。",
                 "brief": {"deliverable": "测试图片", "subject": prompt},
+                "canvas_request": canvas_request or {},
                 "hard_checks": hard_checks or ["主体符合提示词", "没有无关主体"],
                 "quality_hint": "low",
             },

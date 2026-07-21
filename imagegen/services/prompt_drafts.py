@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..errors import ServiceError
-from .common import parse_json_object
+from .common import normalize_canvas_request, parse_json_object
 from .creative import (
     PROMPT_CRAFT_GUIDANCE,
     SOURCE_METADATA,
@@ -47,6 +47,7 @@ class PromptDraftReview:
 若需要澄清，先完整核对会话，筛掉不会明显改变结果的低影响细节，只保留信息增益最高、互不重复且容易回答的阻塞性问题。把当前能够识别的问题一次性输出，问题宁少勿多，最多四个；不得把已经能识别的问题拆到后续轮次，也不要为了凑满四个补充问题。只有用户回答后新出现、且此前无法判断的关键分支或冲突，才允许追加追问。
 questions 数组的每一项只放一个问题。适合枚举时，在同一字符串内换行列出“A.、B.、C.、D.……”选项，标明一个“（推荐）”，并把最后一项写为“其他（请自定义）”；无法合理枚举时直接要求填写具体内容。用户也可以自由输入或回答“你决定”；此时禁止输出半成品提示词。
 若需求已足够明确，{target}，准确描述主体、动作、环境、构图、镜头、光线、材质、色彩和风格，不要堆砌互相冲突的关键词。summary_zh 要让用户能够核对所有关键事实、授权决定与精确限制。
+若用户明确提出画幅、宽高比或输出分辨率，必须把它写入 canvas_request；width、height 使用整数像素，aspect_ratio 使用约分后的“宽:高”格式。没有明确提出时 canvas_request 使用空对象，不得臆造尺寸。canvas_request 只表达用户意图，不代表已经覆盖工作站尺寸。
 当前任务是静态图片。请遵循以下工作站创作指导：
 {self.workspace_prompt.strip()}{conversation_section}{generation_section}
 
@@ -65,7 +66,7 @@ ready 时还必须完成一次交付前审查：
 - quality_hint 只能是 low、medium 或 high；它表示当前提示词首次试生成的建议，生成时沿用工作站保存的阶段。
 只输出一个 JSON 对象，不要 Markdown，不要额外说明，并严格使用以下两种格式之一：
 {{"status":"needs_clarification","questions":["问题 1","问题 2"],"creative_direction":"poster"}}
-{{"status":"ready","summary_zh":"中文需求确认","prompt":"最终生图提示词","reference_usage":"generation","reference_reason":"用户要求保持参考图主体并修改背景。","creative_direction":"poster","template_id":"poster-layout-system","style_tags":["Poster"],"scene_tags":["Commerce"],"selection_reason":"交付物是商业海报，需明确版式与文字层级。","brief":{{"deliverable":"交付物","intended_use":"用途与受众","subject":"主体","composition":"构图与画幅","style":"媒介、材质、光线与配色","exact_text":["必须逐字出现的文字"],"reference_plan":[{{"image_number":1,"role":"职责","preserve":["保持项"],"change":["改变项"]}}],"preserve":["全局保持项"],"change":["全局改变项"],"avoid":["禁止项"]}},"production_spec":{{"platform":"平台","canvas":"画布","screen_type":"界面或交付物状态","safe_area":"安全区","hud_zones":["区域职责"],"panel_count":0,"panel_roles":["面板职责"],"identity_anchors":["身份锚点"],"camera_and_action":"镜头与动作","materials":["材质"],"palette_and_lighting":"色板与光线","exact_text":["必须逐字出现的文字"],"ui_constraints":["界面约束"],"consistency_rules":["一致性规则"]}},"hard_checks":["可从成品判断的硬门槛"],"quality_hint":"low"}}"""
+{{"status":"ready","summary_zh":"中文需求确认","prompt":"最终生图提示词","canvas_request":{{"aspect_ratio":"16:9","width":1920,"height":1080}},"reference_usage":"generation","reference_reason":"用户要求保持参考图主体并修改背景。","creative_direction":"poster","template_id":"poster-layout-system","style_tags":["Poster"],"scene_tags":["Commerce"],"selection_reason":"交付物是商业海报，需明确版式与文字层级。","brief":{{"deliverable":"交付物","intended_use":"用途与受众","subject":"主体","composition":"构图与画幅","style":"媒介、材质、光线与配色","exact_text":["必须逐字出现的文字"],"reference_plan":[{{"image_number":1,"role":"职责","preserve":["保持项"],"change":["改变项"]}}],"preserve":["全局保持项"],"change":["改变项"],"avoid":["禁止项"]}},"production_spec":{{"platform":"平台","canvas":"画布","screen_type":"界面或交付物状态","safe_area":"安全区","hud_zones":["区域职责"],"panel_count":0,"panel_roles":["面板职责"],"identity_anchors":["身份锚点"],"camera_and_action":"镜头与动作","materials":["材质"],"palette_and_lighting":"色板与光线","exact_text":["必须逐字出现的文字"],"ui_constraints":["界面约束"],"consistency_rules":["一致性规则"]}},"hard_checks":["可从成品判断的硬门槛"],"quality_hint":"low"}}"""
 
     def parse(self, content: str) -> dict[str, Any]:
         payload = parse_json_object(content)
@@ -156,6 +157,7 @@ ready 时还必须完成一次交付前审查：
             "status": "ready",
             "summary_zh": summary[: self.max_prompt_characters],
             "prompt": prompt[: self.max_prompt_characters],
+            "canvas_request": normalize_canvas_request(payload.get("canvas_request")),
             "language": "en" if self.translate_to_english else "zh",
             "creative_direction": direction_id,
             "reference_usage": _reference_usage(payload.get("reference_usage")),

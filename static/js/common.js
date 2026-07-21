@@ -45,11 +45,28 @@
     text.textContent = message;
     node.append(icon, text);
     region.append(node);
+    const supportsPopover = typeof region.showPopover === "function";
+    if (supportsPopover && !region.matches(":popover-open")) {
+      try {
+        region.showPopover();
+      } catch (_error) {
+        // Keep the fixed-position fallback if the browser cannot open a popover.
+      }
+    }
     icons(node);
     requestAnimationFrame(() => node.classList.add("visible"));
     window.setTimeout(() => {
       node.classList.remove("visible");
-      window.setTimeout(() => node.remove(), 220);
+      window.setTimeout(() => {
+        node.remove();
+        if (
+          !region.firstElementChild
+          && supportsPopover
+          && region.matches(":popover-open")
+        ) {
+          region.hidePopover();
+        }
+      }, 220);
     }, tone === "error" ? 5200 : 3200);
   }
 

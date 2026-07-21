@@ -88,9 +88,19 @@
         <form class="composer generation-composer" id="generationForm" hidden>
           <div class="generation-composer-heading">
             <button class="icon-button generation-back-button" type="button" id="generationBackButton" title="返回对话" aria-label="返回对话"><i data-lucide="arrow-left"></i></button>
-            <div><strong id="generationHeadingTitle">确认生图参数</strong><span id="generationHeadingSubtitle">提示词和参数会保存在当前工作站</span></div>
+            <div><strong id="generationHeadingTitle">确认生图参数</strong><span id="generationHeadingSubtitle">对话整理提示词、阶段与画幅建议；确认后按本次请求配置生成</span></div>
             <span class="prompt-review-status" id="promptReviewStatus"><i data-lucide="shield"></i><span>可直接编辑提示词</span></span>
           </div>
+          <section class="canvas-conflict" id="canvasConflict" hidden role="alert">
+            <div class="canvas-conflict-copy">
+              <strong>画幅要求与当前尺寸不一致</strong>
+              <span id="canvasConflictMessage"></span>
+            </div>
+            <div class="canvas-conflict-actions">
+              <button class="button secondary small" type="button" id="canvasConflictApply">应用对话画幅</button>
+              <button class="button ghost small" type="button" id="canvasConflictKeep">保持当前尺寸</button>
+            </div>
+          </section>
           <div class="composer-controls">
             <div class="mode-switch" id="modeSwitch" data-mode="text2img">
               <button type="button" class="mode-button active" data-mode="text2img" aria-pressed="true"><i data-lucide="type"></i>文生图</button>

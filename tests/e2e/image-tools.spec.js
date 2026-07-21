@@ -210,6 +210,8 @@ test("image detail keeps its reference through multi-turn refinement", async ({
   await page.reload();
   await page.locator(`[data-item-id="${itemId}"]`).click();
   await expect(page.locator("#imageDialog")).toBeVisible();
+  await expect(page.locator("#detailList")).toContainText("请求参数");
+  await expect(page.locator("#detailList")).toContainText("实际图片");
   await expect(page.locator("#detailList")).toContainText("商品商业视觉");
   await page.locator("#detailReuse").click();
   await expect(page.locator("#imageDialog")).toBeHidden();

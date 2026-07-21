@@ -33,6 +33,43 @@
   font-size: 9px;
 }
 
+.canvas-conflict {
+  display: grid;
+  gap: 9px;
+  margin: 0 auto 10px;
+  padding: 10px 12px;
+  border: 1px solid rgb(242 166 90 / 55%);
+  border-radius: 6px;
+  background: rgb(242 166 90 / 9%);
+}
+
+.canvas-conflict.resolved {
+  border-color: rgb(91 194 143 / 48%);
+  background: rgb(91 194 143 / 8%);
+}
+
+.canvas-conflict-copy {
+  display: grid;
+  gap: 3px;
+}
+
+.canvas-conflict-copy strong {
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.canvas-conflict-copy span {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.canvas-conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
 @media (min-width: 640px) {
   .generation-back-button { display: none; }
 }

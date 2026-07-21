@@ -9,6 +9,8 @@ from ..extensions import db
 from ..models import Asset, Workspace
 from ..serializers import job_dict, job_status_dict
 from ..services import GenerationWorkflow, SubmitGeneration
+from ..services.common import canvas_request_conflicts
+from ..services.generations.contracts import CANVAS_RESOLUTIONS
 from . import web
 from .shared import (
     accessible_item,
@@ -67,18 +69,36 @@ def submit_generation():
             mode=mode,
             reference_ids=ordered_reference_ids if mode == "img2img" else (),
         )
+    canvas_resolution = str(data.get("canvas_resolution", "")).strip().lower()
+    if canvas_resolution and canvas_resolution not in CANVAS_RESOLUTIONS:
+        raise ServiceError("画幅冲突处理方式无效")
+    requested_size = str(data.get("size", "1024x1024"))
+    if draft and canvas_request_conflicts(draft.get("canvas_request"), requested_size):
+        if canvas_resolution == "conversation":
+            raise ServiceError(
+                "请先将尺寸改为对话要求的画幅",
+                code="prompt_canvas_conflict",
+                status_code=409,
+            )
+        if canvas_resolution != "panel":
+            raise ServiceError(
+                "对话要求的画幅与当前尺寸不一致，请确认后重试",
+                code="prompt_canvas_conflict",
+                status_code=409,
+            )
     workflow = GenerationWorkflow.build(
         stage=str(data.get("generation_stage", "draft")),
         prompt_draft_id=draft_id,
         draft=draft,
         creative_direction_id=str(data.get("creative_direction_id", "auto")),
+        canvas_resolution=canvas_resolution,
     )
     generation_request = SubmitGeneration(
         channel_id=str(data.get("channel_id", "")),
         model=str(data.get("model", "")),
         mode=mode,
         prompt=prompt,
-        size=str(data.get("size", "1024x1024")),
+        size=requested_size,
         output_format=str(data.get("output_format", "png")),
         compression=compression,
         batch_count=batch_count,

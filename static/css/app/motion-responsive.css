@@ -136,7 +136,7 @@
   .message-row { grid-template-columns: 30px minmax(0, 1fr); gap: 8px; }
   .message-row.user { grid-template-columns: minmax(0, 1fr) 30px; }
   .message-avatar { width: 30px; height: 30px; }
-  .message-row.user .message-card { width: 92%; }
+  .message-row.user .message-card { max-width: 92%; }
   .chat-composer { padding: 9px 10px 12px; }
   .chat-toolbar { align-items: center; }
   .chat-model-field { width: min(230px, 56vw); }
@@ -209,6 +209,8 @@
   .output-grid { grid-template-columns: repeat(4, minmax(44px, 1fr)); }
   .message-meta { align-items: flex-start; flex-direction: column; gap: 2px; }
   .message-meta span { white-space: normal; }
+  .message-row.user .message-meta { align-items: center; flex-direction: row; gap: 12px; }
+  .message-row.user .message-meta span { white-space: nowrap; }
   .chat-model-field { width: 100%; }
   .generation-filter-form { grid-template-columns: 1fr; }
   .log-filter-form { grid-template-columns: 1fr; }

@@ -310,13 +310,15 @@
       timing.textContent = timingParts.join(" · ") || "正在处理";
       meta.append(author, timing);
       card.append(meta);
+      let cancelAction = null;
 
       if (message.kind === "pending") {
         const pending = document.createElement("div");
         pending.className = "message-pending";
         pending.innerHTML = '<span class="message-pending-dots" aria-hidden="true"><i></i><i></i><i></i></span><span></span>';
         pending.lastElementChild.textContent = message.content || "正在等待 AI 回复";
-        card.append(pending, this.chatCancelButton(message, "取消等待"));
+        card.append(pending);
+        cancelAction = this.chatCancelButton(message, "取消等待");
       } else if (message.kind === "prompt_draft") {
         card.append(this.promptDraftContent(message));
       } else {
@@ -361,7 +363,7 @@
           card.append(retry);
         }
         if (message.delivery_state === "sending" && message.operation_id) {
-          card.append(this.chatCancelButton(message, "取消发送"));
+          cancelAction = this.chatCancelButton(message, "取消发送");
         }
       }
 
@@ -386,11 +388,13 @@
         card.append(attachments);
       }
 
-      const canCopy = Boolean(message.content?.trim());
-      const canResend = message.role === "user" && !message.delivery_state;
-      if (message.kind === "message" && message.id && (canCopy || canResend)) {
+      const isActionableMessage = message.kind === "message" && Boolean(message.id);
+      const canCopy = isActionableMessage && Boolean(message.content?.trim());
+      const canResend = isActionableMessage && message.role === "user" && !message.delivery_state;
+      if (cancelAction || canCopy || canResend) {
         const actions = document.createElement("div");
         actions.className = "message-actions";
+        if (cancelAction) actions.append(cancelAction);
         if (canCopy) {
           const copy = document.createElement("button");
           copy.type = "button";
@@ -440,9 +444,11 @@
       );
       const styleLabel = (payload.style_labels || payload.style_tags || []).join(" / ");
       const sceneLabel = (payload.scene_labels || payload.scene_tags || []).join(" / ");
+      const canvasLabel = this.canvasRequestLabel(payload.canvas_request);
       const metadata = [
         direction?.label || "其他应用场景",
         payload.template_label || "自定义 Craft",
+        canvasLabel ? `画幅 ${canvasLabel}` : "",
         payload.reference_usage === "generation"
           ? `使用 ${(payload.reference_ids || []).length} 张垫图`
           : payload.reference_usage === "analysis_only" ? "图片仅用于分析" : "",

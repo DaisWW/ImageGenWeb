@@ -212,10 +212,11 @@ class ConversationContextManager:
                 "scene_tags",
                 "brief",
                 "production_spec",
+                "canvas_request",
                 "hard_checks",
                 "quality_hint",
             )
-            if key in message.payload
+            if key in message.payload and (key != "canvas_request" or message.payload[key])
         }
         metadata = json.dumps(fields, ensure_ascii=False, separators=(",", ":"))
         return f"{message.content}\n\n结构化提示词信息：\n{metadata}" if fields else message.content

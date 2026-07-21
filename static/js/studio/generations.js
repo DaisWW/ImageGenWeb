@@ -84,6 +84,12 @@
         }
         const referenceIds = [...selection];
         const settings = this.collectSettings();
+        this.updatePromptReviewState();
+        const canvasResolution = this.canvasConflict?.resolution || "";
+        if (this.canvasConflict && !canvasResolution) {
+          UI.toast("请先处理对话画幅与当前尺寸的冲突", "error");
+          return;
+        }
         if (!settings.prompt.trim()) {
           UI.toast("请输入提示词", "error");
           this.el.promptInput.focus();
@@ -103,6 +109,7 @@
           body: {
             workspace_id: workspace.id,
             ...settings,
+            canvas_resolution: canvasResolution,
             reference_ids: settings.mode === "img2img" ? referenceIds : [],
             operation_id: operation.operation_id,
           },
@@ -123,6 +130,10 @@
         await this.refreshBalance();
         UI.toast(`任务已提交，${UI.money(Number(data.job.price_per_image_rmb) * data.job.requested_count)} 已预占`, "success");
       } catch (error) {
+        if (error?.code === "prompt_canvas_conflict") {
+          if (this.canvasConflict) this.canvasConflict.resolution = "";
+          this.updatePromptReviewState();
+        }
         if (!operation.canceled && error?.name !== "AbortError") UI.toast(error.message, "error");
       } finally {
         const stillCurrent = this.generationSubmissions.get(workspace.id) === operation;

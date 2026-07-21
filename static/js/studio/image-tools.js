@@ -21,13 +21,13 @@
       ] || "未标记";
       const details = [
         ["渠道", `${job.channel} · ${job.model}`],
-        ["参数", `${job.size} · ${job.quality} · ${job.output_format.toUpperCase()}${transparentLabel}`],
+        ["请求参数", `${job.size} · ${job.quality} · ${job.output_format.toUpperCase()}${transparentLabel}`],
         ["流程", [
           job.workflow?.creative_direction_label || "历史任务",
           job.workflow?.template_label,
           stageLabel,
         ].filter(Boolean).join(" · ")],
-        ["图片", `${item.width || "-"} × ${item.height || "-"} · ${UI.formatBytes(item.bytes)}`],
+        ["实际图片", `${item.width || "-"} × ${item.height || "-"} · ${UI.formatBytes(item.bytes)}`],
         ["耗时", item.elapsed_seconds == null ? "--" : `${item.elapsed_seconds.toFixed(1)} 秒`],
         ["费用", UI.money(item.charged_rmb)],
         ["时间", UI.dateTime(item.completed_at)],

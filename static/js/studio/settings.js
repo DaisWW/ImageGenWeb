@@ -8,7 +8,9 @@
     IMAGE_SIZE_PATTERN,
     IMAGE_DIMENSION_MIN,
     IMAGE_DIMENSION_MAX,
+    setHidden,
     setAttribute,
+    setText,
   } = window.ImageGenStudio;
 
   Object.assign(StudioApp.prototype, {
@@ -61,6 +63,7 @@
     },
 
     applyWorkspaceSettings() {
+      this.canvasConflict = null;
       const settings = this.activeWorkspace?.settings || {};
       const activeAssetIds = new Set(this.activeWorkspace?.assets.map((asset) => asset.id) || []);
       const savedReferenceIds = Array.isArray(settings.reference_ids)
@@ -199,6 +202,137 @@
 
     normalizeSize(value) {
       return String(value || "").trim().toLowerCase().replaceAll("×", "x");
+    },
+
+    normalizeCanvasRequest(value) {
+      if (!value || typeof value !== "object") return null;
+      const dimension = (raw) => {
+        if (typeof raw === "boolean") return null;
+        const number = Number(raw);
+        return Number.isInteger(number)
+          && number >= IMAGE_DIMENSION_MIN
+          && number <= IMAGE_DIMENSION_MAX
+          ? number : null;
+      };
+      const width = dimension(value.width);
+      const height = dimension(value.height);
+      const ratioMatch = String(value.aspect_ratio || "")
+        .trim()
+        .replaceAll("：", ":")
+        .match(/^([1-9]\d{0,3}):([1-9]\d{0,3})$/);
+      const ratio = ratioMatch
+        ? this.canvasRatio(Number(ratioMatch[1]), Number(ratioMatch[2]))
+        : "";
+      if (width && height) {
+        const derived = this.canvasRatio(width, height);
+        if (ratio && ratio !== derived) return null;
+        return { width, height, aspect_ratio: derived };
+      }
+      return ratio ? { aspect_ratio: ratio } : null;
+    },
+
+    canvasRatio(width, height) {
+      let left = width;
+      let right = height;
+      while (right) [left, right] = [right, left % right];
+      return `${width / left}:${height / left}`;
+    },
+
+    canvasRequestLabel(request) {
+      if (!request) return "";
+      return request.width && request.height
+        ? `${request.width}×${request.height} · ${request.aspect_ratio}`
+        : request.aspect_ratio;
+    },
+
+    canvasRequestTargetSize(request) {
+      if (!request) return "";
+      if (request.width && request.height) return `${request.width}x${request.height}`;
+      const sizes = this.currentChannel()?.capabilities?.sizes || [];
+      return sizes.map((value) => this.normalizeSize(value)).find((size) => {
+        const match = IMAGE_SIZE_PATTERN.exec(size);
+        return match && this.canvasRatio(Number(match[1]), Number(match[2]))
+          === request.aspect_ratio;
+      }) || "";
+    },
+
+    canvasRequestConflicts(request, size) {
+      if (!request) return false;
+      const match = IMAGE_SIZE_PATTERN.exec(this.normalizeSize(size));
+      if (!match) return false;
+      const width = Number(match[1]);
+      const height = Number(match[2]);
+      return request.width && request.height
+        ? request.width !== width || request.height !== height
+        : request.aspect_ratio !== this.canvasRatio(width, height);
+    },
+
+    renderCanvasConflict() {
+      if (!this.el?.canvasConflict) return;
+      const draft = this.currentPromptDraft();
+      const request = this.normalizeCanvasRequest(draft?.payload?.canvas_request);
+      const currentSize = this.normalizeSize(this.el.sizeInput.value);
+      const sameDraft = this.canvasConflict?.draftId === draft?.id;
+      let resolution = sameDraft ? this.canvasConflict?.resolution || "" : "";
+      const conflict = Boolean(draft && request && this.canvasRequestConflicts(request, currentSize));
+      if (conflict && resolution === "conversation") resolution = "";
+      if (!conflict) {
+        if (draft && request && sameDraft && resolution === "conversation") {
+          this.canvasConflict = { draftId: draft.id, request, resolution };
+          const currentLabel = currentSize.replace("x", "×");
+          setHidden(this.el.canvasConflict, false);
+          this.el.canvasConflict.classList.add("resolved");
+          setText(
+            this.el.canvasConflictMessage,
+            `已应用对话画幅，本次按 ${currentLabel} 提交。`,
+          );
+          return;
+        }
+        this.canvasConflict = null;
+        setHidden(this.el.canvasConflict, true);
+        return;
+      }
+      this.canvasConflict = { draftId: draft.id, request, resolution };
+      const requestLabel = this.canvasRequestLabel(request);
+      const currentLabel = currentSize.replace("x", "×");
+      const targetSize = this.canvasRequestTargetSize(request);
+      const resolvedText = resolution === "conversation"
+        ? `已应用对话画幅，本次按 ${currentLabel} 提交。`
+        : resolution === "panel"
+          ? `已保持当前尺寸 ${currentLabel}，对话建议为 ${requestLabel}。`
+          : `对话要求 ${requestLabel}，当前为 ${currentLabel}。请选择后再生成。`;
+      setHidden(this.el.canvasConflict, false);
+      this.el.canvasConflict.classList.toggle("resolved", Boolean(resolution));
+      setText(this.el.canvasConflictMessage, resolvedText);
+      setText(
+        this.el.canvasConflictApply,
+        targetSize ? `应用 ${targetSize.replace("x", "×")}` : "无可用对话尺寸",
+      );
+    },
+
+    applyCanvasRequest() {
+      const targetSize = this.canvasRequestTargetSize(this.canvasConflict?.request);
+      if (!targetSize) {
+        UI.toast("当前渠道没有可直接应用的对话画幅，请手动填写尺寸", "info");
+        return;
+      }
+      this.el.sizeInput.value = targetSize;
+      if (!this.validateSizeInput(true)) return;
+      this.canvasConflict = {
+        ...this.canvasConflict,
+        resolution: "conversation",
+      };
+      this.settingChanged();
+      this.updateInteractionState();
+    },
+
+    keepPanelCanvas() {
+      if (!this.canvasConflict) return;
+      this.canvasConflict = {
+        ...this.canvasConflict,
+        resolution: "panel",
+      };
+      this.updateInteractionState();
     },
 
     validateSizeInput(report = false) {

@@ -1,13 +1,19 @@
 .toast-region {
   position: fixed;
+  inset: 78px 16px auto auto;
   z-index: 100;
-  top: 78px;
-  right: 16px;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
   display: grid;
   width: min(360px, calc(100vw - 32px));
   gap: 8px;
+  color: inherit;
+  border: 0;
+  background: transparent;
   pointer-events: none;
 }
+
 body:has(#generationForm:not([hidden])):has(#toastRegion .toast) .toast-region {
   top: 8px;
 }

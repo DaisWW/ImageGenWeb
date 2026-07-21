@@ -77,6 +77,76 @@ class TestGenerations(PlatformTestCase):
                 db.session.refresh(workspace)
                 self.assertEqual(workspace.settings["generation_stage"], stage)
 
+    def test_generation_api_requires_explicit_canvas_conflict_resolution(self):
+        client = self.user_client()
+        prompt = "1920×1080 横屏画面"
+
+        unresolved_workspace = self.create_workspace("未处理画幅冲突")
+        unresolved_draft = self.create_ready_prompt_draft(
+            unresolved_workspace,
+            prompt=prompt,
+            canvas_request={"width": 1920, "height": 1080, "aspect_ratio": "16:9"},
+        )
+        base_payload = {
+            "workspace_id": unresolved_workspace.id,
+            "channel_id": "test",
+            "model": "model-b",
+            "mode": "text2img",
+            "prompt": prompt,
+            "prompt_draft_id": unresolved_draft.id,
+            "size": "1024x1024",
+        }
+        unresolved = client.post("/api/generations", json=base_payload)
+        self.assertEqual(unresolved.status_code, 409)
+        self.assertEqual(unresolved.json["code"], "prompt_canvas_conflict")
+        wrong_choice = client.post(
+            "/api/generations",
+            json={**base_payload, "canvas_resolution": "conversation"},
+        )
+        self.assertEqual(wrong_choice.status_code, 409)
+        self.assertEqual(wrong_choice.json["code"], "prompt_canvas_conflict")
+
+        panel_workspace = self.create_workspace("保留面板画幅")
+        panel_draft = self.create_ready_prompt_draft(
+            panel_workspace,
+            prompt=prompt,
+            canvas_request={"width": 1920, "height": 1080, "aspect_ratio": "16:9"},
+        )
+        panel = client.post(
+            "/api/generations",
+            json={
+                **base_payload,
+                "workspace_id": panel_workspace.id,
+                "prompt_draft_id": panel_draft.id,
+                "canvas_resolution": "panel",
+            },
+        )
+        self.assertEqual(panel.status_code, 202, panel.get_data(as_text=True))
+        self.assertEqual(panel.json["job"]["workflow"]["canvas_resolution"], "panel")
+        self.assertEqual(
+            panel.json["job"]["workflow"]["canvas_request"],
+            {"width": 1920, "height": 1080, "aspect_ratio": "16:9"},
+        )
+
+        conversation_workspace = self.create_workspace("应用对话画幅")
+        conversation_draft = self.create_ready_prompt_draft(
+            conversation_workspace,
+            prompt=prompt,
+            canvas_request={"width": 1920, "height": 1080, "aspect_ratio": "16:9"},
+        )
+        conversation = client.post(
+            "/api/generations",
+            json={
+                **base_payload,
+                "workspace_id": conversation_workspace.id,
+                "prompt_draft_id": conversation_draft.id,
+                "size": "1920x1080",
+                "canvas_resolution": "conversation",
+            },
+        )
+        self.assertEqual(conversation.status_code, 202, conversation.get_data(as_text=True))
+        self.assertEqual(conversation.json["job"]["workflow"]["canvas_resolution"], "conversation")
+
     def test_generation_api_rejects_an_invalid_stage(self):
         workspace = self.create_workspace("无效生成阶段")
         response = self.user_client().post(

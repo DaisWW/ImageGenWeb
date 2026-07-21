@@ -68,6 +68,7 @@ test("AI automatically prepares a gallery template before generation", {
               status: "ready",
               summary_zh: "竖版运动鞋新品发布海报，标题 AIR ZERO。",
               prompt: '3:4 vertical product poster with exact title "AIR ZERO".',
+              canvas_request: { aspect_ratio: "16:9", width: 1920, height: 1080 },
               language: "en",
               generation_mode: "text2img",
               reference_ids: [],
@@ -122,6 +123,19 @@ test("AI automatically prepares a gallery template before generation", {
   await expect(page.locator("#promptReviewStatus")).toContainText("最终提示词已就绪");
   await expect(page.locator("#creativeDirectionSelect")).toHaveValue("auto");
   await expect(page.getByRole("button", { name: "草稿", exact: true })).toHaveCount(0);
+  await expect(page.locator("#canvasConflict")).toBeVisible();
+  await expect(page.locator("#canvasConflictMessage")).toContainText("1920×1080");
+  await expect(page.locator("#generateButton")).toBeDisabled();
+  await page.locator("#canvasConflictApply").click();
+  await expect(page.locator("#sizeInput")).toHaveValue("1920x1080");
+  await expect(page.locator("#canvasConflictMessage")).toContainText("已应用对话画幅");
+  await expect(page.locator("#generateButton")).toBeEnabled();
+  await page.locator("#sizeInput").fill("1024x1024");
+  await page.locator("#sizeInput").press("Tab");
+  await expect(page.locator("#canvasConflictMessage")).toContainText("请选择后再生成");
+  await expect(page.locator("#generateButton")).toBeDisabled();
+  await page.locator("#canvasConflictKeep").click();
+  await expect(page.locator("#canvasConflictMessage")).toContainText("已保持当前尺寸");
   await expect(page.locator("#generateButton")).toBeEnabled();
 
   const toast = page.locator("#toastRegion .toast");

@@ -26,6 +26,7 @@ from imagegen.models import (
 )
 from imagegen.serializers import display_amount
 from imagegen.services import ServiceError, SubmitGeneration, money
+from imagegen.services.common import normalize_canvas_request
 from tests.support.platform import (
     CHANNEL_CONFIG,
     FakeDownloadResponse,
@@ -53,6 +54,12 @@ class TestFoundations(PlatformTestCase):
             )
             with self.assertRaisesRegex(ValueError, "price_rmb 无效"):
                 ChannelRegistry(invalid_path)
+
+    def test_canvas_request_does_not_truncate_fractional_dimensions(self):
+        self.assertEqual(
+            normalize_canvas_request({"width": 1920.5, "height": 1080, "aspect_ratio": "16:9"}),
+            {"aspect_ratio": "16:9"},
+        )
 
     def test_internal_state_rows_are_bootstrapped(self):
         self.assertIsNotNone(db.session.get(GenerationQueueState, 1))

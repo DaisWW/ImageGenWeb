@@ -488,6 +488,7 @@
     },
 
     updateInteractionState() {
+      this.renderCanvasConflict();
       const noWorkspace = !this.activeWorkspace;
       const generationBusy = this.workspaceHasActiveJob();
       const operation = this.chatOperations.get(this.activeWorkspace?.id);
@@ -495,6 +496,9 @@
       const messageSending = this.chatOperationAwaitingMessageAcceptance(operation);
       const generationSubmission = this.generationSubmissions.get(this.activeWorkspace?.id);
       const submissionBusy = Boolean(generationSubmission);
+      const canvasConflictPending = Boolean(
+        this.canvasConflict && !this.canvasConflict.resolution,
+      );
       const locked = noWorkspace || generationBusy || chatBusy || submissionBusy;
       const referenceUploading = this.referenceUploadPending;
       const hasModel = Boolean(this.el.chatModelSelect.value);
@@ -531,7 +535,7 @@
         this.el.generateButton,
         submissionBusy
           ? false
-          : locked || referenceUploading || !this.currentChannel(),
+          : locked || referenceUploading || !this.currentChannel() || canvasConflictPending,
       );
       this.setActionIcon(
         this.el.generateButton,
@@ -539,6 +543,17 @@
         submissionBusy ? "cancel" : "generate",
       );
       setText(this.el.generateButtonLabel, submissionBusy ? "取消生成" : "开始生成");
+      setDisabled(
+        this.el.canvasConflictApply,
+        locked
+          || !this.canvasConflict
+          || !this.canvasRequestTargetSize(this.canvasConflict.request)
+          || this.canvasConflict.resolution === "conversation",
+      );
+      setDisabled(
+        this.el.canvasConflictKeep,
+        locked || !this.canvasConflict || this.canvasConflict.resolution === "panel",
+      );
       const generateTitle = submissionBusy ? "取消生成" : "";
       setAttribute(this.el.generateButton, "title", generateTitle);
       setDisabled(this.el.generationBackButton, submissionBusy);

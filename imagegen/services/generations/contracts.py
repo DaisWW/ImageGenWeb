@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ...errors import ServiceError
+from ..common import normalize_canvas_request
 from ..creative import get_creative_direction
 
 GENERATION_STAGE_QUALITY = {"draft": "low", "refine": "medium", "final": "high"}
 GENERATION_QUALITIES = set(GENERATION_STAGE_QUALITY.values())
+CANVAS_RESOLUTIONS = {"panel", "conversation"}
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,7 @@ class GenerationWorkflow:
         prompt_draft_id: str,
         draft: dict[str, object] | None,
         creative_direction_id: str,
+        canvas_resolution: str = "",
     ) -> GenerationWorkflow:
         normalized_stage = str(stage).strip().lower()
         if normalized_stage not in GENERATION_STAGE_QUALITY:
@@ -51,6 +54,9 @@ class GenerationWorkflow:
         except ValueError:
             direction = get_creative_direction("other")
         direction_id = direction.identifier if direction else "auto"
+        normalized_canvas_resolution = str(canvas_resolution).strip().lower()
+        if normalized_canvas_resolution not in CANVAS_RESOLUTIONS:
+            normalized_canvas_resolution = ""
         metadata = {
             "prompt_draft_id": prompt_draft_id,
             "creative_direction_id": direction_id,
@@ -73,6 +79,10 @@ class GenerationWorkflow:
             "ai_reviewed": draft is not None,
             "hard_checks": draft.get("hard_checks", []) if draft else [],
             "sources": draft.get("sources", []) if draft else [],
+            "canvas_request": normalize_canvas_request(draft.get("canvas_request"))
+            if draft
+            else {},
+            "canvas_resolution": normalized_canvas_resolution,
         }
         return cls(
             quality=GENERATION_STAGE_QUALITY[normalized_stage],
@@ -101,6 +111,8 @@ def sanitize_workflow(value: object) -> dict[str, object]:
         "ai_reviewed",
         "hard_checks",
         "sources",
+        "canvas_request",
+        "canvas_resolution",
     }
     result = {key: value[key] for key in allowed if key in value}
     result["prompt_draft_id"] = str(result.get("prompt_draft_id", "")).strip().lower()[:32]
@@ -126,6 +138,11 @@ def sanitize_workflow(value: object) -> dict[str, object]:
     )
     sources = result.get("sources")
     result["sources"] = sources[:3] if isinstance(sources, list) else []
+    result["canvas_request"] = normalize_canvas_request(result.get("canvas_request"))
+    canvas_resolution = str(result.get("canvas_resolution", "")).strip().lower()
+    result["canvas_resolution"] = (
+        canvas_resolution if canvas_resolution in CANVAS_RESOLUTIONS else ""
+    )
     result["brief"] = _sanitize_workflow_mapping(result.get("brief"))
     result["production_spec"] = _sanitize_workflow_mapping(result.get("production_spec"))
     return result

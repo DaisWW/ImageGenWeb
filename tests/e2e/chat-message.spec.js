@@ -129,6 +129,9 @@ test("chat waits for message persistence and resends stored messages with new ID
   expect(requests[1].message_id).toBe(userId);
 
   await expect(userRow).toContainText("发送中");
+  const sendingActions = userRow.locator(".message-actions");
+  await expect(sendingActions.getByRole("button", { name: "取消发送" })).toBeVisible();
+  await expect(sendingActions.getByRole("button", { name: "复制消息" })).toBeVisible();
   await expect(page.locator(".message-row.assistant.pending")).toHaveCount(0);
   await expect(page.locator("#chatSendButton")).toHaveAttribute("aria-label", "取消发送");
   await expect(workspaceMeta).toHaveText("正在发送消息");

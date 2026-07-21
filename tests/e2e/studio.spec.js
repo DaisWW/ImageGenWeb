@@ -606,6 +606,9 @@ test("latest toast does not cover the generation composer", {
   const toast = page.locator("#toastRegion .toast");
   await expect(toast).toHaveCount(1);
   await expect(toast).toContainText("图库原图累计不能超过 2 GiB");
+  await expect.poll(() => page.locator("#toastRegion").evaluate(
+    (region) => region.matches(":popover-open"),
+  )).toBe(true);
 
   const toastBox = await toast.boundingBox();
   const composerBox = await page.locator("#generationForm").boundingBox();

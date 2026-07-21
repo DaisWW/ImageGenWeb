@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from decimal import Decimal
 
 from sqlalchemy import func, select
@@ -11,8 +10,6 @@ from ..extensions import db
 from ..models import AuditLog, User, WalletLedger
 from .auth import AuthService
 from .common import money
-
-USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{3,64}$")
 
 
 class UserService:
@@ -32,8 +29,10 @@ class UserService:
         commit: bool = True,
     ) -> User:
         username = username.strip()
-        if not USERNAME_PATTERN.fullmatch(username):
-            raise ServiceError("用户名只能包含字母、数字、点、横线和下划线，长度 3 到 64")
+        if not 3 <= len(username) <= 64:
+            raise ServiceError("用户名长度必须在 3 到 64 个字符")
+        if any(character.isspace() or not character.isprintable() for character in username):
+            raise ServiceError("用户名不能包含空白或控制字符")
         if role not in {"admin", "user"}:
             raise ServiceError("用户角色无效")
         if not 1 <= generation_concurrency <= 16:

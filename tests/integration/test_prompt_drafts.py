@@ -168,6 +168,36 @@ class TestPromptDrafts(PlatformTestCase):
         self.assertIn("game-ui-gameplay-hud", self.chat_client.calls[-1]["system"])
         self.assertIn("平台、目标画布、屏幕状态和安全区", self.chat_client.calls[-1]["system"])
 
+    def test_prompt_draft_normalizes_explicit_canvas_request(self):
+        workspace = self.create_workspace("画幅结构化")
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="做一张 1920×1080 的 16:9 横屏画面。",
+        )
+        self.chat_client.prompt_draft_content = json.dumps(
+            {
+                "status": "ready",
+                "summary_zh": "1920×1080 横屏画面。",
+                "prompt": "wide 16:9 scene",
+                "canvas_request": {"width": "1920", "height": 1080, "aspect_ratio": "16:9"},
+                "quality_hint": "low",
+            },
+            ensure_ascii=False,
+        )
+
+        draft = self.services.conversations.create_prompt_draft(
+            workspace,
+            model_id="test-chat",
+            translate_to_english=False,
+        )
+
+        self.assertEqual(
+            draft.payload["canvas_request"],
+            {"width": 1920, "height": 1080, "aspect_ratio": "16:9"},
+        )
+        self.assertIn("canvas_request", self.chat_client.calls[-1]["system"])
+
     def test_game_art_draft_preserves_directional_identity_map(self):
         workspace = self.create_workspace("角色设定表")
         self.services.conversations.send(
