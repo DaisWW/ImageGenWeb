@@ -74,6 +74,8 @@ class TestGenerations(PlatformTestCase):
                 self.assertEqual(job["workflow"]["template_id"], "poster-layout-system")
                 self.assertEqual(job["workflow"]["template_label"], "海报排版系统")
                 self.assertEqual(job["workflow"]["style_tags"], ["Poster"])
+                self.assertNotIn("canvas_request", job["workflow"])
+                self.assertNotIn("canvas_resolution", job["workflow"])
                 db.session.refresh(workspace)
                 self.assertEqual(workspace.settings["generation_stage"], stage)
 

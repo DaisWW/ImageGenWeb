@@ -57,6 +57,7 @@ class GenerationWorkflow:
         normalized_canvas_resolution = str(canvas_resolution).strip().lower()
         if normalized_canvas_resolution not in CANVAS_RESOLUTIONS:
             normalized_canvas_resolution = ""
+        canvas_request = normalize_canvas_request(draft.get("canvas_request")) if draft else {}
         metadata = {
             "prompt_draft_id": prompt_draft_id,
             "creative_direction_id": direction_id,
@@ -79,11 +80,11 @@ class GenerationWorkflow:
             "ai_reviewed": draft is not None,
             "hard_checks": draft.get("hard_checks", []) if draft else [],
             "sources": draft.get("sources", []) if draft else [],
-            "canvas_request": normalize_canvas_request(draft.get("canvas_request"))
-            if draft
-            else {},
-            "canvas_resolution": normalized_canvas_resolution,
         }
+        if canvas_request:
+            metadata["canvas_request"] = canvas_request
+            if normalized_canvas_resolution:
+                metadata["canvas_resolution"] = normalized_canvas_resolution
         return cls(
             quality=GENERATION_STAGE_QUALITY[normalized_stage],
             metadata=metadata,
@@ -138,11 +139,14 @@ def sanitize_workflow(value: object) -> dict[str, object]:
     )
     sources = result.get("sources")
     result["sources"] = sources[:3] if isinstance(sources, list) else []
-    result["canvas_request"] = normalize_canvas_request(result.get("canvas_request"))
+    canvas_request = normalize_canvas_request(result.get("canvas_request"))
     canvas_resolution = str(result.get("canvas_resolution", "")).strip().lower()
-    result["canvas_resolution"] = (
-        canvas_resolution if canvas_resolution in CANVAS_RESOLUTIONS else ""
-    )
+    result.pop("canvas_request", None)
+    result.pop("canvas_resolution", None)
+    if canvas_request:
+        result["canvas_request"] = canvas_request
+        if canvas_resolution in CANVAS_RESOLUTIONS:
+            result["canvas_resolution"] = canvas_resolution
     result["brief"] = _sanitize_workflow_mapping(result.get("brief"))
     result["production_spec"] = _sanitize_workflow_mapping(result.get("production_spec"))
     return result

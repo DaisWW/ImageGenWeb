@@ -296,11 +296,9 @@
       const requestLabel = this.canvasRequestLabel(request);
       const currentLabel = currentSize.replace("x", "×");
       const targetSize = this.canvasRequestTargetSize(request);
-      const resolvedText = resolution === "conversation"
-        ? `已应用对话画幅，本次按 ${currentLabel} 提交。`
-        : resolution === "panel"
-          ? `已保持当前尺寸 ${currentLabel}，对话建议为 ${requestLabel}。`
-          : `对话要求 ${requestLabel}，当前为 ${currentLabel}。请选择后再生成。`;
+      const resolvedText = resolution === "panel"
+        ? `已保持当前尺寸 ${currentLabel}，对话建议为 ${requestLabel}。`
+        : `对话要求 ${requestLabel}，当前为 ${currentLabel}。请选择后再生成。`;
       setHidden(this.el.canvasConflict, false);
       this.el.canvasConflict.classList.toggle("resolved", Boolean(resolution));
       setText(this.el.canvasConflictMessage, resolvedText);
