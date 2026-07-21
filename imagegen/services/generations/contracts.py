@@ -70,6 +70,10 @@ class GenerationWorkflow:
             "scene_tags": draft.get("scene_tags", []) if draft else [],
             "selection_reason": str(draft.get("selection_reason", "")) if draft else "",
             "case_refs": draft.get("case_refs", []) if draft else [],
+            "gallery_categories": draft.get("gallery_categories", []) if draft else [],
+            "gallery_category_labels": (draft.get("gallery_category_labels", []) if draft else []),
+            "gallery_case_ranges": draft.get("gallery_case_ranges", []) if draft else [],
+            "gallery_category_urls": draft.get("gallery_category_urls", []) if draft else [],
             "template_required_fields": (
                 draft.get("template_required_fields", []) if draft else []
             ),
@@ -104,6 +108,10 @@ def sanitize_workflow(value: object) -> dict[str, object]:
         "scene_tags",
         "selection_reason",
         "case_refs",
+        "gallery_categories",
+        "gallery_category_labels",
+        "gallery_case_ranges",
+        "gallery_category_urls",
         "template_required_fields",
         "template_hard_checks",
         "brief",
@@ -127,9 +135,21 @@ def sanitize_workflow(value: object) -> dict[str, object]:
     for key in ("style_tags", "scene_tags"):
         tags = result.get(key)
         result[key] = [str(item)[:80] for item in tags[:4]] if isinstance(tags, list) else []
-    for key in ("case_refs", "template_required_fields", "template_hard_checks"):
+    for key in (
+        "case_refs",
+        "template_required_fields",
+        "template_hard_checks",
+    ):
         values = result.get(key)
         result[key] = [str(item)[:160] for item in values[:12]] if isinstance(values, list) else []
+    for key in (
+        "gallery_categories",
+        "gallery_category_labels",
+        "gallery_case_ranges",
+        "gallery_category_urls",
+    ):
+        values = result.get(key)
+        result[key] = [str(item)[:300] for item in values[:3]] if isinstance(values, list) else []
     stage = str(result.get("generation_stage", "final")).lower()
     result["generation_stage"] = stage if stage in {"draft", "refine", "final"} else "final"
     result["ai_reviewed"] = result.get("ai_reviewed") is True

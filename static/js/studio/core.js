@@ -263,6 +263,7 @@
         detailList: byId("detailList"),
         detailPrompt: byId("detailPrompt"),
         detailReferences: byId("detailReferences"),
+        detailUiKit: byId("detailUiKit"),
         detailSlice: byId("detailSlice"),
         detailSaveLibrary: byId("detailSaveLibrary"),
         detailReuse: byId("detailReuse"),
@@ -476,9 +477,10 @@
       });
       this.el.referenceList.addEventListener("click", (event) => this.handleReferenceClick(event));
       this.el.generationForm.addEventListener("submit", (event) => this.submitGeneration(event));
+      this.el.detailUiKit.addEventListener("click", () => this.startUiKitReconstruction());
       this.el.detailSlice.addEventListener("click", () => this.openSliceTool());
       this.el.detailSaveLibrary.addEventListener("click", () => this.saveDetailToLibrary());
-      this.el.detailReuse.addEventListener("click", () => this.reuseDetailImage());
+      this.el.detailReuse.addEventListener("click", () => this.useDetailAsReference());
       this.el.sliceLayoutFields.addEventListener("input", () => this.rebuildSliceGrid());
       this.el.sliceOverlay.addEventListener("click", (event) => this.handleSliceSelection(event));
       this.el.sliceList.addEventListener("click", (event) => this.handleSliceSelection(event));

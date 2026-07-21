@@ -75,6 +75,8 @@ test("AI automatically prepares a gallery template before generation", {
               creative_direction: "poster",
               template_id: "poster-layout-system",
               template_label: "海报排版系统",
+              gallery_categories: ["typography-and-posters"],
+              gallery_category_labels: ["排版与海报"],
               style_tags: ["Poster"],
               style_labels: ["海报"],
               scene_tags: ["Commerce", "Social"],
@@ -113,6 +115,7 @@ test("AI automatically prepares a gallery template before generation", {
 
   const draft = page.locator(".prompt-draft-content").last();
   await expect(draft).toContainText("海报排版系统");
+  await expect(draft).toContainText("图谱 排版与海报");
   await expect(draft).toContainText("海报");
   await expect(draft).toContainText("商业 / 社媒");
   await expect(draft).toContainText("AI 匹配：交付物是商业海报");

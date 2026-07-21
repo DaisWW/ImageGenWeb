@@ -1,4 +1,5 @@
 from .directions import CREATIVE_DIRECTIONS
+from .gallery import GALLERY_ATLAS
 from .models import CreativeDirection, PromptTemplate
 from .templates import PROMPT_TEMPLATES, SCENE_TAG_LABELS, STYLE_TAG_LABELS
 
@@ -11,7 +12,7 @@ def creative_direction_dicts() -> list[dict[str, object]]:
         {
             "id": "auto",
             "label": "AI 自动匹配",
-            "description": "按交付物、风格、场景和相近模板自动选择",
+            "description": "按交付物、Gallery、风格、场景和相近模板自动选择",
             "template_count": len(PROMPT_TEMPLATES),
         },
         *(
@@ -87,6 +88,7 @@ def creative_direction_prompt(identifier: str, *, include_templates: bool = True
 可选方向：
 {options}
 游戏任务路由：需要可玩的 HUD、菜单、背包、地图、任务或图标资产时使用 `game_ui`；需要 Key Art、角色、环境、武器、世界观板或动作分解时使用 `game_art`，不要用泛化的 `ui`、`character` 或 `scene` 替代。
+游戏 UI 开发素材路由：当用户要求把完整界面变为 UI Kit、开发素材、可复用组件或进一步拆分时，使用 `game-ui-production-asset`。不得承诺从扁平截图抠图或无损拆层；先按“模块 → 原子资源”列出组件并让用户选择一个，本次未明确原子资源时必须继续澄清。
 若用户从外部图库复制提示词，只提取可复用结构，以当前需求覆盖案例中的主体、文字、品牌和参考图职责。"""
     templates = "\n".join(
         _template_prompt_line(template)
@@ -104,8 +106,9 @@ def creative_direction_prompt(identifier: str, *, include_templates: bool = True
         )
         for item in directions
     )
+    gallery_categories = GALLERY_ATLAS.prompt(direction.identifier if direction else None)
     return f"""{lock_rule}
-必须按“交付物分类 → 视觉风格 → 使用场景 → 最近模板 → 相近 Case”完成筛选。若一个模板明显最匹配，直接采用；若 2～3 个模板会导致明显不同的交付结果，只提出一个包含这些模板及简短理由的选择题。没有近似模板时使用 `custom` 并遵循通用 Craft，禁止硬套模板。
+必须按“交付物分类 → Gallery Atlas 类别 → 视觉风格 → 使用场景 → 最近模板 → 相近 Case”完成筛选。若一个模板明显最匹配，直接采用；若 2～3 个模板会导致明显不同的交付结果，只提出一个包含这些模板及简短理由的选择题。没有近似模板时使用 `custom` 并遵循通用 Craft，禁止硬套模板。
 
 可选方向：
 {options}
@@ -113,10 +116,16 @@ def creative_direction_prompt(identifier: str, *, include_templates: bool = True
 当前方向执行规则：
 {direction_rules}
 
-游戏方向特别规则：game_ui 与 game_art 必须分开。game_ui 先锁平台、画布、安全区、屏幕状态和 HUD/组件分区；game_art 先锁交付阶段、身份锚点、镜头动作、面板职责和跨面板一致性。案例编号只代表结构参考，不能声称读过案例正文，也不能复制案例中的 IP、角色、Logo 或文字。
+游戏方向特别规则：game_ui 与 game_art 必须分开。game_ui 先锁定平台、目标画布、屏幕状态和安全区，再定义 HUD/组件分区；game_art 先锁交付阶段、身份锚点、镜头动作、面板职责和跨面板一致性。案例编号只代表结构参考，不能声称读过案例正文，也不能复制案例中的 IP、角色、Logo 或文字。
+game_ui 的开发组件必须与完整界面分开：选择 `game-ui-production-asset` 后，参考图只作结构与风格依据，禁止抠图、自动拆层、整屏重绘和 AI 排图集；一次只生成一个无文字、无动态数值的透明原子资源，运行时内容和九宫格要求写入 production_spec。
 
 本地 Prompt 模板目录（融合 awesome-gpt-image-2 与 GPT-Image2-Skill 的结构参考）：
 {templates}
+
+Gallery Atlas 路由索引（31 类、162 个 Case 的本地结构摘要；以下不是完整案例正文）：
+{gallery_categories}
+
+gallery_categories 必须从上方 ID 中选择 1 个；只有两个或三个类别都不可替代时才选择 2～3 个。选定后必须实际使用对应“语法”组织提示词，不能只把类别名写进元数据。Case 范围仅用于来源追踪，不得声称读取过外部案例正文。
 
 style_tags 只能从以下值选择：{styles}
 scene_tags 只能从以下值选择：{scenes}

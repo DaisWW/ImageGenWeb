@@ -444,10 +444,12 @@
       );
       const styleLabel = (payload.style_labels || payload.style_tags || []).join(" / ");
       const sceneLabel = (payload.scene_labels || payload.scene_tags || []).join(" / ");
+      const galleryLabel = (payload.gallery_category_labels || []).join(" / ");
       const canvasLabel = this.canvasRequestLabel(payload.canvas_request);
       const metadata = [
         direction?.label || "其他应用场景",
         payload.template_label || "自定义 Craft",
+        galleryLabel ? `图谱 ${galleryLabel}` : "",
         canvasLabel ? `画幅 ${canvasLabel}` : "",
         payload.reference_usage === "generation"
           ? `使用 ${(payload.reference_ids || []).length} 张垫图`

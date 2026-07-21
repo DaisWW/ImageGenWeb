@@ -203,7 +203,8 @@
       <div class="detail-prompt"><span>提示词</span><p id="detailPrompt"></p></div>
       <div class="detail-references" id="detailReferences"></div>
       <div class="detail-actions">
-        <button class="button secondary" type="button" id="detailSlice"><i data-lucide="scan-line"></i>智能切图</button>
+        <button class="button secondary ui-kit-action" type="button" id="detailUiKit"><i data-lucide="component"></i>重建开发 UI Kit</button>
+        <button class="button secondary" type="button" id="detailSlice"><i data-lucide="grid-2x2"></i>规则切图</button>
         <button class="button secondary" type="button" id="detailSaveLibrary"><i data-lucide="bookmark-plus"></i>存入图库</button>
         <button class="button secondary" type="button" id="detailReuse"><i data-lucide="image-plus"></i><span id="detailReuseLabel">基于此图继续</span></button>
         <a class="button primary" id="detailDownload" download><i data-lucide="download"></i>下载原图</a>
@@ -216,7 +217,7 @@
   <div class="slice-dialog-layout">
     <section class="slice-preview-pane">
       <div class="slice-preview-heading">
-        <div><span class="eyebrow">Smart Slicer</span><strong id="slicePreviewTitle">正在识别图集</strong></div>
+        <div><span class="eyebrow">Grid Slicer</span><strong id="slicePreviewTitle">正在识别规则图集</strong></div>
         <span class="slice-confidence" id="sliceConfidence">分析中</span>
       </div>
       <div class="slice-preview-scroll">
@@ -228,7 +229,7 @@
     </section>
     <aside class="slice-controls">
       <div class="modal-header">
-        <div><span class="eyebrow">Post Process</span><h2>智能切图</h2></div>
+        <div><span class="eyebrow">Post Process</span><h2>规则切图</h2></div>
         <button class="icon-button" type="button" data-close-dialog="sliceDialog" aria-label="关闭"><i data-lucide="x"></i></button>
       </div>
       <div class="slice-layout-fields" id="sliceLayoutFields">

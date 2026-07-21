@@ -20,6 +20,49 @@ test("late reference response updates the original workspace cache", async ({
   expect(result).toEqual({ assetIds: ["late-asset"], renders: 1 });
 });
 
+test("detail reference actions share one in-flight request", async ({ studioPage: page }) => {
+  const result = await page.evaluate(async () => {
+    const originalApi = window.ImageGenStudio.UI.api;
+    let release;
+    let calls = 0;
+    const pending = new Promise((resolve) => { release = resolve; });
+    window.ImageGenStudio.UI.api = async () => {
+      calls += 1;
+      await pending;
+      return { asset: { id: "shared-reference" } };
+    };
+    const detailReuse = document.createElement("button");
+    const detailUiKit = document.createElement("button");
+    const target = {
+      detailItemId: "detail-item",
+      activeWorkspace: { id: "workspace" },
+      detailReferenceBusy: false,
+      el: { detailReuse, detailUiKit, imageDialog: document.createElement("dialog") },
+      applyReferenceAsset: async () => {},
+    };
+    try {
+      const first = window.ImageGenStudio.StudioApp.prototype.useDetailAsReference.call(target);
+      const second = window.ImageGenStudio.StudioApp.prototype.useDetailAsReference.call(target);
+      const disabledDuringRequest = detailReuse.disabled && detailUiKit.disabled;
+      release();
+      await Promise.all([first, second]);
+      return {
+        calls,
+        disabledDuringRequest,
+        disabledAfterRequest: detailReuse.disabled || detailUiKit.disabled,
+      };
+    } finally {
+      window.ImageGenStudio.UI.api = originalApi;
+    }
+  });
+
+  expect(result).toEqual({
+    calls: 1,
+    disabledDuringRequest: true,
+    disabledAfterRequest: false,
+  });
+});
+
 test("image detail keeps its reference through multi-turn refinement", async ({
   studioPage: page,
 }) => {
@@ -215,6 +258,19 @@ test("image detail keeps its reference through multi-turn refinement", async ({
   await expect(page.locator("#detailList")).toContainText("实际图片");
   await expect(page.locator("#detailList")).toContainText("采用对话画幅");
   await expect(page.locator("#detailList")).toContainText("商品商业视觉");
+  await page.locator("#detailUiKit").click();
+  await expect(page.locator("#imageDialog")).toBeHidden();
+  await expect(page.locator("#chatInput")).toHaveValue(/不要抠取、分割或复制原图像素/);
+  await expect(page.locator("#chatInput")).toHaveValue(/模块 → 原子资源/);
+  await expect(page.locator("#chatReferenceCount")).toHaveText("1");
+  await expect(page.locator("#modeSwitch")).toHaveAttribute("data-mode", "img2img");
+  await expect(page.locator("#creativeDirectionSelect")).toHaveValue("game_ui");
+  await expect(page.locator("#formatSelect")).toHaveValue("png");
+  await expect(page.locator("#sizeInput")).toHaveValue("1024x1024");
+  await expect(page.locator("#transparentBackground")).toBeChecked();
+  await expect(page.locator("#batchCount")).toHaveValue("1");
+
+  await page.locator(`[data-item-id="${itemId}"]`).click();
   await page.locator("#detailReuse").click();
   await expect(page.locator("#imageDialog")).toBeHidden();
   await expect(page.locator("#chatInput")).toHaveValue("请基于这张图继续调整：");

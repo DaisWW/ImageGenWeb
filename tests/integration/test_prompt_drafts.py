@@ -12,6 +12,7 @@ from imagegen.models import (
 from imagegen.services import ServiceError
 from imagegen.services.creative import (
     CREATIVE_DIRECTIONS,
+    GALLERY_ATLAS,
     PROMPT_TEMPLATES,
     SCENE_TAG_LABELS,
     STYLE_TAG_LABELS,
@@ -26,9 +27,76 @@ from tests.support.platform import (
 class TestPromptDrafts(PlatformTestCase):
     def test_creative_catalog_keeps_all_source_dimensions(self):
         self.assertEqual(len(CREATIVE_DIRECTIONS), 15)
-        self.assertEqual(len(STYLE_TAG_LABELS), 29)
-        self.assertEqual(len(SCENE_TAG_LABELS), 11)
-        self.assertEqual(len(PROMPT_TEMPLATES), 32)
+        self.assertEqual(len(STYLE_TAG_LABELS), 47)
+        self.assertEqual(len(SCENE_TAG_LABELS), 15)
+        self.assertEqual(len(PROMPT_TEMPLATES), 42)
+        self.assertEqual(len(GALLERY_ATLAS.categories), 31)
+        self.assertEqual(
+            len({category.identifier for category in GALLERY_ATLAS.categories}),
+            len(GALLERY_ATLAS.categories),
+        )
+        expected_case = 1
+        direction_ids = {direction.identifier for direction in CREATIVE_DIRECTIONS}
+        for category in GALLERY_ATLAS.categories:
+            self.assertEqual(category.case_start, expected_case)
+            self.assertGreaterEqual(category.case_end, category.case_start)
+            self.assertTrue(set(category.direction_ids) <= direction_ids)
+            expected_case = category.case_end + 1
+        self.assertEqual(expected_case, 163)
+        for template in PROMPT_TEMPLATES:
+            self.assertTrue(set(template.styles) <= set(STYLE_TAG_LABELS))
+            self.assertTrue(set(template.scenes) <= set(SCENE_TAG_LABELS))
+            gallery_ids = GALLERY_ATLAS.select(
+                None,
+                preferred=template.gallery_categories,
+                case_refs=template.case_refs,
+                direction_id=template.direction_id,
+            )
+            self.assertTrue(gallery_ids, template.identifier)
+            self.assertTrue(set(template.gallery_categories) <= set(gallery_ids))
+            self.assertTrue(all(GALLERY_ATLAS.get(identifier) for identifier in gallery_ids))
+        metadata = GALLERY_ATLAS.metadata(["research-paper-figures"])
+        self.assertEqual(metadata["gallery_case_ranges"], ["skill:75-95"])
+        self.assertIn(GALLERY_ATLAS.revision, metadata["gallery_category_urls"][0])
+
+    def test_gallery_atlas_uses_explicit_template_case_and_direction_fallbacks(self):
+        self.assertEqual(
+            GALLERY_ATLAS.select(
+                ["watercolor"],
+                preferred=("illustration",),
+                case_refs=("skill:46",),
+                direction_id="illustration",
+            ),
+            ["watercolor"],
+        )
+        self.assertEqual(
+            GALLERY_ATLAS.select(
+                None,
+                preferred=("tattoo-design",),
+                case_refs=("skill:46",),
+                direction_id="illustration",
+            ),
+            ["tattoo-design"],
+        )
+        self.assertEqual(
+            GALLERY_ATLAS.select(
+                None,
+                case_refs=("skill:107",),
+                direction_id="infographic",
+            ),
+            ["data-visualization"],
+        )
+        self.assertEqual(
+            GALLERY_ATLAS.select(None, direction_id="brand"),
+            ["brand-systems-and-identity"],
+        )
+        self.assertEqual(
+            GALLERY_ATLAS.select(
+                ["edit-endpoint-showcase"],
+                direction_id="character",
+            ),
+            ["edit-endpoint-showcase"],
+        )
 
     def test_game_directions_are_first_concrete_choices_and_have_production_contracts(self):
         directions = creative_direction_dicts()
@@ -38,8 +106,21 @@ class TestPromptDrafts(PlatformTestCase):
             for template in PROMPT_TEMPLATES
             if template.direction_id in {"game_ui", "game_art"}
         ]
-        self.assertEqual(len(game_templates), 10)
-        self.assertTrue(all(template.case_refs for template in game_templates))
+        production_asset = next(
+            template
+            for template in game_templates
+            if template.identifier == "game-ui-production-asset"
+        )
+        self.assertIn("atomic_asset", production_asset.required_fields)
+        self.assertIn("最终图片只包含一个选定的原子 UI 资源", production_asset.hard_checks)
+        self.assertEqual(len(game_templates), 11)
+        self.assertTrue(
+            all(
+                template.case_refs
+                for template in game_templates
+                if template.identifier != "game-ui-production-asset"
+            )
+        )
         self.assertTrue(all(template.required_fields for template in game_templates))
         self.assertTrue(all(template.hard_checks for template in game_templates))
         character_sheet = next(
@@ -63,6 +144,9 @@ class TestPromptDrafts(PlatformTestCase):
         chat_system = self.chat_client.calls[-1]["system"]
         self.assertIn("本次调用同时完成需求确认和最终提示词整理", chat_system)
         self.assertIn("ui-screenshot-system", chat_system)
+        self.assertIn("game-ui-production-asset", chat_system)
+        self.assertIn("禁止抠图", chat_system)
+        self.assertIn("一次只生成一个", chat_system)
         self.chat_client.prompt_draft_content = json.dumps(
             {
                 "status": "ready",
@@ -70,6 +154,7 @@ class TestPromptDrafts(PlatformTestCase):
                 "prompt": '3:4 vertical poster with exact title "AIR ZERO".',
                 "creative_direction": "poster",
                 "template_id": "poster-layout-system",
+                "gallery_categories": ["typography-and-posters"],
                 "style_tags": ["Poster"],
                 "scene_tags": ["Commerce", "Social"],
                 "selection_reason": "交付物是商业发布海报，需要明确主视觉与标题层级。",
@@ -94,14 +179,19 @@ class TestPromptDrafts(PlatformTestCase):
         self.assertEqual(draft.payload["creative_direction"], "poster")
         self.assertEqual(draft.payload["template_id"], "poster-layout-system")
         self.assertEqual(draft.payload["template_label"], "海报排版系统")
+        self.assertEqual(draft.payload["gallery_categories"], ["typography-and-posters"])
+        self.assertEqual(draft.payload["gallery_category_labels"], ["排版与海报"])
+        self.assertEqual(draft.payload["gallery_case_ranges"], ["skill:33-45"])
         self.assertEqual(draft.payload["style_labels"], ["海报"])
         self.assertEqual(draft.payload["scene_labels"], ["商业", "社媒"])
         self.assertIn("主视觉与标题层级", draft.payload["selection_reason"])
         self.assertEqual(draft.payload["sources"][1]["url"], "https://gpt-image2.canghe.ai/")
         system = self.chat_client.calls[-1]["system"]
-        self.assertIn("交付物分类 → 视觉风格 → 使用场景 → 最近模板", system)
+        self.assertIn("交付物分类 → Gallery Atlas 类别 → 视觉风格", system)
         self.assertIn("ui-screenshot-system", system)
         self.assertIn("concept-product-breakdown", system)
+        self.assertIn("Gallery Atlas 路由索引", system)
+        self.assertIn("research-paper-figures", system)
         self.assertIn("若用户从外部图库复制提示词", system)
 
         locked = self.services.conversations.create_prompt_draft(
@@ -112,6 +202,7 @@ class TestPromptDrafts(PlatformTestCase):
         )
         self.assertEqual(locked.payload["creative_direction"], "product")
         self.assertEqual(locked.payload["template_id"], "custom")
+        self.assertEqual(locked.payload["gallery_categories"], ["product-and-food"])
 
     def test_game_ui_draft_keeps_template_case_refs_and_production_spec(self):
         workspace = self.create_workspace("游戏 HUD")
@@ -168,6 +259,90 @@ class TestPromptDrafts(PlatformTestCase):
         self.assertIn("gallery-gaming.md", draft.payload["sources"][2]["references"]["gaming"])
         self.assertIn("game-ui-gameplay-hud", self.chat_client.calls[-1]["system"])
         self.assertIn("平台、目标画布、屏幕状态和安全区", self.chat_client.calls[-1]["system"])
+
+    def test_game_ui_production_asset_keeps_reconstruction_contract(self):
+        workspace = self.create_workspace("游戏 UI Kit")
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="参考完整 HUD，只重建护盾图标，不要抠图、文字或图集。",
+        )
+        self.chat_client.prompt_draft_content = json.dumps(
+            {
+                "status": "ready",
+                "summary_zh": "参考 HUD 风格重建一个独立护盾图标。",
+                "prompt": "one isolated shield icon on a genuinely transparent canvas",
+                "reference_usage": "generation",
+                "reference_reason": "参考图用于保持 HUD 的轮廓、材质与配色。",
+                "creative_direction": "game_ui",
+                "template_id": "game-ui-production-asset",
+                "style_tags": ["Game UI", "HUD"],
+                "scene_tags": ["Gaming", "Tech"],
+                "selection_reason": "目标是一个可直接用于引擎的原子 UI 图标。",
+                "production_spec": {
+                    "platform": "PC",
+                    "component_tree": ["状态模块 → 护盾图标", "状态模块 → 状态条"],
+                    "asset_module": "状态模块",
+                    "atomic_asset": "护盾图标",
+                    "asset_type": "icon",
+                    "runtime_content": ["护盾文字", "42/100 动态数值"],
+                    "transparent_output": "PNG alpha",
+                    "nine_slice": "不适用",
+                    "reconstruction_rules": ["只参考风格，不复制背景像素"],
+                },
+                "hard_checks": ["只有一个护盾图标"],
+                "quality_hint": "medium",
+            },
+            ensure_ascii=False,
+        )
+
+        draft = self.services.conversations.create_prompt_draft(
+            workspace,
+            model_id="test-chat",
+            translate_to_english=False,
+            creative_direction_id="game_ui",
+        )
+
+        self.assertEqual(draft.payload["template_id"], "game-ui-production-asset")
+        self.assertEqual(draft.payload["production_spec"]["atomic_asset"], "护盾图标")
+        self.assertEqual(
+            draft.payload["production_spec"]["runtime_content"],
+            ["护盾文字", "42/100 动态数值"],
+        )
+        self.assertIn("最终图片只包含一个选定的原子 UI 资源", draft.payload["hard_checks"])
+        self.assertIn("禁止抠图", self.chat_client.calls[-1]["system"])
+
+    def test_game_ui_component_tree_clarification_keeps_selection_question(self):
+        workspace = self.create_workspace("游戏 UI Kit 组件树")
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="先拆解完整 HUD，再让我选择一个原子资源。",
+        )
+        component_tree = "组件树：\n" + "\n".join(
+            f"• 模块 {index} → 空面板、边框、图标、装饰、状态条轨道与填充" for index in range(1, 17)
+        )
+        selection = "请选择本次重建的一个原子资源，例如：玩家状态模块 → 横向状态空面板。"
+        question = f"{component_tree}\n\n{selection}"
+        self.assertGreater(len(question), 500)
+        self.chat_client.prompt_draft_content = json.dumps(
+            {
+                "status": "needs_clarification",
+                "questions": [question],
+                "creative_direction": "game_ui",
+            },
+            ensure_ascii=False,
+        )
+
+        clarification = self.services.conversations.create_prompt_draft(
+            workspace,
+            model_id="test-chat",
+            translate_to_english=False,
+            creative_direction_id="game_ui",
+        )
+
+        self.assertEqual(clarification.payload["questions"], [question])
+        self.assertIn(selection, clarification.content)
 
     def test_prompt_draft_normalizes_explicit_canvas_request(self):
         workspace = self.create_workspace("画幅结构化")

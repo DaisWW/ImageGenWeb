@@ -28,3 +28,22 @@ class PromptTemplate:
     case_refs: tuple[str, ...] = ()
     required_fields: tuple[str, ...] = ()
     hard_checks: tuple[str, ...] = ()
+    gallery_categories: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class GalleryCategory:
+    identifier: str
+    label: str
+    case_start: int
+    case_end: int
+    direction_ids: tuple[str, ...]
+    prompt_schema: str
+
+    @property
+    def source_file(self) -> str:
+        return f"gallery-{self.identifier}.md"
+
+    @property
+    def case_ref(self) -> str:
+        return f"skill:{self.case_start}-{self.case_end}"

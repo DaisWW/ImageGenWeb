@@ -206,6 +206,8 @@ class ConversationContextManager:
                 "creative_direction",
                 "template_id",
                 "case_refs",
+                "gallery_categories",
+                "gallery_case_ranges",
                 "template_required_fields",
                 "template_hard_checks",
                 "style_tags",

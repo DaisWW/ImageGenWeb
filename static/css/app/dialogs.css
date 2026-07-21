@@ -37,6 +37,10 @@
   gap: 8px;
 }
 
+.detail-actions .ui-kit-action {
+  grid-column: 1 / -1;
+}
+
 .modal-header {
   display: flex;
   align-items: center;

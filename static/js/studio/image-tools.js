@@ -8,6 +8,12 @@
     setDisabled,
   } = window.ImageGenStudio;
 
+  const UI_KIT_RECONSTRUCTION_PROMPT = [
+    "我要把参考图重建为可直接开发使用的游戏 UI Kit。不要抠取、分割或复制原图像素，也不要直接生成整屏、组件展示板或图集。",
+    "请先把参考界面整理成“模块 → 原子资源”组件树，明确区分：可九宫格拉伸的空面板/边框、独立图标/装饰、状态条轨道/填充/开关状态，以及必须由引擎渲染的文字和动态数值。",
+    "本轮只做组件拆解，并用一个选择问题让我选定一个原子资源；未选定前不要给最终生图提示词。选定后每次只为一个无文字、无动态数值、真实透明背景的独立素材整理提示词。",
+  ].join("\n\n");
+
   Object.assign(StudioApp.prototype, {
     showDetail(job, item) {
       this.detailItemId = item.id;
@@ -62,7 +68,7 @@
       this.sliceBoxes = [];
       this.sliceSelected.clear();
       this.el.sliceImage.src = item.image_url;
-      setText(this.el.slicePreviewTitle, "正在识别图集");
+      setText(this.el.slicePreviewTitle, "正在识别规则图集");
       setText(this.el.sliceConfidence, "分析中");
       this.el.sliceConfidence.className = "slice-confidence loading";
       this.el.sliceCanvas.classList.add("loading");
@@ -351,23 +357,63 @@
       URL.revokeObjectURL(url);
     },
 
-    async reuseDetailImage() {
+    async startUiKitReconstruction() {
       if (!this.detailItemId || !this.activeWorkspace) return;
+      const channel = this.currentChannel();
+      if (!channel?.capabilities.modes.includes("img2img")) {
+        UI.toast("当前渠道不支持参考图生成", "error");
+        return;
+      }
+      if (!channel.capabilities.formats.includes("png")) {
+        UI.toast("当前渠道不支持 UI Kit 所需的透明 PNG", "error");
+        return;
+      }
+      await this.useDetailAsReference({
+        prepare: () => {
+          this.activeWorkspace.settings.prompt_draft_id = "";
+          this.el.creativeDirectionSelect.value = "game_ui";
+          const squareSize = channel.capabilities.sizes
+            .map((value) => this.normalizeSize(value))
+            .find((value) => {
+              const [width, height] = value.split("x").map(Number);
+              return width === height;
+            });
+          if (squareSize) this.el.sizeInput.value = squareSize;
+          this.el.formatSelect.value = "png";
+          this.updateTransparentBackgroundState();
+          this.el.transparentBackground.checked = true;
+          this.el.batchCount.value = "1";
+          this.updatePrice();
+        },
+        prompt: UI_KIT_RECONSTRUCTION_PROMPT,
+        imageToast: "已进入开发 UI Kit 重建流程",
+      });
+    },
+
+    async useDetailAsReference({ prepare, prompt, imageToast } = {}) {
+      if (!this.detailItemId || !this.activeWorkspace || this.detailReferenceBusy) return;
       const itemId = this.detailItemId;
       const workspace = this.activeWorkspace;
-      this.el.detailReuse.disabled = true;
+      this.detailReferenceBusy = true;
+      setDisabled(this.el.detailReuse, true);
+      setDisabled(this.el.detailUiKit, true);
       try {
         const data = await UI.api(`/api/generation-items/${itemId}/reference`, {
           method: "POST",
         });
+        if (this.activeWorkspace?.id === workspace.id) prepare?.();
         await this.applyReferenceAsset(data.asset, {
           workspace,
           dialog: this.el.imageDialog,
+          prompt,
+          imageToast,
         });
       } catch (error) {
         UI.toast(error.message, "error");
       } finally {
-        this.el.detailReuse.disabled = false;
+        this.detailReferenceBusy = false;
+        setDisabled(this.el.detailReuse, false);
+        setDisabled(this.el.detailUiKit, false);
       }
     },
 

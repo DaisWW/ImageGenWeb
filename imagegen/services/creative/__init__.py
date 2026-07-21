@@ -8,6 +8,7 @@ from .catalog import (
     normalize_template_id,
 )
 from .directions import CREATIVE_DIRECTIONS
+from .gallery import GALLERY_ATLAS
 from .models import CreativeDirection, PromptTemplate
 from .sources import (
     AWESOME_REPOSITORY,
@@ -28,6 +29,7 @@ __all__ = [
     "CREATIVE_DIRECTIONS",
     "CreativeDirection",
     "GALLERY_URL",
+    "GALLERY_ATLAS",
     "PROMPT_CRAFT_GUIDANCE",
     "PROMPT_TEMPLATES",
     "PromptTemplate",
