@@ -15,6 +15,7 @@ from imagegen.integrations.images import (
     GenerationRequest,
     OpenAIImagesAdapter,
     ReferencePayload,
+    _ensure_transparent_image,
 )
 from imagegen.integrations.openai_chat import OpenAIChatClient, OpenAIChatError
 from imagegen.models import (
@@ -134,6 +135,17 @@ class TestProviderAndRuntime(PlatformTestCase):
         with Image.open(io.BytesIO(result.content)) as image:
             self.assertEqual(image.mode, "RGBA")
             self.assertEqual(image.getchannel("A").getextrema(), (0, 255))
+
+    def test_transparent_background_keeps_valid_image_when_conversion_is_unavailable(self):
+        content = png_bytes((35, 160, 110))
+
+        result = _ensure_transparent_image(
+            content,
+            output_format="png",
+            compression=90,
+        )
+
+        self.assertEqual(result, content)
 
     def test_chat_request_sends_configured_reasoning_effort(self):
         model = self.app.extensions["chat_model_registry"].get("test-chat")

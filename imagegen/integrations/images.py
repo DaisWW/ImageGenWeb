@@ -355,10 +355,11 @@ def _ensure_transparent_image(
 
     converted = _remove_simple_light_background(rgba.convert("RGB"))
     if converted is None:
-        raise ProviderError(
-            "上游未返回透明通道，且背景无法可靠转换",
-            code="transparent_background_unsupported",
-        )
+        # The provider did return a valid image. Transparency is a requested
+        # enhancement, so keep the original output when its background cannot
+        # be converted safely instead of turning the whole generation into a
+        # failed item.
+        return content
 
     output = io.BytesIO()
     if output_format == "webp":
