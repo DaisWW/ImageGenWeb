@@ -114,6 +114,8 @@
       this.chatReferencePickerOpen = false;
       this.detailItemId = null;
       this.detailJobId = null;
+      this.detailReviewBusy = false;
+      this.detailReviewSuggestion = "";
       this.sliceItemId = null;
       this.sliceAnalysis = null;
       this.sliceBoxes = [];
@@ -263,6 +265,13 @@
         detailList: byId("detailList"),
         detailPrompt: byId("detailPrompt"),
         detailReferences: byId("detailReferences"),
+        detailReview: byId("detailReview"),
+        detailReviewVerdict: byId("detailReviewVerdict"),
+        detailReviewScores: byId("detailReviewScores"),
+        detailReviewChecks: byId("detailReviewChecks"),
+        detailReviewSuggestion: byId("detailReviewSuggestion"),
+        detailRunReview: byId("detailRunReview"),
+        detailApplyReview: byId("detailApplyReview"),
         detailUiKit: byId("detailUiKit"),
         detailSlice: byId("detailSlice"),
         detailSaveLibrary: byId("detailSaveLibrary"),
@@ -478,6 +487,8 @@
       this.el.referenceList.addEventListener("click", (event) => this.handleReferenceClick(event));
       this.el.generationForm.addEventListener("submit", (event) => this.submitGeneration(event));
       this.el.detailUiKit.addEventListener("click", () => this.startUiKitReconstruction());
+      this.el.detailRunReview.addEventListener("click", () => this.runDetailReview());
+      this.el.detailApplyReview.addEventListener("click", () => this.applyDetailReview());
       this.el.detailSlice.addEventListener("click", () => this.openSliceTool());
       this.el.detailSaveLibrary.addEventListener("click", () => this.saveDetailToLibrary());
       this.el.detailReuse.addEventListener("click", () => this.useDetailAsReference());

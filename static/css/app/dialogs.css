@@ -379,6 +379,86 @@
   white-space: pre-wrap;
 }
 
+.detail-review {
+  display: grid;
+  gap: 10px;
+  padding-block: 13px;
+  border-block: 1px solid var(--line);
+}
+
+.detail-review header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.detail-review header strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.detail-review.is-pass header strong,
+.detail-review li.passed {
+  color: #82c89d;
+}
+
+.detail-review.is-revise header strong,
+.detail-review li:not(.passed) {
+  color: var(--danger);
+}
+
+.detail-review-scores {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.detail-review-scores span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.detail-review-scores strong {
+  color: var(--text-soft);
+  font-size: 15px;
+}
+
+.detail-review ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.detail-review li::before {
+  content: "×";
+  display: inline-block;
+  width: 16px;
+}
+
+.detail-review li.passed::before {
+  content: "✓";
+}
+
+.detail-review p {
+  margin: 0;
+  padding-left: 10px;
+  color: var(--text-soft);
+  border-left: 2px solid var(--accent);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
 .detail-references > div {
   display: flex;
   gap: 6px;

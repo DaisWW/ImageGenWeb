@@ -23,6 +23,7 @@ from .context import ConversationContextManager
 from .operations import ConversationOperation, ConversationOperationRegistry
 from .prompt_workflow import PromptDraftWorkflow
 from .replies import ConversationReplyService
+from .review_workflow import ImageReviewWorkflow
 from .support import ConversationDependencies
 
 
@@ -54,6 +55,7 @@ class ConversationService:
         self.operations = ConversationOperationRegistry(settings)
         self.replies = ConversationReplyService(self.dependencies, self.operations)
         self.prompt_drafts = PromptDraftWorkflow(self.dependencies, self.operations)
+        self.image_reviews = ImageReviewWorkflow(self.dependencies, self.operations)
 
     @property
     def client(self) -> OpenAIChatClient:
@@ -171,6 +173,14 @@ class ConversationService:
             mode=mode,
             reference_ids=reference_ids,
         )
+
+    def review_generation_item(
+        self,
+        item,
+        *,
+        model_id: str,
+    ) -> dict[str, Any]:
+        return self.image_reviews.review_generation_item(item, model_id=model_id)
 
     def state_dict(self, workspace: Workspace) -> dict[str, Any]:
         state = db.session.get(ConversationState, workspace.id)

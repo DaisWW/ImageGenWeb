@@ -226,6 +226,7 @@ class FakeChatClient:
         self.calls = []
         self.reply_content = ""
         self.prompt_draft_content = ""
+        self.image_review_content = ""
 
     def complete(
         self,
@@ -254,6 +255,24 @@ class FakeChatClient:
                     "status": "needs_clarification",
                     "questions": ["请确认人物所处的场景。"],
                     "creative_direction": "other",
+                },
+                ensure_ascii=False,
+            )
+        elif "生产图片验收员" in system:
+            content = self.image_review_content or json.dumps(
+                {
+                    "verdict": "pass",
+                    "hard_checks": [
+                        {
+                            "id": "instruction_following",
+                            "label": "整体指令遵循",
+                            "passed": True,
+                            "evidence": "结果符合整体指令。",
+                        }
+                    ],
+                    "scores": {"composition": 4, "visual_quality": 4, "usability": 4},
+                    "findings": [],
+                    "suggested_edit": "",
                 },
                 ensure_ascii=False,
             )

@@ -5,6 +5,7 @@
     StudioApp,
     UI,
     setText,
+    setHidden,
     setDisabled,
   } = window.ImageGenStudio;
 
@@ -54,6 +55,7 @@
         ? `<span>垫图</span><div>${job.references.map((asset) => `<img src="${asset.url}" alt="${UI.escapeHtml(asset.name)}" decoding="async">`).join("")}</div>`
         : "";
       this.el.detailReferences.querySelectorAll("img").forEach((image) => this.prepareImageReveal(image));
+      this.renderDetailReview(item.review || {});
       this.el.detailDownload.href = item.download_url;
       UI.openDialog(this.el.imageDialog);
     },
@@ -390,6 +392,83 @@
       });
     },
 
+    renderDetailReview(review) {
+      const verdict = review?.verdict || "";
+      const hasReview = ["pass", "revise"].includes(verdict);
+      this.detailReviewSuggestion = review?.suggested_edit || "";
+      setHidden(this.el.detailReview, !hasReview);
+      this.el.detailReview.classList.toggle("is-pass", verdict === "pass");
+      this.el.detailReview.classList.toggle("is-revise", verdict === "revise");
+      setText(this.el.detailReviewVerdict, verdict === "pass" ? "通过" : "需要精修");
+      const scores = review?.scores || {};
+      this.el.detailReviewScores.innerHTML = hasReview
+        ? [
+          ["构图", scores.composition],
+          ["画质", scores.visual_quality],
+          ["可用", scores.usability],
+        ].map(([label, value]) => (
+          `<span>${label}<strong>${Number(value || 0).toFixed(1)}</strong></span>`
+        )).join("")
+        : "";
+      const checks = [...(review?.hard_checks || [])];
+      (review?.findings || []).forEach((finding, index) => {
+        checks.push({ id: `finding_${index}`, label: finding, passed: false, evidence: "" });
+      });
+      this.el.detailReviewChecks.replaceChildren(...checks.map((check) => {
+        const item = document.createElement("li");
+        item.classList.toggle("passed", check.passed === true);
+        item.textContent = check.evidence ? `${check.label}：${check.evidence}` : check.label;
+        return item;
+      }));
+      setHidden(this.el.detailReviewSuggestion, !this.detailReviewSuggestion);
+      setText(this.el.detailReviewSuggestion, this.detailReviewSuggestion);
+      setHidden(this.el.detailApplyReview, !this.detailReviewSuggestion);
+      setDisabled(
+        this.el.detailApplyReview,
+        !this.detailReviewSuggestion || this.detailReviewBusy || this.detailReferenceBusy,
+      );
+      this.el.detailRunReview.innerHTML = hasReview
+        ? '<i data-lucide="refresh-cw"></i>重新验收'
+        : '<i data-lucide="scan-search"></i>AI 验收';
+      UI.icons(this.el.detailRunReview);
+    },
+
+    async runDetailReview() {
+      const job = this.jobs.find((entry) => entry.id === this.detailJobId);
+      const item = job?.items.find((entry) => entry.id === this.detailItemId);
+      const modelId = this.el.chatModelSelect.value;
+      if (!item || !modelId || this.detailReviewBusy) return;
+      const itemId = item.id;
+      this.detailReviewBusy = true;
+      setDisabled(this.el.detailRunReview, true);
+      setDisabled(this.el.detailApplyReview, true);
+      this.el.detailRunReview.innerHTML = '<i data-lucide="loader-circle"></i>正在验收';
+      UI.icons(this.el.detailRunReview);
+      try {
+        const data = await UI.api(`/api/generation-items/${itemId}/review`, {
+          method: "POST",
+          body: { model_id: modelId },
+        });
+        item.review = data.review;
+        if (this.detailItemId === itemId) this.renderDetailReview(data.review);
+        UI.toast(data.review.verdict === "pass" ? "AI 验收通过" : "AI 已给出精修建议", "success");
+      } catch (error) {
+        UI.toast(error.message, "error");
+      } finally {
+        this.detailReviewBusy = false;
+        setDisabled(this.el.detailRunReview, false);
+        if (this.detailItemId === itemId) this.renderDetailReview(item.review || {});
+      }
+    },
+
+    async applyDetailReview() {
+      if (!this.detailReviewSuggestion || this.detailReviewBusy) return;
+      await this.useDetailAsReference({
+        prompt: this.detailReviewSuggestion,
+        imageToast: "已载入验收建议，可以继续精修",
+      });
+    },
+
     async useDetailAsReference({ prepare, prompt, imageToast } = {}) {
       if (!this.detailItemId || !this.activeWorkspace || this.detailReferenceBusy) return;
       const itemId = this.detailItemId;
@@ -397,6 +476,7 @@
       this.detailReferenceBusy = true;
       setDisabled(this.el.detailReuse, true);
       setDisabled(this.el.detailUiKit, true);
+      setDisabled(this.el.detailApplyReview, true);
       try {
         const data = await UI.api(`/api/generation-items/${itemId}/reference`, {
           method: "POST",
@@ -414,6 +494,7 @@
         this.detailReferenceBusy = false;
         setDisabled(this.el.detailReuse, false);
         setDisabled(this.el.detailUiKit, false);
+        setDisabled(this.el.detailApplyReview, !this.detailReviewSuggestion);
       }
     },
 

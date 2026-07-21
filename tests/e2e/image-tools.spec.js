@@ -33,23 +33,34 @@ test("detail reference actions share one in-flight request", async ({ studioPage
     };
     const detailReuse = document.createElement("button");
     const detailUiKit = document.createElement("button");
+    const detailApplyReview = document.createElement("button");
     const target = {
       detailItemId: "detail-item",
       activeWorkspace: { id: "workspace" },
       detailReferenceBusy: false,
-      el: { detailReuse, detailUiKit, imageDialog: document.createElement("dialog") },
+      detailReviewSuggestion: "只改变一个问题",
+      el: {
+        detailReuse,
+        detailUiKit,
+        detailApplyReview,
+        imageDialog: document.createElement("dialog"),
+      },
       applyReferenceAsset: async () => {},
     };
     try {
       const first = window.ImageGenStudio.StudioApp.prototype.useDetailAsReference.call(target);
       const second = window.ImageGenStudio.StudioApp.prototype.useDetailAsReference.call(target);
-      const disabledDuringRequest = detailReuse.disabled && detailUiKit.disabled;
+      const disabledDuringRequest = detailReuse.disabled
+        && detailUiKit.disabled
+        && detailApplyReview.disabled;
       release();
       await Promise.all([first, second]);
       return {
         calls,
         disabledDuringRequest,
-        disabledAfterRequest: detailReuse.disabled || detailUiKit.disabled,
+        disabledAfterRequest: detailReuse.disabled
+          || detailUiKit.disabled
+          || detailApplyReview.disabled,
       };
     } finally {
       window.ImageGenStudio.UI.api = originalApi;
@@ -63,9 +74,9 @@ test("detail reference actions share one in-flight request", async ({ studioPage
   });
 });
 
-test("image detail keeps its reference through multi-turn refinement", async ({
-  studioPage: page,
-}) => {
+test("image detail keeps its reference through multi-turn refinement", {
+  tag: "@responsive",
+}, async ({ studioPage: page }) => {
   await mockConfiguredImageChannel(page);
   const workspaceId = await page.locator("#workspaceList .workspace-item.active")
     .getAttribute("data-workspace-id");
@@ -140,6 +151,7 @@ test("image detail keeps its reference through multi-turn refinement", async ({
       image_url: imageUrl,
       thumbnail_url: imageUrl,
       download_url: imageUrl,
+      review: {},
     }],
   };
 
@@ -172,6 +184,34 @@ test("image detail keeps its reference through multi-turn refinement", async ({
     status: 201,
     json: { asset: referenceAsset },
   }));
+  let reviewRequest = null;
+  await page.route(`**/api/generation-items/${itemId}/review`, (route) => {
+    reviewRequest = route.request().postDataJSON();
+    return route.fulfill({
+      json: {
+        review: {
+          verdict: "revise",
+          hard_checks: [
+            {
+              id: "instruction_following",
+              label: "整体指令遵循",
+              passed: true,
+              evidence: "主体与构图符合要求",
+            },
+            {
+              id: "criterion_1",
+              label: "画面中不得出现文字",
+              passed: false,
+              evidence: "鞋盒右下角存在多余文字",
+            },
+          ],
+          scores: { composition: 4.2, visual_quality: 3.8, usability: 2.5 },
+          findings: ["右下角文字影响交付"],
+          suggested_edit: "只改变鞋盒右下角，移除多余文字；必须保持运动鞋和构图不变。",
+        },
+      },
+    });
+  });
   let chatRound = 0;
   const sentAttachmentIds = [];
   const sentGenerationReferenceIds = [];
@@ -258,6 +298,18 @@ test("image detail keeps its reference through multi-turn refinement", async ({
   await expect(page.locator("#detailList")).toContainText("实际图片");
   await expect(page.locator("#detailList")).toContainText("采用对话画幅");
   await expect(page.locator("#detailList")).toContainText("商品商业视觉");
+  await page.locator("#detailRunReview").click();
+  await expect(page.locator("#detailReview")).toBeVisible();
+  await expect(page.locator("#detailReviewVerdict")).toHaveText("需要精修");
+  await expect(page.locator("#detailReviewScores")).toContainText("4.2");
+  await expect(page.locator("#detailReviewChecks")).toContainText("鞋盒右下角存在多余文字");
+  expect(reviewRequest).toEqual({ model_id: "e2e-chat" });
+  await page.locator("#detailApplyReview").click();
+  await expect(page.locator("#imageDialog")).toBeHidden();
+  await expect(page.locator("#chatInput"))
+    .toHaveValue("只改变鞋盒右下角，移除多余文字；必须保持运动鞋和构图不变。");
+
+  await page.locator(`[data-item-id="${itemId}"]`).click();
   await page.locator("#detailUiKit").click();
   await expect(page.locator("#imageDialog")).toBeHidden();
   await expect(page.locator("#chatInput")).toHaveValue(/不要抠取、分割或复制原图像素/);

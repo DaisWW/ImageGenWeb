@@ -307,6 +307,7 @@ class GenerationItem(TimestampMixin, db.Model):
     output_byte_count: Mapped[int | None]
     output_width: Mapped[int | None]
     output_height: Mapped[int | None]
+    review: Mapped[dict] = mapped_column(MutableDict.as_mutable(JSON_TYPE), default=dict)
 
     job: Mapped[GenerationJob] = relationship(back_populates="items")
     user: Mapped[User] = relationship()

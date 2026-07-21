@@ -202,10 +202,18 @@
       <dl class="detail-list" id="detailList"></dl>
       <div class="detail-prompt"><span>提示词</span><p id="detailPrompt"></p></div>
       <div class="detail-references" id="detailReferences"></div>
+      <section class="detail-review" id="detailReview" hidden>
+        <header><span>AI 验收</span><strong id="detailReviewVerdict"></strong></header>
+        <div class="detail-review-scores" id="detailReviewScores"></div>
+        <ul id="detailReviewChecks"></ul>
+        <p id="detailReviewSuggestion" hidden></p>
+      </section>
       <div class="detail-actions">
         <button class="button secondary ui-kit-action" type="button" id="detailUiKit"><i data-lucide="component"></i>重建开发 UI Kit</button>
         <button class="button secondary" type="button" id="detailSlice"><i data-lucide="grid-2x2"></i>规则切图</button>
         <button class="button secondary" type="button" id="detailSaveLibrary"><i data-lucide="bookmark-plus"></i>存入图库</button>
+        <button class="button secondary" type="button" id="detailRunReview"><i data-lucide="scan-search"></i>AI 验收</button>
+        <button class="button secondary" type="button" id="detailApplyReview" hidden><i data-lucide="wrench"></i>按建议继续</button>
         <button class="button secondary" type="button" id="detailReuse"><i data-lucide="image-plus"></i><span id="detailReuseLabel">基于此图继续</span></button>
         <a class="button primary" id="detailDownload" download><i data-lucide="download"></i>下载原图</a>
       </div>
