@@ -19,9 +19,18 @@
       const stageLabel = { draft: "草稿", refine: "精修", final: "成品" }[
         job.workflow?.generation_stage
       ] || "未标记";
+      const canvasResolutionLabel = {
+        conversation: "采用对话画幅",
+        panel: "保持面板尺寸",
+      }[job.workflow?.canvas_resolution] || "";
       const details = [
         ["渠道", `${job.channel} · ${job.model}`],
-        ["请求参数", `${job.size} · ${job.quality} · ${job.output_format.toUpperCase()}${transparentLabel}`],
+        ["请求参数", [
+          job.size,
+          job.quality,
+          job.output_format.toUpperCase(),
+          canvasResolutionLabel,
+        ].filter(Boolean).join(" · ") + transparentLabel],
         ["流程", [
           job.workflow?.creative_direction_label || "历史任务",
           job.workflow?.template_label,

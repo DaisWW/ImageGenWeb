@@ -62,6 +62,7 @@ test("image detail keeps its reference through multi-turn refinement", async ({
       creative_direction_label: "商品与电商",
       template_label: "商品商业视觉",
       generation_stage: "final",
+      canvas_resolution: "conversation",
     },
     output_format: "png",
     compression: 90,
@@ -212,6 +213,7 @@ test("image detail keeps its reference through multi-turn refinement", async ({
   await expect(page.locator("#imageDialog")).toBeVisible();
   await expect(page.locator("#detailList")).toContainText("请求参数");
   await expect(page.locator("#detailList")).toContainText("实际图片");
+  await expect(page.locator("#detailList")).toContainText("采用对话画幅");
   await expect(page.locator("#detailList")).toContainText("商品商业视觉");
   await page.locator("#detailReuse").click();
   await expect(page.locator("#imageDialog")).toBeHidden();
