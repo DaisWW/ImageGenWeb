@@ -18,6 +18,44 @@ from tests.support.platform import (
 
 
 class TestConversationImages(PlatformTestCase):
+    def test_analysis_only_attachment_does_not_enable_edit_recipe(self):
+        workspace = self.create_workspace("图片仅分析")
+        asset = self.services.workspaces.add_assets(
+            workspace,
+            [("analysis.png", png_bytes())],
+        )[0]
+        self.chat_client.reply_content = json.dumps(
+            {
+                "status": "ready",
+                "summary_zh": "只分析版式，重新生成一张图。",
+                "prompt": "生成一张新的原创极简海报",
+                "reference_usage": "analysis_only",
+                "reference_reason": "原图只用于分析版式。",
+                "creative_direction": "poster",
+                "template_id": "poster-layout-system",
+                "gallery_categories": ["typography-and-posters"],
+                "style_tags": ["Poster"],
+                "scene_tags": ["Creative"],
+                "selection_reason": "交付物是新海报。",
+                "brief": {"deliverable": "原创海报"},
+                "hard_checks": ["输出是新的原创海报"],
+                "quality_hint": "low",
+            },
+            ensure_ascii=False,
+        )
+
+        _user, assistant = self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="只分析这张图的版式，不要把它作为生图垫图。",
+            attachment_ids=(asset.id,),
+        )
+
+        self.assertEqual(assistant.payload["generation_mode"], "text2img")
+        self.assertEqual(assistant.payload["reference_usage"], "analysis_only")
+        self.assertEqual(assistant.payload["reference_ids"], [])
+        self.assertEqual(assistant.payload["edit_recipe_id"], "")
+
     def test_historical_chat_images_are_sent_again_on_a_later_turn(self):
         workspace = self.create_workspace("历史图片上下文")
         content = png_bytes((220, 35, 45))
@@ -37,12 +75,14 @@ class TestConversationImages(PlatformTestCase):
         }
         self.chat_client.reply_content = json.dumps(response, ensure_ascii=False)
 
-        self.services.conversations.send(
+        _first_user, first_assistant = self.services.conversations.send(
             workspace,
             model_id="test-chat",
             content="先参考这张图设计主体",
             attachment_ids=(asset.id,),
         )
+        self.assertEqual(first_assistant.payload["generation_mode"], "img2img")
+        self.assertEqual(first_assistant.payload["edit_recipe_id"], "precision-edit")
         self.services.conversations.send(
             workspace,
             model_id="test-chat",

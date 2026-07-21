@@ -143,10 +143,10 @@ class TestPromptDrafts(PlatformTestCase):
         )
         chat_system = self.chat_client.calls[-1]["system"]
         self.assertIn("本次调用同时完成需求确认和最终提示词整理", chat_system)
-        self.assertIn("ui-screenshot-system", chat_system)
-        self.assertIn("game-ui-production-asset", chat_system)
-        self.assertIn("禁止抠图", chat_system)
-        self.assertIn("一次只生成一个", chat_system)
+        self.assertIn("poster-layout-system", chat_system)
+        self.assertIn("sports-campaign-poster", chat_system)
+        self.assertNotIn("ui-screenshot-system", chat_system)
+        self.assertIn("第三方案例", chat_system)
         self.chat_client.prompt_draft_content = json.dumps(
             {
                 "status": "ready",
@@ -188,11 +188,14 @@ class TestPromptDrafts(PlatformTestCase):
         self.assertEqual(draft.payload["sources"][1]["url"], "https://gpt-image2.canghe.ai/")
         system = self.chat_client.calls[-1]["system"]
         self.assertIn("交付物分类 → Gallery Atlas 类别 → 视觉风格", system)
-        self.assertIn("ui-screenshot-system", system)
-        self.assertIn("concept-product-breakdown", system)
-        self.assertIn("Gallery Atlas 路由索引", system)
-        self.assertIn("research-paper-figures", system)
+        self.assertIn("poster-layout-system", system)
+        self.assertNotIn("concept-product-breakdown", system)
+        self.assertIn("Gallery Atlas 路由", system)
+        self.assertIn("typography-and-posters", system)
         self.assertIn("若用户从外部图库复制提示词", system)
+        self.assertIn("Production contract", draft.payload["prompt"])
+        self.assertIn('"verbatim": "AIR ZERO"', draft.payload["prompt"])
+        self.assertTrue(any("AIR ZERO" in item for item in draft.payload["hard_checks"]))
 
         locked = self.services.conversations.create_prompt_draft(
             workspace,
@@ -255,6 +258,7 @@ class TestPromptDrafts(PlatformTestCase):
         self.assertEqual(draft.payload["template_id"], "game-ui-gameplay-hud")
         self.assertEqual(draft.payload["case_refs"], ["skill:15", "skill:18", "skill:19"])
         self.assertEqual(draft.payload["production_spec"]["platform"], "mobile")
+        self.assertEqual(draft.payload["prompt"].count('"exact_text"'), 1)
         self.assertEqual(len(draft.payload["hard_checks"]), 6)
         self.assertIn("gallery-gaming.md", draft.payload["sources"][2]["references"]["gaming"])
         self.assertIn("game-ui-gameplay-hud", self.chat_client.calls[-1]["system"])
@@ -343,6 +347,109 @@ class TestPromptDrafts(PlatformTestCase):
 
         self.assertEqual(clarification.payload["questions"], [question])
         self.assertIn(selection, clarification.content)
+
+    def test_prompt_draft_injects_only_retrieved_case_matches(self):
+        workspace = self.create_workspace("MOBA HUD 案例检索")
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="Create a mobile MOBA arena HUD with cooldown buttons and minimap.",
+        )
+        self.chat_client.prompt_draft_content = json.dumps(
+            {
+                "status": "ready",
+                "summary_zh": "移动 MOBA 实机 HUD。",
+                "prompt": "original mobile MOBA gameplay HUD",
+                "creative_direction": "game_ui",
+                "template_id": "game-ui-gameplay-hud",
+                "gallery_categories": ["gaming"],
+                "style_tags": ["Game UI", "HUD"],
+                "scene_tags": ["Gaming"],
+                "selection_reason": "交付物是移动 MOBA 实机 HUD。",
+                "brief": {"deliverable": "移动 MOBA HUD"},
+                "hard_checks": ["HUD 包含小地图和技能冷却按钮"],
+                "quality_hint": "medium",
+            },
+            ensure_ascii=False,
+        )
+
+        draft = self.services.conversations.create_prompt_draft(
+            workspace,
+            model_id="test-chat",
+            translate_to_english=False,
+            creative_direction_id="game_ui",
+        )
+
+        self.assertLessEqual(len(draft.payload["retrieved_cases"]), 3)
+        self.assertEqual(draft.payload["retrieved_cases"][0]["id"], "skill:20")
+        system = self.chat_client.calls[-1]["system"]
+        self.assertIn("第三方案例", system)
+        self.assertIn("skill:20", system)
+        self.assertNotIn("skill:13｜", system)
+
+    def test_img2img_prompt_draft_normalizes_edit_recipe(self):
+        workspace = self.create_workspace("商品移除对象")
+        asset = self.services.workspaces.add_assets(
+            workspace,
+            [("product.png", png_bytes())],
+        )[0]
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="只移除商品右侧的花瓶，其他都保持不变。",
+        )
+        self.chat_client.prompt_draft_content = json.dumps(
+            {
+                "status": "ready",
+                "summary_zh": "移除商品右侧花瓶。",
+                "prompt": "只移除右侧花瓶；保持商品、背景、机位和光线不变。",
+                "reference_usage": "generation",
+                "reference_reason": "原图是待编辑内容。",
+                "creative_direction": "product",
+                "template_id": "product-commerce-visual",
+                "edit_recipe_id": "object-remove-replace",
+                "gallery_categories": ["edit-endpoint-showcase"],
+                "style_tags": ["Product"],
+                "scene_tags": ["Commerce"],
+                "selection_reason": "单对象局部移除。",
+                "brief": {
+                    "deliverable": "编辑后的商品图",
+                    "reference_plan": [
+                        {
+                            "image_number": 1,
+                            "role": "待编辑原图",
+                            "preserve": ["商品", "背景", "机位", "光线"],
+                            "change": ["移除右侧花瓶"],
+                        }
+                    ],
+                    "change": ["移除右侧花瓶"],
+                    "preserve": ["商品", "背景", "机位", "光线"],
+                },
+                "hard_checks": ["右侧花瓶已经移除"],
+                "quality_hint": "medium",
+            },
+            ensure_ascii=False,
+        )
+
+        draft = self.services.conversations.create_prompt_draft(
+            workspace,
+            model_id="test-chat",
+            translate_to_english=False,
+            mode="img2img",
+            reference_ids=(asset.id,),
+            creative_direction_id="product",
+        )
+
+        self.assertEqual(draft.payload["edit_recipe_id"], "object-remove-replace")
+        self.assertEqual(draft.payload["edit_recipe_label"], "物体移除 / 替换")
+        self.assertIn("target_object", draft.payload["edit_required_fields"])
+        self.assertIn("目标对象已按要求移除或替换", draft.payload["hard_checks"])
+        self.assertIn("object-remove-replace", self.chat_client.calls[-1]["system"])
+        self.assertIn('"change_only"', draft.payload["prompt"])
+        self.assertIn("移除右侧花瓶", draft.payload["prompt"])
+        self.assertIn('"must_preserve"', draft.payload["prompt"])
+        self.assertIn('"reference_roles"', draft.payload["prompt"])
+        self.assertEqual(draft.payload["brief"]["reference_plan"][0]["role"], "待编辑原图")
 
     def test_prompt_draft_normalizes_explicit_canvas_request(self):
         workspace = self.create_workspace("画幅结构化")
@@ -442,7 +549,7 @@ class TestPromptDrafts(PlatformTestCase):
         self.assertEqual(draft.payload["brief"]["deliverable"], "")
         self.assertEqual(draft.payload["brief"]["subject"], "")
         self.assertEqual(draft.payload["brief"]["composition"], "centered")
-        self.assertEqual(draft.payload["brief"]["reference_plan"][0]["role"], "")
+        self.assertEqual(draft.payload["brief"]["reference_plan"], [])
 
     def test_game_art_draft_preserves_directional_identity_map(self):
         workspace = self.create_workspace("角色设定表")

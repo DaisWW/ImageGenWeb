@@ -74,6 +74,10 @@ class GenerationWorkflow:
             "gallery_category_labels": (draft.get("gallery_category_labels", []) if draft else []),
             "gallery_case_ranges": draft.get("gallery_case_ranges", []) if draft else [],
             "gallery_category_urls": draft.get("gallery_category_urls", []) if draft else [],
+            "retrieved_cases": draft.get("retrieved_cases", []) if draft else [],
+            "edit_recipe_id": str(draft.get("edit_recipe_id", "")) if draft else "",
+            "edit_recipe_label": str(draft.get("edit_recipe_label", "")) if draft else "",
+            "edit_required_fields": draft.get("edit_required_fields", []) if draft else [],
             "template_required_fields": (
                 draft.get("template_required_fields", []) if draft else []
             ),
@@ -112,6 +116,10 @@ def sanitize_workflow(value: object) -> dict[str, object]:
         "gallery_category_labels",
         "gallery_case_ranges",
         "gallery_category_urls",
+        "retrieved_cases",
+        "edit_recipe_id",
+        "edit_recipe_label",
+        "edit_required_fields",
         "template_required_fields",
         "template_hard_checks",
         "brief",
@@ -150,6 +158,28 @@ def sanitize_workflow(value: object) -> dict[str, object]:
     ):
         values = result.get(key)
         result[key] = [str(item)[:300] for item in values[:3]] if isinstance(values, list) else []
+    cases = result.get("retrieved_cases")
+    result["retrieved_cases"] = (
+        [
+            {
+                "id": str(item.get("id", ""))[:80],
+                "title": str(item.get("title", ""))[:200],
+                "source": str(item.get("source", ""))[:80],
+                "source_url": str(item.get("source_url", ""))[:500],
+                "category": str(item.get("category", ""))[:120],
+            }
+            for item in cases[:3]
+            if isinstance(item, dict) and str(item.get("id", "")).strip()
+        ]
+        if isinstance(cases, list)
+        else []
+    )
+    fields = result.get("edit_required_fields")
+    result["edit_required_fields"] = (
+        [str(item)[:100] for item in fields[:12]] if isinstance(fields, list) else []
+    )
+    for key in ("edit_recipe_id", "edit_recipe_label"):
+        result[key] = str(result.get(key, ""))[:160]
     stage = str(result.get("generation_stage", "final")).lower()
     result["generation_stage"] = stage if stage in {"draft", "refine", "final"} else "final"
     result["ai_reviewed"] = result.get("ai_reviewed") is True

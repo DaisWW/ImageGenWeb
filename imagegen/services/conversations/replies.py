@@ -242,6 +242,11 @@ class ConversationReplyService(ConversationSupport):
         )
         pending = self._user_model_message(user_message.content, context_attachments)
         settings = workspace.settings or {}
+        direction_id = str(settings.get("creative_direction_id", "auto"))
+        template_candidates, case_matches = self._creative_matches(
+            workspace,
+            direction_id=direction_id,
+        )
         review = PromptDraftReview(
             translate_to_english=settings.get("translate_prompt") is True,
             workspace_prompt=self.chat_models.workspace_prompt(workspace.kind),
@@ -250,8 +255,12 @@ class ConversationReplyService(ConversationSupport):
                 review_mode,
                 len(candidate_references),
             ),
-            creative_direction_id=str(settings.get("creative_direction_id", "auto")),
+            generation_mode=review_mode,
+            creative_direction_id=direction_id,
             max_prompt_characters=self.settings.runtime().max_prompt_characters,
+            reference_count=len(candidate_references),
+            template_candidates=template_candidates,
+            retrieved_cases=case_matches,
         )
         try:
             context = self.context.build(
@@ -319,6 +328,8 @@ class ConversationReplyService(ConversationSupport):
                 "generation_mode": draft["generation_mode"],
                 "reference_count": len(generation_references),
                 "reference_usage": draft["reference_usage"],
+                "retrieved_case_count": len(draft.get("retrieved_cases", [])),
+                "template_candidate_count": len(template_candidates),
             },
         )
         self._remember_preferences(workspace, model_id=model.identifier)

@@ -76,6 +76,10 @@ class PromptDraftWorkflow(ConversationSupport):
         pending = self._user_model_message(
             "请基于以上会话整理当前已确认的最终生图需求。", attachments
         )
+        template_candidates, case_matches = self._creative_matches(
+            workspace,
+            direction_id=creative_direction_id,
+        )
         review = PromptDraftReview(
             translate_to_english=translate_to_english,
             workspace_prompt=self.chat_models.workspace_prompt(workspace.kind),
@@ -83,8 +87,12 @@ class PromptDraftWorkflow(ConversationSupport):
                 effective_mode,
                 len(attachments),
             ),
+            generation_mode=effective_mode,
             creative_direction_id=creative_direction_id,
             max_prompt_characters=self.settings.runtime().max_prompt_characters,
+            reference_count=len(attachments),
+            template_candidates=template_candidates,
+            retrieved_cases=case_matches,
         )
         try:
             context = self.context.build(
@@ -146,6 +154,9 @@ class PromptDraftWorkflow(ConversationSupport):
                 "reference_usage": draft["reference_usage"],
                 "creative_direction": draft.get("creative_direction", "other"),
                 "template_id": draft.get("template_id", "custom"),
+                "edit_recipe_id": draft.get("edit_recipe_id", ""),
+                "retrieved_case_count": len(draft.get("retrieved_cases", [])),
+                "template_candidate_count": len(template_candidates),
             },
         )
         self._remember_preferences(

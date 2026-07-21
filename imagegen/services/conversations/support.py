@@ -19,6 +19,8 @@ from ...models import (
     new_public_id,
 )
 from ...storage import ImageStorage
+from ..creative import CASE_CATALOG, CREATIVE_ROUTER
+from ..creative.models import CreativeCase, PromptTemplate
 from ..runtime_logs import RuntimeLogService
 from ..settings import SystemSettingsService
 from .context import ConversationContextManager
@@ -61,6 +63,36 @@ class ConversationSupport:
     @property
     def client(self) -> OpenAIChatClient:
         return self.dependencies.client
+
+    @staticmethod
+    def _creative_query(workspace: Workspace) -> str:
+        messages = list(
+            db.session.scalars(
+                select(ConversationMessage.content)
+                .where(
+                    ConversationMessage.workspace_id == workspace.id,
+                    ConversationMessage.role == "user",
+                )
+                .order_by(ConversationMessage.created_at.desc(), ConversationMessage.id.desc())
+                .limit(6)
+            )
+        )
+        return "\n".join(reversed(messages))
+
+    def _creative_matches(
+        self,
+        workspace: Workspace,
+        *,
+        direction_id: str,
+    ) -> tuple[tuple[PromptTemplate, ...], tuple[CreativeCase, ...]]:
+        query = self._creative_query(workspace)
+        templates = CREATIVE_ROUTER.route(query, direction_id=direction_id)
+        cases = CASE_CATALOG.search(
+            query,
+            direction_id=direction_id,
+            templates=templates,
+        )
+        return templates, cases
 
     @staticmethod
     def _draft_references(draft: dict[str, Any], candidates: list[Asset]) -> list[Asset]:

@@ -77,6 +77,13 @@ test("AI automatically prepares a gallery template before generation", {
               template_label: "海报排版系统",
               gallery_categories: ["typography-and-posters"],
               gallery_category_labels: ["排版与海报"],
+              retrieved_cases: [{
+                id: "awesome:41",
+                title: "城市旅游推广海报",
+                source: "awesome-gpt-image-2",
+                source_url: "https://example.test/case-41",
+                category: "Posters & Typography",
+              }],
               style_tags: ["Poster"],
               style_labels: ["海报"],
               scene_tags: ["Commerce", "Social"],
@@ -116,6 +123,7 @@ test("AI automatically prepares a gallery template before generation", {
   const draft = page.locator(".prompt-draft-content").last();
   await expect(draft).toContainText("海报排版系统");
   await expect(draft).toContainText("图谱 排版与海报");
+  await expect(draft).toContainText("案例 城市旅游推广海报");
   await expect(draft).toContainText("海报");
   await expect(draft).toContainText("商业 / 社媒");
   await expect(draft).toContainText("AI 匹配：交付物是商业海报");
