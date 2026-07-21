@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-from .models import GalleryCategory
+from .models import GalleryCategory, PromptTemplate
 
 _SKILL_REFERENCE_REVISION = "ecc9c5420c265f6677edc5f4d255bca02497ef71"
 _SKILL_CASE_REF = re.compile(r"^skill:(\d+)$")
@@ -61,13 +61,33 @@ class GalleryAtlas:
             direction_id=direction_id,
         )
 
-    def prompt(self, direction_id: str | None = None) -> str:
+    def for_template(self, template: PromptTemplate) -> tuple[str, ...]:
+        case_refs = list(template.case_refs) or [
+            f"awesome:{case_id}" for case_id in template.example_case_ids
+        ]
+        return tuple(
+            self.select(
+                None,
+                preferred=template.gallery_categories,
+                case_refs=case_refs,
+                direction_id=template.direction_id,
+            )
+        )
+
+    def prompt(
+        self,
+        direction_id: str | None = None,
+        *,
+        identifiers: Iterable[str] | None = None,
+    ) -> str:
+        selected = set(identifiers) if identifiers is not None else None
         return "\n".join(
             f"- {category.identifier}｜{category.label}｜"
             f"Case {category.case_start}-{category.case_end}｜"
             f"方向 {','.join(category.direction_ids)}｜语法 {category.prompt_schema}"
             for category in self.categories
             if self._compatible(category, direction_id)
+            and (selected is None or category.identifier in selected)
         )
 
     def metadata(self, identifiers: Iterable[str]) -> dict[str, list[str]]:

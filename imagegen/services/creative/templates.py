@@ -1,7 +1,7 @@
 from .models import PromptTemplate
 
 # Metadata is adapted from the public awesome-gpt-image-2 and GPT-Image2-Skill galleries.
-# Full case prompts stay in the external galleries so this application does not mirror them.
+# Full pinned case text lives in data/case_catalog.json; templates keep only reusable contracts.
 PROMPT_TEMPLATES = (
     PromptTemplate(
         "game-ui-gameplay-hud",

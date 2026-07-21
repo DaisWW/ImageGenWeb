@@ -10,6 +10,7 @@ COOKBOOK_GUIDE = (
     "https://github.com/openai/openai-cookbook/blob/main/examples/multimodal/"
     "image-gen-models-prompting-guide.ipynb"
 )
+COOKBOOK_EVALS = "https://github.com/openai/openai-cookbook/tree/main/examples/evals/imagegen_evals"
 PROMPT_CRAFT_GUIDANCE = """提示词工程规范来自 OpenAI Cookbook、awesome-gpt-image-2 和 GPT-Image2-Skill：
 1. 先用 Gallery Atlas 选择一个最接近的类别；只有明确混合任务才选择 2～3 类。复用类别语法和 Case 结构，不复制其中的主体、品牌、IP、文字或未经提供的参考图职责。
 2. 先写交付物与用途，再按画布/布局 → 主体/任务 → 环境/细节 → 约束组织；结构比形容词优先，不堆砌关键词。

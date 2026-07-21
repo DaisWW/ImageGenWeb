@@ -13,6 +13,8 @@ test-results
 __pycache__
 *.py[cod]
 data
+!imagegen/services/creative/data
+!imagegen/services/creative/data/**
 backups
 output
 outputs

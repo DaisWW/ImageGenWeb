@@ -1,3 +1,4 @@
+from .cases import CASE_CATALOG
 from .catalog import (
     catalog_tag_labels,
     creative_direction_dicts,
@@ -8,10 +9,13 @@ from .catalog import (
     normalize_template_id,
 )
 from .directions import CREATIVE_DIRECTIONS
+from .edits import EDIT_RECIPES
 from .gallery import GALLERY_ATLAS
 from .models import CreativeDirection, PromptTemplate
+from .routing import CREATIVE_ROUTER
 from .sources import (
     AWESOME_REPOSITORY,
+    COOKBOOK_EVALS,
     COOKBOOK_GUIDE,
     GALLERY_URL,
     PROMPT_CRAFT_GUIDANCE,
@@ -25,8 +29,12 @@ from .templates import PROMPT_TEMPLATES, SCENE_TAG_LABELS, STYLE_TAG_LABELS
 
 __all__ = [
     "AWESOME_REPOSITORY",
+    "CASE_CATALOG",
+    "COOKBOOK_EVALS",
     "COOKBOOK_GUIDE",
+    "CREATIVE_ROUTER",
     "CREATIVE_DIRECTIONS",
+    "EDIT_RECIPES",
     "CreativeDirection",
     "GALLERY_URL",
     "GALLERY_ATLAS",

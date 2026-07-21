@@ -47,3 +47,28 @@ class GalleryCategory:
     @property
     def case_ref(self) -> str:
         return f"skill:{self.case_start}-{self.case_end}"
+
+
+@dataclass(frozen=True, slots=True)
+class CreativeCase:
+    identifier: str
+    source: str
+    title: str
+    prompt: str
+    category: str
+    direction_id: str
+    source_url: str
+    gallery_category: str = ""
+    styles: tuple[str, ...] = ()
+    scenes: tuple[str, ...] = ()
+    attribution: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class EditRecipe:
+    identifier: str
+    label: str
+    description: str
+    prompt_schema: str
+    required_fields: tuple[str, ...]
+    hard_checks: tuple[str, ...]

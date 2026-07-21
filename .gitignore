@@ -14,5 +14,7 @@ __pycache__/
 *.db
 backups/
 data/
+!imagegen/services/creative/data/
+!imagegen/services/creative/data/**
 output/
 outputs/
