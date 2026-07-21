@@ -102,11 +102,19 @@ class PromptDraftWorkflow(ConversationSupport):
             )
         except OpenAIChatError as exc:
             self._raise_chat_error(workspace, model, "chat.prompt_draft", exc)
-        draft = review.finalize(
-            review.parse(result.content),
-            generation_mode=effective_mode,
-            reference_ids=[asset.id for asset in attachments],
-        )
+        try:
+            draft = review.finalize(
+                review.parse(result.content),
+                generation_mode=effective_mode,
+                reference_ids=[asset.id for asset in attachments],
+            )
+        except ServiceError as exc:
+            self._raise_chat_error(
+                workspace,
+                model,
+                "chat.prompt_draft",
+                self._structured_output_error(exc, result),
+            )
         generation_references = self._draft_references(draft, attachments)
         content, message_kind = review.message_content(draft)
         message = self._assistant_message(

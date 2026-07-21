@@ -247,6 +247,19 @@ class ConversationSupport:
             },
         )
 
+    @staticmethod
+    def _structured_output_error(
+        error: ServiceError,
+        result: ChatCompletion,
+    ) -> OpenAIChatError:
+        return OpenAIChatError(
+            str(error),
+            code="chat_invalid_response",
+            request_id=result.request_id,
+            elapsed_seconds=result.elapsed_seconds,
+            details={"validation": "structured_output_contract"},
+        )
+
     def _raise_chat_error(
         self,
         workspace: Workspace,

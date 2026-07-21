@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..errors import ServiceError
-from .common import normalize_canvas_request, parse_json_object
+from .common import normalize_canvas_request
 from .creative import (
     PROMPT_CRAFT_GUIDANCE,
     SOURCE_METADATA,
@@ -15,6 +15,7 @@ from .creative import (
     normalize_catalog_tags,
     normalize_template_id,
 )
+from .structured_output import parse_json_object
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,14 +65,18 @@ ready 时还必须完成一次交付前审查：
 - game_art 的角色设定表若包含白发、疤痕、单侧护甲或机械臂等非对称特征，production_spec.directional_identity_map 必须逐项写成“面板/视图：角色侧别 → 观看者侧别 → 可见特征”，覆盖 FRONT、SIDE、BACK 和 FACE；没有非对称特征时使用空数组。
 - hard_checks 只列能从最终图片判断的 2～6 个硬门槛，例如精确文字、主体数量、必要元素、参考图身份、非目标区域保持和禁止额外内容。
 - quality_hint 只能是 low、medium 或 high；它表示当前提示词首次试生成的建议，生成时沿用工作站保存的阶段。
-只输出一个 JSON 对象，不要 Markdown，不要额外说明，并严格使用以下两种格式之一：
+只输出一个 JSON 对象，不要 Markdown，不要额外说明。字段名称只能出现一次，字段类型必须与示例一致，不得用 null 代替字符串、数组或对象。严格使用以下两种格式之一：
 {{"status":"needs_clarification","questions":["问题 1","问题 2"],"creative_direction":"poster"}}
 {{"status":"ready","summary_zh":"中文需求确认","prompt":"最终生图提示词","canvas_request":{{"aspect_ratio":"16:9","width":1920,"height":1080}},"reference_usage":"generation","reference_reason":"用户要求保持参考图主体并修改背景。","creative_direction":"poster","template_id":"poster-layout-system","style_tags":["Poster"],"scene_tags":["Commerce"],"selection_reason":"交付物是商业海报，需明确版式与文字层级。","brief":{{"deliverable":"交付物","intended_use":"用途与受众","subject":"主体","composition":"构图与画幅","style":"媒介、材质、光线与配色","exact_text":["必须逐字出现的文字"],"reference_plan":[{{"image_number":1,"role":"职责","preserve":["保持项"],"change":["改变项"]}}],"preserve":["全局保持项"],"change":["改变项"],"avoid":["禁止项"]}},"production_spec":{{"platform":"平台","canvas":"画布","screen_type":"界面或交付物状态","safe_area":"安全区","hud_zones":["区域职责"],"panel_count":0,"panel_roles":["面板职责"],"identity_anchors":["身份锚点"],"camera_and_action":"镜头与动作","materials":["材质"],"palette_and_lighting":"色板与光线","exact_text":["必须逐字出现的文字"],"ui_constraints":["界面约束"],"consistency_rules":["一致性规则"]}},"hard_checks":["可从成品判断的硬门槛"],"quality_hint":"low"}}"""
 
     def parse(self, content: str) -> dict[str, Any]:
         payload = parse_json_object(content)
         if payload is not None:
-            parsed = self._clarification(payload) or self._ready(payload)
+            parser = {
+                "needs_clarification": self._clarification,
+                "ready": self._ready,
+            }.get(_text(payload.get("status"), 40).lower())
+            parsed = parser(payload) if parser else None
             if parsed is not None:
                 return parsed
         raise ServiceError("聊天模型未能返回有效提示词草稿，请重试")
@@ -121,8 +126,6 @@ ready 时还必须完成一次交付前审查：
         return f"需求确认\n{draft['summary_zh']}\n\n{label}\n{draft['prompt']}", "prompt_draft"
 
     def _clarification(self, payload: dict[str, Any]) -> dict[str, Any] | None:
-        if str(payload.get("status", "")).strip().lower() != "needs_clarification":
-            return None
         raw_questions = payload.get("questions")
         if not isinstance(raw_questions, list):
             return None
@@ -137,15 +140,13 @@ ready 时还必须完成一次交付前审查：
                 payload.get("creative_direction"), self.creative_direction_id
             ),
             "reference_usage": _reference_usage(payload.get("reference_usage")),
-            "reference_reason": str(payload.get("reference_reason", "")).strip()[:500],
+            "reference_reason": _text(payload.get("reference_reason"), 500),
             "sources": [dict(source) for source in SOURCE_METADATA],
         }
 
     def _ready(self, payload: dict[str, Any]) -> dict[str, Any] | None:
-        if str(payload.get("status", "")).strip().lower() != "ready":
-            return None
-        summary = str(payload.get("summary_zh", "")).strip()
-        prompt = str(payload.get("prompt", "")).strip()
+        summary = _text(payload.get("summary_zh"), self.max_prompt_characters)
+        prompt = _text(payload.get("prompt"), self.max_prompt_characters)
         if not summary or not prompt:
             return None
         direction_id = _direction_id(payload.get("creative_direction"), self.creative_direction_id)
@@ -155,13 +156,13 @@ ready 时还必须完成一次交付前审查：
         direction_checks = list(direction.hard_checks) if direction else []
         return {
             "status": "ready",
-            "summary_zh": summary[: self.max_prompt_characters],
-            "prompt": prompt[: self.max_prompt_characters],
+            "summary_zh": summary,
+            "prompt": prompt,
             "canvas_request": normalize_canvas_request(payload.get("canvas_request")),
             "language": "en" if self.translate_to_english else "zh",
             "creative_direction": direction_id,
             "reference_usage": _reference_usage(payload.get("reference_usage")),
-            "reference_reason": str(payload.get("reference_reason", "")).strip()[:500],
+            "reference_reason": _text(payload.get("reference_reason"), 500),
             **catalog,
             "brief": _brief(payload.get("brief")),
             "production_spec": _production_spec(payload.get("production_spec")),
@@ -217,7 +218,7 @@ def _catalog_selection(payload: dict[str, Any], direction_id: str) -> dict[str, 
         "style_labels": catalog_tag_labels(style_tags),
         "scene_tags": scene_tags,
         "scene_labels": catalog_tag_labels(scene_tags, scene=True),
-        "selection_reason": str(payload.get("selection_reason", "")).strip()[:500],
+        "selection_reason": _text(payload.get("selection_reason"), 500),
     }
 
 
@@ -229,6 +230,10 @@ def _quality_hint(value: Any) -> str:
 def _reference_usage(value: Any) -> str:
     normalized = str(value or "").strip().lower()
     return normalized if normalized in {"generation", "analysis_only", "none"} else ""
+
+
+def _text(value: Any, maximum: int) -> str:
+    return value.strip()[:maximum] if isinstance(value, str) else ""
 
 
 def _string_list(value: Any, limit: int, maximum: int) -> list[str]:
@@ -260,7 +265,7 @@ def _merge_hard_checks(value: Any, defaults: list[str]) -> list[str]:
 def _brief(value: Any) -> dict[str, Any]:
     raw = value if isinstance(value, dict) else {}
     brief = {
-        key: str(raw.get(key, "")).strip()[:500]
+        key: _text(raw.get(key), 500)
         for key in ("deliverable", "intended_use", "subject", "composition", "style")
     }
     for key in ("exact_text", "preserve", "change", "avoid"):
@@ -278,7 +283,7 @@ def _brief(value: Any) -> dict[str, Any]:
             reference_plan.append(
                 {
                     "image_number": image_number,
-                    "role": str(item.get("role", "")).strip()[:300],
+                    "role": _text(item.get("role"), 300),
                     "preserve": _string_list(item.get("preserve"), 8, 300),
                     "change": _string_list(item.get("change"), 8, 300),
                 }
@@ -346,8 +351,7 @@ def _production_spec(value: Any) -> dict[str, Any]:
     )
     result: dict[str, Any] = {}
     for key in text_keys:
-        raw_text = raw.get(key)
-        text = raw_text.strip()[:500] if isinstance(raw_text, str) else ""
+        text = _text(raw.get(key), 500)
         if text:
             result[key] = text
     for key in list_keys:

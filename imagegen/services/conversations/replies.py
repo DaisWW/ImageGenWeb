@@ -290,12 +290,7 @@ class ConversationReplyService(ConversationSupport):
                 workspace,
                 model,
                 user_message,
-                OpenAIChatError(
-                    str(exc),
-                    code="chat_invalid_response",
-                    request_id=result.request_id,
-                    elapsed_seconds=result.elapsed_seconds,
-                ),
+                self._structured_output_error(exc, result),
                 operation=operation,
             )
         reply_content, message_kind = review.message_content(draft)

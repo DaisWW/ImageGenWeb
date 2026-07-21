@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from imagegen.extensions import db
 from imagegen.models import (
     ConversationMessage,
+    RuntimeLog,
 )
 from imagegen.services import ServiceError
 from imagegen.services.creative import (
@@ -197,6 +198,76 @@ class TestPromptDrafts(PlatformTestCase):
             {"width": 1920, "height": 1080, "aspect_ratio": "16:9"},
         )
         self.assertIn("canvas_request", self.chat_client.calls[-1]["system"])
+
+    def test_prompt_draft_rejects_invalid_structured_contract_and_records_it(self):
+        workspace = self.create_workspace("无效结构化输出")
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="生成一张运动鞋海报",
+        )
+        self.chat_client.prompt_draft_content = json.dumps(
+            {
+                "status": "ready",
+                "summary_zh": None,
+                "prompt": ["private-invalid-prompt"],
+            }
+        )
+
+        with self.assertRaises(ServiceError) as raised:
+            self.services.conversations.create_prompt_draft(
+                workspace,
+                model_id="test-chat",
+                translate_to_english=False,
+            )
+
+        self.assertEqual(raised.exception.code, "chat_invalid_response")
+        self.assertEqual(raised.exception.status_code, 502)
+        entry = db.session.get(RuntimeLog, raised.exception.error_id)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.event, "chat.prompt_draft")
+        self.assertEqual(entry.error_code, "chat_invalid_response")
+        self.assertEqual(
+            entry.details["diagnostics"]["validation"],
+            "structured_output_contract",
+        )
+        self.assertNotIn("private-invalid-prompt", json.dumps(entry.details))
+
+    def test_prompt_draft_does_not_stringify_invalid_optional_text(self):
+        workspace = self.create_workspace("可选字段类型")
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="生成一张运动鞋海报",
+        )
+        self.chat_client.prompt_draft_content = json.dumps(
+            {
+                "status": "ready",
+                "summary_zh": "运动鞋海报",
+                "prompt": "centered product poster",
+                "reference_reason": None,
+                "selection_reason": {"invalid": "value"},
+                "brief": {
+                    "deliverable": None,
+                    "subject": ["shoe"],
+                    "composition": " centered ",
+                    "reference_plan": [{"image_number": 1, "role": None}],
+                },
+            }
+        )
+
+        draft = self.services.conversations.create_prompt_draft(
+            workspace,
+            model_id="test-chat",
+            translate_to_english=False,
+        )
+
+        self.assertEqual(draft.payload["reference_reason"], "")
+        self.assertEqual(draft.payload["selection_reason"], "")
+        self.assertEqual(draft.payload["brief"]["deliverable"], "")
+        self.assertEqual(draft.payload["brief"]["subject"], "")
+        self.assertEqual(draft.payload["brief"]["composition"], "centered")
+        self.assertEqual(draft.payload["brief"]["reference_plan"][0]["role"], "")
 
     def test_game_art_draft_preserves_directional_identity_map(self):
         workspace = self.create_workspace("角色设定表")

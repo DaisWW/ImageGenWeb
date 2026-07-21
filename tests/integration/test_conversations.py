@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from imagegen.extensions import db
 from imagegen.models import (
+    RuntimeLog,
     Workspace,
     utcnow,
 )
@@ -52,6 +53,32 @@ class TestConversations(PlatformTestCase):
         self.assertEqual(self.chat_client.calls[0]["reasoning_effort"], "medium")
         self.assertIn(
             "本次调用同时完成需求确认和最终提示词整理", self.chat_client.calls[0]["system"]
+        )
+
+    def test_chat_turn_records_invalid_structured_output_as_provider_error(self):
+        workspace = self.create_workspace("对话结构化错误")
+        self.chat_client.reply_content = json.dumps(
+            {
+                "status": "ready",
+                "summary_zh": None,
+                "prompt": ["invalid"],
+            }
+        )
+
+        _user_message, assistant_message = self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="生成一张新品海报",
+        )
+
+        self.assertEqual(assistant_message.kind, "error")
+        self.assertEqual(assistant_message.payload["code"], "chat_invalid_response")
+        entry = db.session.get(RuntimeLog, assistant_message.payload["error_id"])
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.event, "chat.reply")
+        self.assertEqual(
+            entry.details["diagnostics"]["validation"],
+            "structured_output_contract",
         )
 
     def test_chat_semantically_decides_whether_attachments_are_generation_references(self):
