@@ -56,6 +56,12 @@ class GenerationService:
         references = self.validator.load_references(workspace, request.reference_ids)
         self.validator.validate_references(channel, request.mode, references)
         requested_count = request.batch_count
+        item_prompts = tuple(
+            str(item).strip()
+            for item in (
+                request.item_prompts or tuple(request.prompt for _ in range(requested_count))
+            )
+        )
 
         user = self.billing.lock_user(user_id)
         if not user.is_active:
@@ -116,6 +122,7 @@ class GenerationService:
                     user_id=user.id,
                     channel_id=channel.identifier,
                     position=position,
+                    prompt=item_prompts[position],
                     status="queued",
                     charged_rmb=money(0),
                 )
@@ -135,6 +142,7 @@ class GenerationService:
                 "generation_stage": workflow["generation_stage"],
                 "prompt_draft_id": workflow["prompt_draft_id"],
                 "creative_direction_id": workflow["creative_direction_id"],
+                "generation_strategy": workflow.get("generation_strategy", "sample"),
             },
             self.settings.runtime(),
         )

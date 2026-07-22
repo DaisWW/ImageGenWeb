@@ -11,7 +11,7 @@ from .catalog import (
 from .directions import CREATIVE_DIRECTIONS
 from .edits import EDIT_RECIPES
 from .gallery import GALLERY_ATLAS
-from .models import CreativeDirection, PromptTemplate
+from .models import CreativeDirection, CreativeRetrieval, PromptTemplate, TemplateRoute
 from .routing import CREATIVE_ROUTER
 from .sources import (
     AWESOME_REPOSITORY,
@@ -36,6 +36,8 @@ __all__ = [
     "CREATIVE_DIRECTIONS",
     "EDIT_RECIPES",
     "CreativeDirection",
+    "CreativeRetrieval",
+    "TemplateRoute",
     "GALLERY_URL",
     "GALLERY_ATLAS",
     "PROMPT_CRAFT_GUIDANCE",

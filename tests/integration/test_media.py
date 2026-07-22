@@ -4,6 +4,7 @@ import io
 
 from PIL import Image
 
+from imagegen.extensions import db
 from tests.support.platform import (
     FakeProviderFactory,
     PlatformTestCase,
@@ -120,3 +121,35 @@ class TestMedia(PlatformTestCase):
             self.assertEqual(reused_again.json["asset"]["id"], reused_asset["id"])
         finally:
             self.context.push()
+
+    def test_generated_image_can_be_set_as_series_anchor(self):
+        workspace = self.create_workspace("系列基准接口")
+        contract = {
+            "identity_anchors": ["同一角色"],
+            "visual_language": ["低饱和电影感"],
+            "must_preserve": ["服装轮廓"],
+            "allowed_changes": ["动作和场景"],
+        }
+        job = self.submit(workspace, workflow={"series_contract": contract})
+        worker = self.create_worker()
+        worker.providers = FakeProviderFactory()
+        channel = self.app.extensions["channel_registry"].get("test")
+        self.assertTrue(worker._claim(job.items[0].id, channel))
+        worker._process_item(job.items[0].id)
+        db.session.expire_all()
+
+        client = self.user_client()
+        item = client.get(f"/api/generations/{job.id}").json["job"]["items"][0]
+        self.assertEqual(item["status"], "succeeded", item)
+        response = client.post(f"/api/generation-items/{item['id']}/series-anchor")
+
+        self.assertEqual(response.status_code, 201, response.get_data(as_text=True))
+        self.assertEqual(response.json["workspace"]["settings"]["generation_strategy"], "series")
+        self.assertEqual(
+            response.json["workspace"]["settings"]["series_anchor"]["asset_id"],
+            response.json["asset"]["id"],
+        )
+        self.assertEqual(
+            response.json["workspace"]["settings"]["series_anchor"]["contract"],
+            contract,
+        )

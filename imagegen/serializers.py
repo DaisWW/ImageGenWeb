@@ -224,6 +224,7 @@ def item_dict(item: GenerationItem, *, now: datetime, admin: bool = False) -> di
     result = {
         "id": item.id,
         "position": item.position,
+        "prompt": item.prompt or item.job.prompt,
         "status": item.status,
         "progress_percent": progress,
         "started_at": _iso(item.started_at),

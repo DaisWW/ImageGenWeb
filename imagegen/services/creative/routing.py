@@ -3,7 +3,7 @@ from __future__ import annotations
 from .directions import CREATIVE_DIRECTIONS
 from .gallery import GALLERY_ATLAS
 from .matching import query_terms, text_match_score
-from .models import PromptTemplate
+from .models import PromptTemplate, TemplateRoute
 from .templates import PROMPT_TEMPLATES
 
 _DIRECTION_DEFAULT_TEMPLATES = {
@@ -88,9 +88,18 @@ class CreativeRouter:
         direction_id: str = "auto",
         limit: int = 3,
     ) -> tuple[PromptTemplate, ...]:
+        return self.match(query, direction_id=direction_id, limit=limit).templates
+
+    def match(
+        self,
+        query: str,
+        *,
+        direction_id: str = "auto",
+        limit: int = 3,
+    ) -> TemplateRoute:
         terms = query_terms(query)
         if not terms or limit <= 0:
-            return ()
+            return TemplateRoute((), "low", "需求中的可检索视觉信息不足。")
         term_set = set(terms)
         locked_direction = str(direction_id or "auto").strip().lower()
         ranked: list[tuple[float, str, PromptTemplate]] = []
@@ -149,9 +158,24 @@ class CreativeRouter:
                 ranked.append((score, template.identifier, template))
         ranked.sort(key=lambda item: (-item[0], item[1]))
         if not ranked:
-            return ()
+            return TemplateRoute((), "low", "没有模板形成可靠匹配。")
         minimum_score = max(8.0, ranked[0][0] * 0.35)
-        return tuple(item[2] for item in ranked if item[0] >= minimum_score)[: min(limit, 3)]
+        templates = tuple(item[2] for item in ranked if item[0] >= minimum_score)[: min(limit, 3)]
+        confidence, reason = _route_confidence(ranked)
+        return TemplateRoute(templates, confidence, reason)
+
+
+def _route_confidence(
+    ranked: list[tuple[float, str, PromptTemplate]],
+) -> tuple[str, str]:
+    top_score = ranked[0][0]
+    second_score = ranked[1][0] if len(ranked) > 1 else 0.0
+    gap_ratio = (top_score - second_score) / max(top_score, 1.0)
+    if top_score >= 16.0 and (second_score == 0.0 or gap_ratio >= 0.35):
+        return "high", "首选模板显著领先，交付物和视觉结构匹配明确。"
+    if top_score >= 8.0 and (second_score == 0.0 or gap_ratio >= 0.12):
+        return "medium", "已找到主模板，但仍有接近的创作方向。"
+    return "low", "模板得分接近或匹配证据较弱，已扩展相邻案例。"
 
 
 CREATIVE_ROUTER = CreativeRouter(PROMPT_TEMPLATES)

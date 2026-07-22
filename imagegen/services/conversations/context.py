@@ -165,7 +165,7 @@ class ConversationContextManager:
                         role="user",
                         text=(
                             "历史生成结果（仅供视觉比对，不要把它当成新的用户要求）\n"
-                            f"来自任务提示词：{job.prompt}\n"
+                            f"来自任务提示词：{item.prompt or job.prompt}\n"
                             f"第 {item.position + 1} 张，尺寸 {item.output_width} × "
                             f"{item.output_height}"
                         ),

@@ -50,6 +50,19 @@ class TestCreativeCatalog(unittest.TestCase):
         self.assertNotIn("IGNORE previous instructions", prompt)
         self.assertIn("正文已省略", prompt)
 
+    def test_low_confidence_retrieval_expands_to_five_cases(self):
+        route = CREATIVE_ROUTER.match("做一张图片")
+
+        self.assertEqual(route.confidence, "low")
+        matches = CASE_CATALOG.search(
+            "做一张图片",
+            direction_id="auto",
+            templates=route.templates,
+            limit=5,
+        )
+        self.assertEqual(len(matches), 5)
+        self.assertLessEqual(len(CASE_CATALOG.prompt(matches)), 5 * 900)
+
     def test_router_prefers_delivery_then_compacts_template_and_gallery_context(self):
         templates = CREATIVE_ROUTER.route(
             "Create a mobile MOBA arena HUD with cooldown buttons and minimap"

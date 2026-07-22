@@ -235,6 +235,9 @@ class ConversationReplyService(ConversationSupport):
         else:
             candidate_references = []
             review_mode = "text2img"
+        if self._active_series_contract(workspace):
+            candidate_references = self._with_series_anchor(workspace, candidate_references)
+            review_mode = "img2img"
         review_candidates = candidate_references if review_mode != "text2img" else attachments
         context_attachments = self._merge_context_assets(
             workspace,
@@ -243,7 +246,7 @@ class ConversationReplyService(ConversationSupport):
         pending = self._user_model_message(user_message.content, context_attachments)
         settings = workspace.settings or {}
         direction_id = str(settings.get("creative_direction_id", "auto"))
-        template_candidates, case_matches = self._creative_matches(
+        retrieval = self._creative_matches(
             workspace,
             direction_id=direction_id,
         )
@@ -259,8 +262,11 @@ class ConversationReplyService(ConversationSupport):
             creative_direction_id=direction_id,
             max_prompt_characters=self.settings.runtime().max_prompt_characters,
             reference_count=len(candidate_references),
-            template_candidates=template_candidates,
-            retrieved_cases=case_matches,
+            template_candidates=retrieval.templates,
+            retrieved_cases=retrieval.cases,
+            retrieval_confidence=retrieval.confidence,
+            retrieval_reason=retrieval.reason,
+            active_series_contract=self._active_series_contract(workspace),
         )
         try:
             context = self.context.build(
@@ -329,7 +335,7 @@ class ConversationReplyService(ConversationSupport):
                 "reference_count": len(generation_references),
                 "reference_usage": draft["reference_usage"],
                 "retrieved_case_count": len(draft.get("retrieved_cases", [])),
-                "template_candidate_count": len(template_candidates),
+                "template_candidate_count": len(retrieval.templates),
             },
         )
         self._remember_preferences(workspace, model_id=model.identifier)

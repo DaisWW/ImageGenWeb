@@ -321,7 +321,7 @@ class GenerationWorker:
                 result = adapter.generate(
                     channel,
                     GenerationRequest(
-                        prompt=item.job.prompt,
+                        prompt=item.prompt or item.job.prompt,
                         model=item.job.model,
                         size=item.job.size,
                         quality=item.job.quality,

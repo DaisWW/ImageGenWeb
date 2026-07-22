@@ -73,10 +73,13 @@ class PromptDraftWorkflow(ConversationSupport):
             reference_ids=reference_ids,
             creative_direction_id=creative_direction_id,
         )
+        if self._active_series_contract(workspace):
+            attachments = self._with_series_anchor(workspace, attachments)
+            effective_mode = "img2img"
         pending = self._user_model_message(
             "请基于以上会话整理当前已确认的最终生图需求。", attachments
         )
-        template_candidates, case_matches = self._creative_matches(
+        retrieval = self._creative_matches(
             workspace,
             direction_id=creative_direction_id,
         )
@@ -91,8 +94,11 @@ class PromptDraftWorkflow(ConversationSupport):
             creative_direction_id=creative_direction_id,
             max_prompt_characters=self.settings.runtime().max_prompt_characters,
             reference_count=len(attachments),
-            template_candidates=template_candidates,
-            retrieved_cases=case_matches,
+            template_candidates=retrieval.templates,
+            retrieved_cases=retrieval.cases,
+            retrieval_confidence=retrieval.confidence,
+            retrieval_reason=retrieval.reason,
+            active_series_contract=self._active_series_contract(workspace),
         )
         try:
             context = self.context.build(
@@ -156,7 +162,7 @@ class PromptDraftWorkflow(ConversationSupport):
                 "template_id": draft.get("template_id", "custom"),
                 "edit_recipe_id": draft.get("edit_recipe_id", ""),
                 "retrieved_case_count": len(draft.get("retrieved_cases", [])),
-                "template_candidate_count": len(template_candidates),
+                "template_candidate_count": len(retrieval.templates),
             },
         )
         self._remember_preferences(

@@ -65,6 +65,21 @@ class CreativeCase:
 
 
 @dataclass(frozen=True, slots=True)
+class TemplateRoute:
+    templates: tuple[PromptTemplate, ...]
+    confidence: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class CreativeRetrieval:
+    templates: tuple[PromptTemplate, ...]
+    cases: tuple[CreativeCase, ...]
+    confidence: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class EditRecipe:
     identifier: str
     label: str

@@ -11,7 +11,7 @@ imagegen/
   app.py              Flask 应用工厂和进程级钩子
   config/             已校验、支持热刷新的渠道与聊天配置
   integrations/       兼容 OpenAI 的 HTTP 客户端和图片适配器
-  services/           业务操作和事务边界
+  services/           业务操作和事务边界（含创作检索、提示词草稿和生成计划）
   web/                Flask 路由、鉴权和 HTTP 序列化
   models.py           SQLAlchemy 持久化模型
   serializers.py      数据库模型到公开 API 载荷的转换
@@ -50,6 +50,7 @@ integrations -> config 中的值对象
 - 图片文件先写入，再提交对应数据库记录；回滚时删除文件。
 - 删除与保留期清理先删除文件，再提交元数据删除；失败时保留元数据供下一次重试。
 - 运行配置作为带版本文档保存，并使用旧值做原子版本校验。
+- 生成计划在提交请求内构造，不新增临时表：每个 `GenerationItem` 持久化最终实际提示词，`sample`、`explore` 和 `series` 的策略与契约只作为任务工作流元数据保存，便于重试、验收和审计。
 
 ## 扩展方式
 

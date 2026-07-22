@@ -20,7 +20,7 @@ from ...models import (
 )
 from ...storage import ImageStorage
 from ..creative import CASE_CATALOG, CREATIVE_ROUTER
-from ..creative.models import CreativeCase, PromptTemplate
+from ..creative.models import CreativeRetrieval
 from ..runtime_logs import RuntimeLogService
 from ..settings import SystemSettingsService
 from .context import ConversationContextManager
@@ -84,15 +84,69 @@ class ConversationSupport:
         workspace: Workspace,
         *,
         direction_id: str,
-    ) -> tuple[tuple[PromptTemplate, ...], tuple[CreativeCase, ...]]:
+    ) -> CreativeRetrieval:
         query = self._creative_query(workspace)
-        templates = CREATIVE_ROUTER.route(query, direction_id=direction_id)
+        route = CREATIVE_ROUTER.match(query, direction_id=direction_id)
+        case_limit = {"high": 3, "medium": 4, "low": 5}[route.confidence]
         cases = CASE_CATALOG.search(
             query,
             direction_id=direction_id,
-            templates=templates,
+            templates=route.templates,
+            limit=case_limit,
         )
-        return templates, cases
+        return CreativeRetrieval(
+            templates=route.templates,
+            cases=cases,
+            confidence=route.confidence,
+            reason=route.reason,
+        )
+
+    def _active_series_contract(self, workspace: Workspace) -> dict[str, Any]:
+        settings = workspace.settings or {}
+        if str(settings.get("generation_strategy", "sample")).lower() != "series":
+            return {}
+        anchor = settings.get("series_anchor")
+        contract = anchor.get("contract") if isinstance(anchor, dict) else None
+        asset_id = (
+            str(anchor.get("asset_id", "")).strip().lower() if isinstance(anchor, dict) else ""
+        )
+        if (
+            len(asset_id) != 32
+            or not isinstance(contract, dict)
+            or not contract
+            or db.session.scalar(
+                select(Asset.id).where(
+                    Asset.id == asset_id,
+                    Asset.workspace_id == workspace.id,
+                    Asset.deleted_at.is_(None),
+                )
+            )
+            is None
+        ):
+            raise ServiceError(
+                "系列基准已失效，请重新选择一张生成结果",
+                code="series_anchor_invalid",
+                status_code=409,
+            )
+        return contract
+
+    def _series_anchor_asset(self, workspace: Workspace) -> Asset | None:
+        if not self._active_series_contract(workspace):
+            return None
+        anchor = (workspace.settings or {}).get("series_anchor")
+        asset_id = str(anchor.get("asset_id", "")) if isinstance(anchor, dict) else ""
+        if not asset_id:
+            return None
+        return self._load_assets(workspace, (asset_id,))[0]
+
+    def _with_series_anchor(self, workspace: Workspace, assets: list[Asset]) -> list[Asset]:
+        anchor = self._series_anchor_asset(workspace)
+        if anchor is None:
+            return assets
+        return self._merge_context_assets(
+            workspace,
+            [anchor, *[asset for asset in assets if asset.id != anchor.id]],
+        )
 
     @staticmethod
     def _draft_references(draft: dict[str, Any], candidates: list[Asset]) -> list[Asset]:

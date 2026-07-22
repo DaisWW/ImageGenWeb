@@ -35,6 +35,37 @@ def reuse_generation_item(item_id: str):
     if not item.output_path:
         raise ServiceError("生成结果不存在", status_code=404)
     workspace = owned_workspace(item.job.workspace_id)
+    asset, created = _generation_item_asset(item, workspace)
+    return jsonify(asset=workspace_dict(workspace, [asset])["assets"][0]), (201 if created else 200)
+
+
+@web.post("/api/generation-items/<item_id>/series-anchor")
+@login_required
+def set_generation_series_anchor(item_id: str):
+    item = accessible_item(item_id)
+    if not item.output_path:
+        raise ServiceError("生成结果不存在", status_code=404)
+    workspace = owned_workspace(item.job.workspace_id)
+    workflow = item.job.workflow if isinstance(item.job.workflow, dict) else {}
+    contract = workflow.get("series_contract")
+    if not isinstance(contract, dict) or not contract:
+        raise ServiceError(
+            "该结果没有可复用的系列制作契约，请先使用 AI 整理提示词", status_code=409
+        )
+    asset, _created = _generation_item_asset(item, workspace)
+    workspace = services().workspaces.set_series_anchor(
+        workspace,
+        asset_id=asset.id,
+        source_item_id=item.id,
+        contract=contract,
+    )
+    return jsonify(
+        asset=workspace_dict(workspace, [asset])["assets"][0],
+        workspace=workspace_dict(workspace),
+    ), 201
+
+
+def _generation_item_asset(item, workspace):
     extension = image_extension(item.output_mime_type)
     asset_name = f"result_{item.id}.{extension}"
     existing = db.session.scalar(
@@ -48,7 +79,7 @@ def reuse_generation_item(item_id: str):
         .limit(1)
     )
     if existing is not None:
-        return jsonify(asset=workspace_dict(workspace, [existing])["assets"][0])
+        return existing, False
     assets = services().workspaces.add_assets(
         workspace,
         [
@@ -58,7 +89,7 @@ def reuse_generation_item(item_id: str):
             )
         ],
     )
-    return jsonify(asset=workspace_dict(workspace, assets)["assets"][0]), 201
+    return assets[0], True
 
 
 @web.post("/api/generation-items/<item_id>/review")
@@ -79,7 +110,9 @@ def analyze_generation_item_slices(item_id: str):
     item = accessible_item(item_id)
     if not item.output_path:
         raise ServiceError("生成结果不存在", status_code=404)
-    analysis = analyze_image(storage().read(item.output_path), prompt=item.job.prompt)
+    analysis = analyze_image(
+        storage().read(item.output_path), prompt=item.prompt or item.job.prompt
+    )
     return jsonify(analysis=analysis)
 
 

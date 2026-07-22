@@ -63,6 +63,34 @@ class TestWorker(PlatformTestCase):
         self.assertEqual(runtime_log.provider_id, "test")
         self.assertNotIn(job.prompt, json.dumps(runtime_log.details, ensure_ascii=False))
 
+    def test_worker_sends_each_item_effective_prompt(self):
+        workspace = self.create_workspace("逐图提示词")
+        job = self.submit(
+            workspace,
+            batch_count=2,
+            item_prompts=("方案 A：中心构图", "方案 B：非对称留白"),
+        )
+        worker = self.create_worker()
+        worker.providers = FakeProviderFactory()
+        channel = self.app.extensions["channel_registry"].get("test")
+        for item in job.items:
+            self.assertTrue(worker._claim(item.id, channel))
+            worker._process_item(item.id)
+
+        self.assertEqual(
+            [request.prompt for request in worker.providers.adapter.requests],
+            ["方案 A：中心构图", "方案 B：非对称留白"],
+        )
+        db.session.expire_all()
+        saved = db.session.get(GenerationJob, job.id)
+        self.assertEqual(
+            [item.prompt for item in saved.items],
+            [
+                "方案 A：中心构图",
+                "方案 B：非对称留白",
+            ],
+        )
+
     def test_worker_serializes_concurrent_batch_settlement(self):
         workspace = self.create_workspace()
         job = self.submit(workspace, batch_count=2)

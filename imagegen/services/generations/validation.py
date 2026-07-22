@@ -56,6 +56,14 @@ class GenerationRequestValidator:
             raise ServiceError("压缩质量必须在 0 到 100 之间")
         if not 1 <= request.batch_count <= runtime.max_batch_images:
             raise ServiceError(f"单批生成张数必须在 1 到 {runtime.max_batch_images} 之间")
+        if request.item_prompts:
+            if len(request.item_prompts) != request.batch_count:
+                raise ServiceError("逐图提示词数量必须与生成张数一致")
+            if any(
+                not str(item).strip() or len(str(item).strip()) > runtime.max_prompt_characters
+                for item in request.item_prompts
+            ):
+                raise ServiceError("逐图提示词长度无效")
         return normalized_size
 
     def validate_references(self, channel: Channel, mode: str, references: list[Asset]) -> None:

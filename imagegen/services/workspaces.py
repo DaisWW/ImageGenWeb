@@ -305,7 +305,63 @@ class WorkspaceService:
         else:
             self.storage.delete(asset.storage_path)
             db.session.delete(asset)
+        settings = dict(workspace.settings or {})
+        reference_ids = settings.get("reference_ids")
+        if isinstance(reference_ids, list):
+            settings["reference_ids"] = [
+                item for item in reference_ids if str(item).strip().lower() != asset.id
+            ]
+        anchor = settings.get("series_anchor")
+        if isinstance(anchor, dict) and str(anchor.get("asset_id", "")).lower() == asset.id:
+            settings["generation_strategy"] = "sample"
+            settings["series_anchor"] = {}
+            if settings.get("mode") == "img2img" and not settings.get("reference_ids"):
+                settings["mode"] = "text2img"
+        workspace.settings = sanitize_workspace_settings(settings, self.settings.runtime())
+        workspace.updated_at = utcnow()
         db.session.commit()
+
+    def set_series_anchor(
+        self,
+        workspace: Workspace,
+        *,
+        asset_id: str,
+        source_item_id: str,
+        contract: dict[str, Any],
+    ) -> Workspace:
+        asset_id = str(asset_id).strip().lower()
+        asset = db.session.scalar(
+            select(Asset).where(
+                Asset.id == asset_id,
+                Asset.workspace_id == workspace.id,
+                Asset.deleted_at.is_(None),
+            )
+        )
+        if asset is None:
+            raise ServiceError("系列基准图片不存在", status_code=404)
+        if not isinstance(contract, dict) or not contract:
+            raise ServiceError("该结果没有可复用的系列制作契约", status_code=409)
+        sanitized = sanitize_workspace_settings(
+            {
+                **(workspace.settings or {}),
+                "generation_strategy": "series",
+                "series_anchor": {
+                    "asset_id": asset.id,
+                    "source_item_id": str(source_item_id).strip().lower()[:32],
+                    "contract": contract,
+                },
+                "prompt_draft_id": "",
+                "mode": "img2img",
+                "reference_ids": [asset.id],
+            },
+            self.settings.runtime(),
+        )
+        if sanitized.get("generation_strategy") != "series" or not sanitized.get("series_anchor"):
+            raise ServiceError("该结果没有可复用的系列制作契约", status_code=409)
+        workspace.settings = sanitized
+        workspace.updated_at = utcnow()
+        db.session.commit()
+        return workspace
 
     def delete(self, workspace: Workspace) -> None:
         user, locked_workspace, jobs, items = self._lock_workspace_records(workspace)
@@ -357,6 +413,11 @@ class WorkspaceService:
             db.session.delete(asset)
         settings = dict(locked_workspace.settings or {})
         settings["prompt"] = ""
+        settings["prompt_draft_id"] = ""
+        settings["reference_ids"] = []
+        settings["mode"] = "text2img"
+        settings["generation_strategy"] = "sample"
+        settings["series_anchor"] = {}
         locked_workspace.settings = sanitize_workspace_settings(settings, self.settings.runtime())
         locked_workspace.updated_at = utcnow()
         db.session.commit()

@@ -10,6 +10,8 @@ from .models import CreativeCase, PromptTemplate
 
 _DATA_PATH = Path(__file__).with_name("data") / "case_catalog.json"
 _SPACE_PATTERN = re.compile(r"\s+")
+MAX_RETRIEVED_CASES = 5
+PRIMARY_CASE_COUNT = 3
 _PROMPT_INJECTION_PATTERN = re.compile(
     r"\b(?:ignore|disregard)\s+(?:all\s+|any\s+)?(?:previous|prior|above)\b"
     r"|\bsystem\s+prompt\b|\bdeveloper\s+message\b"
@@ -108,7 +110,7 @@ class CaseCatalog:
                     continue
                 seen_prompts.add(prompt_key)
                 result.append(case)
-                if len(result) >= min(limit, 3):
+                if len(result) >= min(limit, MAX_RETRIEVED_CASES):
                     return tuple(result)
         return tuple(result)
 
@@ -117,8 +119,11 @@ class CaseCatalog:
         if not cases:
             return ""
         rows = []
-        for case in cases[:3]:
-            excerpt = _case_excerpt(case.prompt)
+        for index, case in enumerate(cases[:MAX_RETRIEVED_CASES]):
+            excerpt = _case_excerpt(
+                case.prompt,
+                maximum=800 if index < PRIMARY_CASE_COUNT else 300,
+            )
             tags = ", ".join((*case.styles[:2], *case.scenes[:2]))
             rows.append(
                 f"- {case.identifier}｜{case.title}｜{case.category}"
@@ -137,7 +142,7 @@ class CaseCatalog:
                 "source_url": case.source_url,
                 "category": case.category,
             }
-            for case in cases[:3]
+            for case in cases[:MAX_RETRIEVED_CASES]
         ]
 
     def _load(self) -> None:
@@ -181,8 +186,8 @@ def _case_directions(case: CreativeCase) -> set[str]:
 CASE_CATALOG = CaseCatalog()
 
 
-def _case_excerpt(value: str) -> str:
+def _case_excerpt(value: str, *, maximum: int = 800) -> str:
     excerpt = _SPACE_PATTERN.sub(" ", value).strip()
     if _PROMPT_INJECTION_PATTERN.search(excerpt):
         return "[案例包含指令型演示文字，正文已省略；仅参考标题、类别和交付物结构。]"
-    return excerpt[:800]
+    return excerpt[:maximum]

@@ -22,6 +22,7 @@ class SubmitGeneration:
     compression: int
     batch_count: int
     reference_ids: tuple[str, ...]
+    item_prompts: tuple[str, ...] = ()
     quality: str = "high"
     workflow: dict[str, object] = field(default_factory=dict)
     transparent_background: bool = False
@@ -41,6 +42,7 @@ class GenerationWorkflow:
         draft: dict[str, object] | None,
         creative_direction_id: str,
         canvas_resolution: str = "",
+        plan_metadata: dict[str, object] | None = None,
     ) -> GenerationWorkflow:
         normalized_stage = str(stage).strip().lower()
         if normalized_stage not in GENERATION_STAGE_QUALITY:
@@ -75,6 +77,10 @@ class GenerationWorkflow:
             "gallery_case_ranges": draft.get("gallery_case_ranges", []) if draft else [],
             "gallery_category_urls": draft.get("gallery_category_urls", []) if draft else [],
             "retrieved_cases": draft.get("retrieved_cases", []) if draft else [],
+            "retrieval_confidence": (
+                str(draft.get("retrieval_confidence", "low")) if draft else "low"
+            ),
+            "retrieval_reason": str(draft.get("retrieval_reason", "")) if draft else "",
             "edit_recipe_id": str(draft.get("edit_recipe_id", "")) if draft else "",
             "edit_recipe_label": str(draft.get("edit_recipe_label", "")) if draft else "",
             "edit_required_fields": draft.get("edit_required_fields", []) if draft else [],
@@ -88,7 +94,11 @@ class GenerationWorkflow:
             "ai_reviewed": draft is not None,
             "hard_checks": draft.get("hard_checks", []) if draft else [],
             "sources": draft.get("sources", []) if draft else [],
+            "exploration_plan": draft.get("exploration_plan", []) if draft else [],
+            "series_contract": draft.get("series_contract", {}) if draft else {},
         }
+        if plan_metadata:
+            metadata.update(plan_metadata)
         if canvas_request:
             metadata["canvas_request"] = canvas_request
             if normalized_canvas_resolution:
@@ -117,6 +127,8 @@ def sanitize_workflow(value: object) -> dict[str, object]:
         "gallery_case_ranges",
         "gallery_category_urls",
         "retrieved_cases",
+        "retrieval_confidence",
+        "retrieval_reason",
         "edit_recipe_id",
         "edit_recipe_label",
         "edit_required_fields",
@@ -128,6 +140,11 @@ def sanitize_workflow(value: object) -> dict[str, object]:
         "ai_reviewed",
         "hard_checks",
         "sources",
+        "generation_strategy",
+        "variant_plan",
+        "series_anchor",
+        "series_contract",
+        "exploration_plan",
         "canvas_request",
         "canvas_resolution",
     }
@@ -168,10 +185,47 @@ def sanitize_workflow(value: object) -> dict[str, object]:
                 "source_url": str(item.get("source_url", ""))[:500],
                 "category": str(item.get("category", ""))[:120],
             }
-            for item in cases[:3]
+            for item in cases[:5]
             if isinstance(item, dict) and str(item.get("id", "")).strip()
         ]
         if isinstance(cases, list)
+        else []
+    )
+    confidence = str(result.get("retrieval_confidence", "low")).strip().lower()
+    result["retrieval_confidence"] = (
+        confidence if confidence in {"high", "medium", "low"} else "low"
+    )
+    result["retrieval_reason"] = str(result.get("retrieval_reason", ""))[:300]
+    strategy = str(result.get("generation_strategy", "sample")).strip().lower()
+    result["generation_strategy"] = (
+        strategy if strategy in {"sample", "explore", "series"} else "sample"
+    )
+    variants = result.get("variant_plan")
+    result["variant_plan"] = (
+        [
+            {
+                "label": str(item.get("label", ""))[:80],
+                "delta": [str(value)[:300] for value in item.get("delta", [])[:4]],
+            }
+            for item in variants[:4]
+            if isinstance(item, dict) and str(item.get("label", "")).strip()
+        ]
+        if isinstance(variants, list)
+        else []
+    )
+    result["series_anchor"] = _sanitize_workflow_mapping(result.get("series_anchor"))
+    result["series_contract"] = _sanitize_workflow_mapping(result.get("series_contract"))
+    exploration = result.get("exploration_plan")
+    result["exploration_plan"] = (
+        [
+            {
+                "label": str(item.get("label", ""))[:80],
+                "delta": [str(value)[:300] for value in item.get("delta", [])[:4]],
+            }
+            for item in exploration[:4]
+            if isinstance(item, dict) and str(item.get("label", "")).strip()
+        ]
+        if isinstance(exploration, list)
         else []
     )
     fields = result.get("edit_required_fields")

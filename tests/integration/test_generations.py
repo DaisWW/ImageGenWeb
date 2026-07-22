@@ -82,6 +82,128 @@ class TestGenerations(PlatformTestCase):
                 db.session.refresh(workspace)
                 self.assertEqual(workspace.settings["generation_stage"], stage)
 
+    def test_explore_strategy_persists_distinct_effective_prompts(self):
+        workspace = self.create_workspace("受控探索")
+        prompt = "科幻产品海报"
+        draft = self.create_ready_prompt_draft(workspace, prompt=prompt)
+        draft.payload = {
+            **draft.payload,
+            "exploration_plan": [
+                {"label": "中心层级", "delta": ["主体采用中心构图"]},
+                {"label": "非对称留白", "delta": ["右侧保留呼吸空间"]},
+                {"label": "材质近景", "delta": ["镜头更接近主体"]},
+            ],
+        }
+        db.session.commit()
+
+        response = self.user_client().post(
+            "/api/generations",
+            json={
+                "workspace_id": workspace.id,
+                "channel_id": "test",
+                "model": "model-b",
+                "mode": "text2img",
+                "prompt": prompt,
+                "prompt_draft_id": draft.id,
+                "generation_strategy": "explore",
+                "batch_count": 3,
+            },
+        )
+
+        self.assertEqual(response.status_code, 202, response.get_data(as_text=True))
+        job = response.json["job"]
+        prompts = [item["prompt"] for item in job["items"]]
+        self.assertEqual(len(set(prompts)), 3)
+        self.assertEqual(
+            [item["label"] for item in job["workflow"]["variant_plan"]],
+            ["中心层级", "非对称留白", "材质近景"],
+        )
+        saved_items = list(
+            db.session.scalars(select(GenerationItem).where(GenerationItem.job_id == job["id"]))
+        )
+        self.assertEqual([item.prompt for item in saved_items], prompts)
+
+    def test_series_strategy_keeps_anchor_first_and_repeats_contract(self):
+        workspace = self.create_workspace("系列延续")
+        assets = self.services.workspaces.add_assets(
+            workspace,
+            [("anchor.png", png_bytes()), ("palette.png", png_bytes((40, 90, 180)))],
+        )
+        contract = {
+            "identity_anchors": ["同一产品轮廓"],
+            "visual_language": ["电影感商业摄影"],
+            "palette_materials": ["冷蓝金属"],
+            "composition_rules": ["主体保持左侧三分位"],
+            "must_preserve": ["品牌标志位置"],
+            "allowed_changes": ["场景和动作"],
+        }
+        self.services.workspaces.set_series_anchor(
+            workspace,
+            asset_id=assets[0].id,
+            source_item_id="b" * 32,
+            contract=contract,
+        )
+        prompt = "系列第二张产品海报"
+        draft = self.create_ready_prompt_draft(
+            workspace,
+            prompt=prompt,
+            mode="img2img",
+            reference_ids=(assets[0].id, assets[1].id),
+        )
+
+        response = self.user_client().post(
+            "/api/generations",
+            json={
+                "workspace_id": workspace.id,
+                "channel_id": "test",
+                "model": "model-b",
+                "mode": "img2img",
+                "prompt": prompt,
+                "prompt_draft_id": draft.id,
+                "generation_strategy": "series",
+                "batch_count": 2,
+                "reference_ids": [assets[1].id, assets[0].id],
+            },
+        )
+
+        self.assertEqual(response.status_code, 202, response.get_data(as_text=True))
+        job = response.json["job"]
+        self.assertEqual([asset["id"] for asset in job["references"]], [assets[0].id, assets[1].id])
+        self.assertEqual(job["workflow"]["generation_strategy"], "series")
+        self.assertEqual(job["workflow"]["series_contract"], contract)
+        self.assertEqual(job["items"][0]["prompt"], job["items"][1]["prompt"])
+        self.assertIn("系列一致性契约", job["items"][0]["prompt"])
+
+    def test_removing_or_clearing_series_anchor_resets_series_settings(self):
+        workspace = self.create_workspace("系列状态清理")
+        asset = self.services.workspaces.add_assets(workspace, [("anchor.png", png_bytes())])[0]
+        self.services.workspaces.set_series_anchor(
+            workspace,
+            asset_id=asset.id,
+            source_item_id="c" * 32,
+            contract={"identity_anchors": ["主体"]},
+        )
+
+        self.services.workspaces.remove_asset(workspace, asset.id)
+        db.session.refresh(workspace)
+        self.assertEqual(workspace.settings["generation_strategy"], "sample")
+        self.assertEqual(workspace.settings["series_anchor"], {})
+        self.assertEqual(workspace.settings["reference_ids"], [])
+
+        replacement = self.services.workspaces.add_assets(
+            workspace, [("anchor-2.png", png_bytes())]
+        )[0]
+        self.services.workspaces.set_series_anchor(
+            workspace,
+            asset_id=replacement.id,
+            source_item_id="d" * 32,
+            contract={"identity_anchors": ["主体"]},
+        )
+        cleared = self.services.workspaces.clear(workspace)
+        self.assertEqual(cleared.settings["generation_strategy"], "sample")
+        self.assertEqual(cleared.settings["series_anchor"], {})
+        self.assertEqual(cleared.settings["reference_ids"], [])
+
     def test_generation_api_requires_explicit_canvas_conflict_resolution(self):
         client = self.user_client()
         prompt = "1920×1080 横屏画面"

@@ -23,6 +23,8 @@ ALLOWED_WORKSPACE_SETTING_KEYS = {
     "compression",
     "transparent_background",
     "batch_count",
+    "generation_strategy",
+    "series_anchor",
 }
 
 
@@ -42,6 +44,8 @@ def default_workspace_settings() -> dict[str, Any]:
         "compression": 90,
         "transparent_background": False,
         "batch_count": 1,
+        "generation_strategy": "sample",
+        "series_anchor": {},
     }
 
 
@@ -61,6 +65,10 @@ def sanitize_workspace_settings(raw: Any, runtime: RuntimeSettings | None = None
     settings["generation_stage"] = str(settings["generation_stage"]).lower()
     if settings["generation_stage"] not in {"draft", "refine", "final"}:
         settings["generation_stage"] = "draft"
+    settings["generation_strategy"] = str(settings["generation_strategy"]).lower()
+    if settings["generation_strategy"] not in {"sample", "explore", "series"}:
+        settings["generation_strategy"] = "sample"
+    settings["series_anchor"] = _sanitize_series_anchor(settings.get("series_anchor"))
     if "reference_ids" in raw:
         if not isinstance(settings["reference_ids"], list):
             raise ServiceError("垫图选择参数无效")
@@ -83,3 +91,42 @@ def sanitize_workspace_settings(raw: Any, runtime: RuntimeSettings | None = None
     except (TypeError, ValueError) as exc:
         raise ServiceError("工作站数字参数无效") from exc
     return settings
+
+
+def _sanitize_series_anchor(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    asset_id = str(value.get("asset_id", "")).strip().lower()
+    if len(asset_id) != 32 or any(character not in "0123456789abcdef" for character in asset_id):
+        return {}
+    contract = value.get("contract")
+    if not isinstance(contract, dict):
+        return {}
+    allowed = (
+        "identity_anchors",
+        "visual_language",
+        "palette_materials",
+        "composition_rules",
+        "typography_rules",
+        "must_preserve",
+        "allowed_changes",
+    )
+    sanitized: dict[str, list[str]] = {}
+    for key in allowed:
+        values = contract.get(key)
+        if not isinstance(values, list):
+            continue
+        result: list[str] = []
+        for item in values[:6]:
+            text = str(item).strip()[:300]
+            if text and text not in result:
+                result.append(text)
+        if result:
+            sanitized[key] = result
+    if not sanitized:
+        return {}
+    return {
+        "asset_id": asset_id,
+        "source_item_id": str(value.get("source_item_id", "")).strip().lower()[:32],
+        "contract": sanitized,
+    }

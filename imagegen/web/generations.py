@@ -11,6 +11,7 @@ from ..serializers import job_dict, job_status_dict
 from ..services import GenerationWorkflow, SubmitGeneration
 from ..services.common import canvas_request_conflicts
 from ..services.generations.contracts import CANVAS_RESOLUTIONS
+from ..services.generations.planning import GenerationPlan, normalize_generation_strategy
 from . import web
 from .shared import (
     accessible_item,
@@ -57,8 +58,44 @@ def submit_generation():
         raise ServiceError("生成数量或压缩质量无效") from exc
     mode = str(data.get("mode", "text2img"))
     prompt = str(data.get("prompt", ""))
-    ordered_reference_ids = tuple(str(item) for item in reference_ids)
+    ordered_reference_ids = tuple(str(item).strip().lower() for item in reference_ids)
     application_services = services()
+    runtime = application_services.settings.runtime()
+    if not 1 <= batch_count <= runtime.max_batch_images:
+        raise ServiceError(f"单批生成张数必须在 1 到 {runtime.max_batch_images} 之间")
+    strategy = normalize_generation_strategy(
+        data.get(
+            "generation_strategy",
+            (workspace.settings or {}).get("generation_strategy", "sample"),
+        )
+    )
+    series_anchor = (workspace.settings or {}).get("series_anchor")
+    if strategy == "series":
+        if not isinstance(series_anchor, dict):
+            raise ServiceError("请先选择一张生成结果作为系列基准", status_code=409)
+        anchor_id = str(series_anchor.get("asset_id", "")).strip().lower()
+        if (
+            len(anchor_id) != 32
+            or db.session.scalar(
+                select(Asset.id).where(
+                    Asset.id == anchor_id,
+                    Asset.workspace_id == workspace.id,
+                    Asset.deleted_at.is_(None),
+                )
+            )
+            is None
+        ):
+            raise ServiceError(
+                "系列基准已失效，请重新选择一张生成结果",
+                code="series_anchor_invalid",
+                status_code=409,
+            )
+        ordered_reference_ids = (
+            anchor_id,
+            *[item for item in ordered_reference_ids if item != anchor_id],
+        )
+        if mode != "img2img":
+            raise ServiceError("系列延续必须使用垫图生图", status_code=409)
     draft_id = str(data.get("prompt_draft_id", "")).strip()
     draft = None
     if draft_id:
@@ -86,12 +123,21 @@ def submit_generation():
                 code="prompt_canvas_conflict",
                 status_code=409,
             )
+    plan = GenerationPlan.build(
+        strategy=strategy,
+        prompt=prompt,
+        count=batch_count,
+        draft=draft,
+        series_anchor=series_anchor if strategy == "series" else None,
+        max_prompt_characters=runtime.max_prompt_characters,
+    )
     workflow = GenerationWorkflow.build(
         stage=str(data.get("generation_stage", "draft")),
         prompt_draft_id=draft_id,
         draft=draft,
         creative_direction_id=str(data.get("creative_direction_id", "auto")),
         canvas_resolution=canvas_resolution,
+        plan_metadata=plan.metadata,
     )
     generation_request = SubmitGeneration(
         channel_id=str(data.get("channel_id", "")),
@@ -103,6 +149,7 @@ def submit_generation():
         compression=compression,
         batch_count=batch_count,
         reference_ids=ordered_reference_ids,
+        item_prompts=plan.prompts,
         quality=workflow.quality,
         workflow=workflow.metadata,
         transparent_background=json_bool(data.get("transparent_background", False)),
