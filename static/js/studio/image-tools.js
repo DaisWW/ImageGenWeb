@@ -32,6 +32,11 @@
       this.el.detailSeriesAnchor.innerHTML = isCurrentAnchor
         ? '<i data-lucide="layers-3"></i>当前系列基准'
         : '<i data-lucide="layers-3"></i>设为系列基准';
+      this.el.detailSeriesAnchor.title = isCurrentAnchor
+        ? "当前图已是系列固定参考；后续生成会优先保持主体、风格和构图一致。"
+        : !hasSeriesContract
+          ? "需先用 AI 整理提示词生成系列契约；之后可将此图设为系列固定参考。"
+          : "将当前图设为系列固定参考；后续只改变新需求允许的内容，并保持主体、风格和构图一致。";
       UI.icons(this.el.detailSeriesAnchor);
     },
 
@@ -415,14 +420,27 @@
       });
     },
 
+    detailReviewInProgress(itemId = this.detailItemId) {
+      return Boolean(itemId && this.detailReviewItemIds?.has(itemId));
+    },
+
     renderDetailReview(review) {
       const verdict = review?.verdict || "";
       const hasReview = ["pass", "revise"].includes(verdict);
+      const reviewBusy = this.detailReviewInProgress();
       this.detailReviewSuggestion = review?.suggested_edit || "";
-      setHidden(this.el.detailReview, !hasReview);
-      this.el.detailReview.classList.toggle("is-pass", verdict === "pass");
-      this.el.detailReview.classList.toggle("is-revise", verdict === "revise");
-      setText(this.el.detailReviewVerdict, verdict === "pass" ? "通过" : "需要精修");
+      setHidden(this.el.detailReview, !hasReview && !reviewBusy);
+      this.el.detailReview.classList.toggle("is-reviewing", reviewBusy);
+      this.el.detailReview.classList.toggle("is-pass", !reviewBusy && verdict === "pass");
+      this.el.detailReview.classList.toggle("is-revise", !reviewBusy && verdict === "revise");
+      this.el.detailReview.setAttribute("aria-busy", String(reviewBusy));
+      setText(
+        this.el.detailReviewVerdict,
+        reviewBusy
+          ? (hasReview ? "正在重新验收" : "正在验收")
+          : verdict === "pass" ? "通过" : "需要精修",
+      );
+      setHidden(this.el.detailReviewProgress, !reviewBusy);
       const scores = review?.scores || {};
       this.el.detailReviewScores.innerHTML = hasReview
         ? [
@@ -448,11 +466,14 @@
       setHidden(this.el.detailApplyReview, !this.detailReviewSuggestion);
       setDisabled(
         this.el.detailApplyReview,
-        !this.detailReviewSuggestion || this.detailReviewBusy || this.detailReferenceBusy,
+        !this.detailReviewSuggestion || reviewBusy || this.detailReferenceBusy,
       );
-      this.el.detailRunReview.innerHTML = hasReview
-        ? '<i data-lucide="refresh-cw"></i>重新验收'
-        : '<i data-lucide="scan-search"></i>AI 验收';
+      setDisabled(this.el.detailRunReview, reviewBusy);
+      this.el.detailRunReview.innerHTML = reviewBusy
+        ? '<i data-lucide="loader-circle"></i>正在验收'
+        : hasReview
+          ? '<i data-lucide="refresh-cw"></i>重新验收'
+          : '<i data-lucide="scan-search"></i>AI 验收';
       UI.icons(this.el.detailRunReview);
     },
 
@@ -460,13 +481,10 @@
       const job = this.jobs.find((entry) => entry.id === this.detailJobId);
       const item = job?.items.find((entry) => entry.id === this.detailItemId);
       const modelId = this.el.chatModelSelect.value;
-      if (!item || !modelId || this.detailReviewBusy) return;
+      if (!item || !modelId || this.detailReviewInProgress(item.id)) return;
       const itemId = item.id;
-      this.detailReviewBusy = true;
-      setDisabled(this.el.detailRunReview, true);
-      setDisabled(this.el.detailApplyReview, true);
-      this.el.detailRunReview.innerHTML = '<i data-lucide="loader-circle"></i>正在验收';
-      UI.icons(this.el.detailRunReview);
+      this.detailReviewItemIds.add(itemId);
+      this.renderDetailReview(item.review || {});
       try {
         const data = await UI.api(`/api/generation-items/${itemId}/review`, {
           method: "POST",
@@ -478,14 +496,13 @@
       } catch (error) {
         UI.toast(error.message, "error");
       } finally {
-        this.detailReviewBusy = false;
-        setDisabled(this.el.detailRunReview, false);
+        this.detailReviewItemIds.delete(itemId);
         if (this.detailItemId === itemId) this.renderDetailReview(item.review || {});
       }
     },
 
     async applyDetailReview() {
-      if (!this.detailReviewSuggestion || this.detailReviewBusy) return;
+      if (!this.detailReviewSuggestion || this.detailReviewInProgress()) return;
       await this.useDetailAsReference({
         prompt: this.detailReviewSuggestion,
         imageToast: "已载入验收建议，可以继续精修",

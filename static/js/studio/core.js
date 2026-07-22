@@ -154,7 +154,7 @@
       this.chatReferencePickerOpen = false;
       this.detailItemId = null;
       this.detailJobId = null;
-      this.detailReviewBusy = false;
+      this.detailReviewItemIds = new Set();
       this.detailReviewSuggestion = "";
       this.sliceItemId = null;
       this.sliceAnalysis = null;
@@ -312,6 +312,7 @@
         detailReferences: byId("detailReferences"),
         detailReview: byId("detailReview"),
         detailReviewVerdict: byId("detailReviewVerdict"),
+        detailReviewProgress: byId("detailReviewProgress"),
         detailReviewScores: byId("detailReviewScores"),
         detailReviewChecks: byId("detailReviewChecks"),
         detailReviewSuggestion: byId("detailReviewSuggestion"),

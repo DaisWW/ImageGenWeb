@@ -5,6 +5,66 @@ const {
   test,
 } = require("./fixtures");
 
+test("image detail actions explain their purpose", async ({ studioPage: page }) => {
+  const titles = await page.locator("#imageDialog .detail-actions [title]").evaluateAll(
+    (actions) => Object.fromEntries(actions.map((action) => [action.id, action.title])),
+  );
+
+  expect(titles).toEqual({
+    detailUiKit: "把完整游戏界面作为结构和风格参考，先拆解组件树，再逐个重建可开发的原子资源。",
+    detailSlice: "识别规则排列的图集网格；确认行列和切片后，可下载或存入图库。",
+    detailSaveLibrary: "将当前生成图保存到工作站图库，便于以后作为参考图复用。",
+    detailRunReview: "让 AI 按提示词和硬门槛检查当前图片，并给出单点修正建议。",
+    detailApplyReview: "把当前图作为参考并载入验收建议，继续生成精修版本。",
+    detailSeriesAnchor: "将当前图设为系列固定参考；后续只改变新需求允许的内容，并保持主体、风格和构图一致。",
+    detailReuse: "将当前图加入参考图，并回到创作区描述需要改变的内容。",
+    detailDownload: "下载当前生成结果的原始文件。",
+  });
+
+  const seriesStates = await page.evaluate(() => {
+    const refresh = window.ImageGenStudio.StudioApp.prototype.refreshDetailSeriesAnchorState;
+    const resolve = ({ contract = {}, current = false }) => {
+      const button = document.createElement("button");
+      const item = { id: "detail-item" };
+      const job = { id: "detail-job", items: [item], workflow: { series_contract: contract } };
+      refresh.call({
+        activeWorkspace: {
+          settings: { series_anchor: current ? { source_item_id: item.id } : null },
+        },
+        detailItemId: item.id,
+        detailJobId: job.id,
+        detailReferenceBusy: false,
+        jobs: [job],
+        el: { detailSeriesAnchor: button },
+      }, job, item);
+      return { disabled: button.disabled, text: button.textContent, title: button.title };
+    };
+    return {
+      unavailable: resolve({}),
+      available: resolve({ contract: { visual_language: ["一致"] } }),
+      current: resolve({ contract: { visual_language: ["一致"] }, current: true }),
+    };
+  });
+
+  expect(seriesStates).toEqual({
+    unavailable: {
+      disabled: true,
+      text: "设为系列基准",
+      title: "需先用 AI 整理提示词生成系列契约；之后可将此图设为系列固定参考。",
+    },
+    available: {
+      disabled: false,
+      text: "设为系列基准",
+      title: "将当前图设为系列固定参考；后续只改变新需求允许的内容，并保持主体、风格和构图一致。",
+    },
+    current: {
+      disabled: true,
+      text: "当前系列基准",
+      title: "当前图已是系列固定参考；后续生成会优先保持主体、风格和构图一致。",
+    },
+  });
+});
+
 test("late reference response updates the original workspace cache", async ({
   studioPage: page,
 }) => {
@@ -186,9 +246,38 @@ test("image detail keeps its reference through multi-turn refinement", {
     json: { asset: referenceAsset },
   }));
   let reviewRequest = null;
-  await page.route(`**/api/generation-items/${itemId}/review`, (route) => {
+  let markReviewStarted;
+  const reviewStarted = new Promise((resolve) => {
+    markReviewStarted = resolve;
+  });
+  let releaseReview;
+  const reviewCanFinish = new Promise((resolve) => {
+    releaseReview = resolve;
+  });
+  let markReviewRetryStarted;
+  const reviewRetryStarted = new Promise((resolve) => {
+    markReviewRetryStarted = resolve;
+  });
+  let releaseReviewRetry;
+  const reviewRetryCanFinish = new Promise((resolve) => {
+    releaseReviewRetry = resolve;
+  });
+  let reviewAttempts = 0;
+  await page.route(`**/api/generation-items/${itemId}/review`, async (route) => {
+    reviewAttempts += 1;
     reviewRequest = route.request().postDataJSON();
-    return route.fulfill({
+    if (reviewAttempts > 1) {
+      markReviewRetryStarted();
+      await reviewRetryCanFinish;
+      await route.fulfill({
+        status: 503,
+        json: { error: "E2E 验收服务暂时不可用", code: "review_unavailable" },
+      });
+      return;
+    }
+    markReviewStarted();
+    await reviewCanFinish;
+    await route.fulfill({
       json: {
         review: {
           verdict: "revise",
@@ -300,11 +389,42 @@ test("image detail keeps its reference through multi-turn refinement", {
   await expect(page.locator("#detailList")).toContainText("采用对话画幅");
   await expect(page.locator("#detailList")).toContainText("商品商业视觉");
   await page.locator("#detailRunReview").click();
+  await reviewStarted;
   await expect(page.locator("#detailReview")).toBeVisible();
+  await expect(page.locator("#detailReview")).toHaveAttribute("aria-busy", "true");
+  await expect(page.locator("#detailReviewVerdict")).toHaveText("正在验收");
+  await expect(page.locator("#detailReviewProgress")).toBeVisible();
+  await expect(page.locator("#detailRunReview")).toBeDisabled();
+  await expect(page.locator("#detailRunReview")).toContainText("正在验收");
+  expect(reviewRequest).toEqual({ model_id: "e2e-chat" });
+
+  await page.locator('#imageDialog [data-close-dialog="imageDialog"]').click();
+  await expect(page.locator("#imageDialog")).toBeHidden();
+  await page.locator(`[data-item-id="${itemId}"]`).click();
+  await expect(page.locator("#detailReview")).toBeVisible();
+  await expect(page.locator("#detailReviewVerdict")).toHaveText("正在验收");
+  await expect(page.locator("#detailReviewProgress")).toBeVisible();
+  await expect(page.locator("#detailRunReview")).toBeDisabled();
+
+  releaseReview();
   await expect(page.locator("#detailReviewVerdict")).toHaveText("需要精修");
+  await expect(page.locator("#detailReview")).toHaveAttribute("aria-busy", "false");
+  await expect(page.locator("#detailReviewProgress")).toBeHidden();
+  await expect(page.locator("#detailRunReview")).toBeEnabled();
   await expect(page.locator("#detailReviewScores")).toContainText("4.2");
   await expect(page.locator("#detailReviewChecks")).toContainText("鞋盒右下角存在多余文字");
-  expect(reviewRequest).toEqual({ model_id: "e2e-chat" });
+
+  await page.locator("#detailRunReview").click();
+  await reviewRetryStarted;
+  await expect(page.locator("#detailReviewVerdict")).toHaveText("正在重新验收");
+  await expect(page.locator("#detailReviewProgress")).toBeVisible();
+  await page.locator("#detailRunReview").dispatchEvent("click");
+  expect(reviewAttempts).toBe(2);
+  releaseReviewRetry();
+  await expect(page.locator("#detailReviewVerdict")).toHaveText("需要精修");
+  await expect(page.locator("#detailReviewProgress")).toBeHidden();
+  await expect(page.locator("#detailRunReview")).toBeEnabled();
+
   await page.locator("#detailApplyReview").click();
   await expect(page.locator("#imageDialog")).toBeHidden();
   await expect(page.locator("#chatInput"))

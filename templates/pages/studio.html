@@ -212,21 +212,22 @@
       <dl class="detail-list" id="detailList"></dl>
       <div class="detail-prompt"><span>提示词</span><p id="detailPrompt"></p></div>
       <div class="detail-references" id="detailReferences"></div>
-      <section class="detail-review" id="detailReview" hidden>
+      <section class="detail-review" id="detailReview" aria-live="polite" hidden>
         <header><span>AI 验收</span><strong id="detailReviewVerdict"></strong></header>
+        <div class="detail-review-progress" id="detailReviewProgress" role="progressbar" aria-label="AI 验收进度" aria-valuetext="正在验收" hidden><span></span></div>
         <div class="detail-review-scores" id="detailReviewScores"></div>
         <ul id="detailReviewChecks"></ul>
         <p id="detailReviewSuggestion" hidden></p>
       </section>
       <div class="detail-actions">
-        <button class="button secondary ui-kit-action" type="button" id="detailUiKit"><i data-lucide="component"></i>重建开发 UI Kit</button>
-        <button class="button secondary" type="button" id="detailSlice"><i data-lucide="grid-2x2"></i>规则切图</button>
-        <button class="button secondary" type="button" id="detailSaveLibrary"><i data-lucide="bookmark-plus"></i>存入图库</button>
-        <button class="button secondary" type="button" id="detailRunReview"><i data-lucide="scan-search"></i>AI 验收</button>
-        <button class="button secondary" type="button" id="detailApplyReview" hidden><i data-lucide="wrench"></i>按建议继续</button>
-        <button class="button secondary" type="button" id="detailSeriesAnchor"><i data-lucide="layers-3"></i>设为系列基准</button>
-        <button class="button secondary" type="button" id="detailReuse"><i data-lucide="image-plus"></i><span id="detailReuseLabel">基于此图继续</span></button>
-        <a class="button primary" id="detailDownload" download><i data-lucide="download"></i>下载原图</a>
+        <button class="button secondary ui-kit-action" type="button" id="detailUiKit" title="把完整游戏界面作为结构和风格参考，先拆解组件树，再逐个重建可开发的原子资源。"><i data-lucide="component"></i>重建开发 UI Kit</button>
+        <button class="button secondary" type="button" id="detailSlice" title="识别规则排列的图集网格；确认行列和切片后，可下载或存入图库。"><i data-lucide="grid-2x2"></i>规则切图</button>
+        <button class="button secondary" type="button" id="detailSaveLibrary" title="将当前生成图保存到工作站图库，便于以后作为参考图复用。"><i data-lucide="bookmark-plus"></i>存入图库</button>
+        <button class="button secondary" type="button" id="detailRunReview" title="让 AI 按提示词和硬门槛检查当前图片，并给出单点修正建议。"><i data-lucide="scan-search"></i>AI 验收</button>
+        <button class="button secondary" type="button" id="detailApplyReview" title="把当前图作为参考并载入验收建议，继续生成精修版本。" hidden><i data-lucide="wrench"></i>按建议继续</button>
+        <button class="button secondary" type="button" id="detailSeriesAnchor" title="将当前图设为系列固定参考；后续只改变新需求允许的内容，并保持主体、风格和构图一致。"><i data-lucide="layers-3"></i>设为系列基准</button>
+        <button class="button secondary" type="button" id="detailReuse" title="将当前图加入参考图，并回到创作区描述需要改变的内容。"><i data-lucide="image-plus"></i><span id="detailReuseLabel">基于此图继续</span></button>
+        <a class="button primary" id="detailDownload" title="下载当前生成结果的原始文件。" download><i data-lucide="download"></i>下载原图</a>
       </div>
     </div>
   </div>

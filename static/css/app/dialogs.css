@@ -400,6 +400,26 @@
   font-size: 12px;
 }
 
+.detail-review.is-reviewing header strong {
+  color: var(--accent);
+}
+
+.detail-review-progress {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-3);
+}
+
+.detail-review-progress span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  transform: translateX(-110%);
+  animation: progress-flow 1.7s ease-in-out infinite;
+}
+
 .detail-review.is-pass header strong,
 .detail-review li.passed {
   color: #82c89d;
