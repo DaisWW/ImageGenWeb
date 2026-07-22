@@ -296,7 +296,7 @@ test("image detail keeps its reference through multi-turn refinement", {
             },
           ],
           scores: { composition: 4.2, visual_quality: 3.8, usability: 2.5 },
-          findings: ["右下角文字影响交付"],
+          findings: Array(18).fill("这里是一段用于验证长验收内容滚动布局的说明。"),
           suggested_edit: "只改变鞋盒右下角，移除多余文字；必须保持运动鞋和构图不变。",
         },
       },
@@ -413,6 +413,45 @@ test("image detail keeps its reference through multi-turn refinement", {
   await expect(page.locator("#detailRunReview")).toBeEnabled();
   await expect(page.locator("#detailReviewScores")).toContainText("4.2");
   await expect(page.locator("#detailReviewChecks")).toContainText("鞋盒右下角存在多余文字");
+
+  if (page.viewportSize().width > 920) {
+    const layoutState = await page.evaluate(() => {
+      const dialog = document.getElementById("imageDialog");
+      const layout = dialog.querySelector(".image-dialog-layout");
+      const preview = dialog.querySelector(".image-dialog-preview");
+      const info = dialog.querySelector(".image-dialog-info");
+      const scroller = dialog.querySelector(".image-dialog-scroll");
+      const close = dialog.querySelector('[data-close-dialog="imageDialog"]');
+      const download = document.getElementById("detailDownload");
+      const before = preview.getBoundingClientRect();
+      scroller.scrollTop = scroller.scrollHeight;
+      const after = preview.getBoundingClientRect();
+      const dialogBox = dialog.getBoundingClientRect();
+      const closeBox = close.getBoundingClientRect();
+      const downloadBox = download.getBoundingClientRect();
+      return {
+        dialogFitsViewport: dialogBox.height <= window.innerHeight * 0.9,
+        bodyScrolls: scroller.scrollHeight > scroller.clientHeight,
+        bodyOverflow: getComputedStyle(scroller).overflowY,
+        infoOverflow: getComputedStyle(info).overflowY,
+        layoutOverflow: getComputedStyle(layout).overflowY,
+        previewStayedFixed: Math.abs(before.top - after.top) < 1
+          && Math.abs(before.bottom - after.bottom) < 1,
+        closeVisible: closeBox.top >= dialogBox.top && closeBox.bottom <= dialogBox.bottom,
+        actionsVisible: downloadBox.top >= dialogBox.top && downloadBox.bottom <= dialogBox.bottom,
+      };
+    });
+    expect(layoutState).toEqual({
+      dialogFitsViewport: true,
+      bodyScrolls: true,
+      bodyOverflow: "auto",
+      infoOverflow: "hidden",
+      layoutOverflow: "hidden",
+      previewStayedFixed: true,
+      closeVisible: true,
+      actionsVisible: true,
+    });
+  }
 
   await page.locator("#detailRunReview").click();
   await reviewRetryStarted;

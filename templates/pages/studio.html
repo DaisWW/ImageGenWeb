@@ -209,16 +209,18 @@
         <div><span class="eyebrow">Generation Detail</span><h2>生成详情</h2></div>
         <button class="icon-button" type="button" data-close-dialog="imageDialog" aria-label="关闭"><i data-lucide="x"></i></button>
       </div>
-      <dl class="detail-list" id="detailList"></dl>
-      <div class="detail-prompt"><span>提示词</span><p id="detailPrompt"></p></div>
-      <div class="detail-references" id="detailReferences"></div>
-      <section class="detail-review" id="detailReview" aria-live="polite" hidden>
-        <header><span>AI 验收</span><strong id="detailReviewVerdict"></strong></header>
-        <div class="detail-review-progress" id="detailReviewProgress" role="progressbar" aria-label="AI 验收进度" aria-valuetext="正在验收" hidden><span></span></div>
-        <div class="detail-review-scores" id="detailReviewScores"></div>
-        <ul id="detailReviewChecks"></ul>
-        <p id="detailReviewSuggestion" hidden></p>
-      </section>
+      <div class="image-dialog-scroll">
+        <dl class="detail-list" id="detailList"></dl>
+        <div class="detail-prompt"><span>提示词</span><p id="detailPrompt"></p></div>
+        <div class="detail-references" id="detailReferences"></div>
+        <section class="detail-review" id="detailReview" aria-live="polite" hidden>
+          <header><span>AI 验收</span><strong id="detailReviewVerdict"></strong></header>
+          <div class="detail-review-progress" id="detailReviewProgress" role="progressbar" aria-label="AI 验收进度" aria-valuetext="正在验收" hidden><span></span></div>
+          <div class="detail-review-scores" id="detailReviewScores"></div>
+          <ul id="detailReviewChecks"></ul>
+          <p id="detailReviewSuggestion" hidden></p>
+        </section>
+      </div>
       <div class="detail-actions">
         <button class="button secondary ui-kit-action" type="button" id="detailUiKit" title="把完整游戏界面作为结构和风格参考，先拆解组件树，再逐个重建可开发的原子资源。"><i data-lucide="component"></i>重建开发 UI Kit</button>
         <button class="button secondary" type="button" id="detailSlice" title="识别规则排列的图集网格；确认行列和切片后，可下载或存入图库。"><i data-lucide="grid-2x2"></i>规则切图</button>

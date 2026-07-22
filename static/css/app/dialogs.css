@@ -24,8 +24,7 @@
   width: min(94vw, 440px);
 }
 
-.modal-form,
-.image-dialog-info {
+.modal-form {
   display: grid;
   gap: 17px;
   padding: 21px;
@@ -35,6 +34,9 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+  padding: 17px 21px 21px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-1);
 }
 
 .detail-actions .ui-kit-action {
@@ -77,20 +79,24 @@
 
 .image-modal {
   width: min(96vw, 1100px);
+  height: min(88vh, 900px);
   max-width: min(96vw, 1100px);
+  overflow: hidden;
 }
 
 .image-dialog-layout {
   display: grid;
-  max-height: 88vh;
+  height: 100%;
+  min-height: 0;
   grid-template-columns: minmax(0, 1.6fr) minmax(310px, .8fr);
+  overflow: hidden;
 }
 
 .image-dialog-preview {
   --preview-checker-dark: #20252a;
   --preview-checker-light: #3a4147;
   display: grid;
-  min-height: 500px;
+  min-height: 0;
   padding: 16px;
   place-items: center;
   overflow: hidden;
@@ -109,16 +115,35 @@
   width: auto;
   height: auto;
   max-width: 100%;
-  max-height: calc(88vh - 32px);
+  max-height: 100%;
   outline: 1px solid rgb(255 255 255 / 48%);
   box-shadow: 0 0 0 2px rgb(0 0 0 / 45%), 0 14px 36px rgb(0 0 0 / 36%);
   object-fit: contain;
 }
 
 .image-dialog-info {
-  align-content: start;
-  overflow: auto;
+  display: grid;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
   border-left: 1px solid var(--line);
+}
+
+.image-dialog-info > .modal-header {
+  padding: 21px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-1);
+}
+
+.image-dialog-scroll {
+  display: grid;
+  min-height: 0;
+  align-content: start;
+  gap: 17px;
+  padding: 17px 21px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .library-modal {
@@ -464,6 +489,11 @@
   content: "×";
   display: inline-block;
   width: 16px;
+}
+
+.detail-review li,
+.detail-review p {
+  overflow-wrap: anywhere;
 }
 
 .detail-review li.passed::before {

@@ -88,10 +88,13 @@
   .mode-switch { grid-column: span 2; }
   .channel-field { grid-column: span 1; }
   .model-field { grid-column: span 1; }
-  .image-dialog-layout { grid-template-columns: 1fr; max-height: 92vh; overflow: auto; }
+  .image-modal { height: auto; max-height: 92vh; }
+  .image-dialog-layout { height: auto; max-height: 92vh; grid-template-columns: 1fr; overflow: auto; }
   .image-dialog-preview { min-height: 300px; max-height: 56vh; padding: 12px; }
   .image-dialog-preview img { max-height: calc(56vh - 24px); }
-  .image-dialog-info { border-top: 1px solid var(--line); border-left: 0; }
+  .image-dialog-info { grid-template-rows: auto; overflow: visible; border-top: 1px solid var(--line); border-left: 0; }
+  .image-dialog-info > .modal-header { position: sticky; z-index: 2; top: 0; }
+  .image-dialog-scroll { min-height: auto; overflow: visible; overscroll-behavior: auto; }
 }
 
 @media (max-width: 720px) {
