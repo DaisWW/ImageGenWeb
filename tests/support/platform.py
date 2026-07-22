@@ -33,10 +33,10 @@ def png_bytes(color=(35, 160, 110)) -> bytes:
     return stream.getvalue()
 
 
-def opaque_icon_png_bytes() -> bytes:
+def transparent_icon_png_bytes() -> bytes:
     stream = io.BytesIO()
-    image = Image.new("RGB", (64, 64), (255, 255, 255))
-    image.paste((35, 160, 110), (16, 16, 48, 48))
+    image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    image.paste((35, 160, 110, 255), (16, 16, 48, 48))
     image.save(stream, format="PNG")
     return stream.getvalue()
 
@@ -168,16 +168,17 @@ class FakeImageHTTPResponse:
 
 
 class RecordingImageSession:
-    def __init__(self):
+    def __init__(self, *, transparent_content: bytes | None = None):
         self.request = None
         self.requests = []
+        self.transparent_content = transparent_content or transparent_icon_png_bytes()
 
     def post(self, url, **kwargs):
         self.request = {"url": url, **kwargs}
         self.requests.append(self.request)
         payload = kwargs.get("json") or kwargs.get("data") or {}
         content = (
-            opaque_icon_png_bytes() if payload.get("background") == "transparent" else png_bytes()
+            self.transparent_content if payload.get("background") == "transparent" else png_bytes()
         )
         return FakeImageHTTPResponse(content=content)
 
@@ -194,7 +195,7 @@ class RejectingTransparencySession(RecordingImageSession):
                     "error": {"message": "Transparent background is not supported for this model."}
                 },
             )
-        return FakeImageHTTPResponse(content=opaque_icon_png_bytes())
+        return FakeImageHTTPResponse(content=png_bytes())
 
 
 class FakeDownloadResponse:

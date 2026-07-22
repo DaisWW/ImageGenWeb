@@ -14,8 +14,8 @@ from imagegen.integrations.diagnostics import response_summary
 from imagegen.integrations.images import (
     GenerationRequest,
     OpenAIImagesAdapter,
+    ProviderError,
     ReferencePayload,
-    _ensure_transparent_image,
 )
 from imagegen.integrations.openai_chat import OpenAIChatClient, OpenAIChatError
 from imagegen.models import (
@@ -74,6 +74,7 @@ class TestProviderAndRuntime(PlatformTestCase):
         self.assertIn("genuinely transparent canvas", session.request["json"]["prompt"])
         self.assertIn("transparency checkerboard", session.request["json"]["prompt"])
         self.assertIn("semi-transparent specks", session.request["json"]["prompt"])
+        self.assertEqual(transparent_result.content, session.transparent_content)
         with Image.open(io.BytesIO(transparent_result.content)) as image:
             self.assertEqual(image.mode, "RGBA")
             self.assertEqual(image.getchannel("A").getextrema(), (0, 255))
@@ -106,46 +107,53 @@ class TestProviderAndRuntime(PlatformTestCase):
         with Image.open(io.BytesIO(edit_result.content)) as image:
             self.assertEqual(image.getchannel("A").getextrema(), (0, 255))
 
-    def test_transparent_background_retries_with_a_convertible_canvas(self):
+    def test_transparent_background_does_not_retry_when_model_rejects_request(self):
         channel = self.app.extensions["channel_registry"].get("test")
         adapter = OpenAIImagesAdapter()
         session = RejectingTransparencySession()
         adapter._local.session = session
 
-        result = adapter.generate(
-            channel,
-            GenerationRequest(
-                prompt="极简上传图标",
-                model="model-a",
-                size="1024x1024",
-                quality="high",
-                output_format="png",
-                compression=90,
-                transparent_background=True,
-            ),
-        )
+        with self.assertRaisesRegex(ProviderError, "Transparent background is not supported"):
+            adapter.generate(
+                channel,
+                GenerationRequest(
+                    prompt="极简上传图标",
+                    model="model-a",
+                    size="1024x1024",
+                    quality="high",
+                    output_format="png",
+                    compression=90,
+                    transparent_background=True,
+                ),
+            )
 
-        self.assertEqual(len(session.requests), 2)
+        self.assertEqual(len(session.requests), 1)
         self.assertEqual(session.requests[0]["json"]["background"], "transparent")
         self.assertIn("genuinely transparent canvas", session.requests[0]["json"]["prompt"])
-        self.assertNotIn("background", session.requests[1]["json"])
-        self.assertIn("#FFFFFF", session.requests[1]["json"]["prompt"])
-        self.assertIn("transparency checkerboard", session.requests[1]["json"]["prompt"])
-        self.assertNotIn("genuinely transparent canvas", session.requests[1]["json"]["prompt"])
-        with Image.open(io.BytesIO(result.content)) as image:
-            self.assertEqual(image.mode, "RGBA")
-            self.assertEqual(image.getchannel("A").getextrema(), (0, 255))
 
-    def test_transparent_background_keeps_valid_image_when_conversion_is_unavailable(self):
+    def test_transparent_background_rejects_opaque_provider_image(self):
         content = png_bytes((35, 160, 110))
+        channel = self.app.extensions["channel_registry"].get("test")
+        adapter = OpenAIImagesAdapter()
+        session = RecordingImageSession(transparent_content=content)
+        adapter._local.session = session
 
-        result = _ensure_transparent_image(
-            content,
-            output_format="png",
-            compression=90,
-        )
+        with self.assertRaisesRegex(ProviderError, "上游未返回真实透明背景图片") as error:
+            adapter.generate(
+                channel,
+                GenerationRequest(
+                    prompt="极简上传图标",
+                    model="model-a",
+                    size="1024x1024",
+                    quality="high",
+                    output_format="png",
+                    compression=90,
+                    transparent_background=True,
+                ),
+            )
 
-        self.assertEqual(result, content)
+        self.assertEqual(error.exception.code, "transparent_background_missing")
+        self.assertEqual(len(session.requests), 1)
 
     def test_chat_request_sends_configured_reasoning_effort(self):
         model = self.app.extensions["chat_model_registry"].get("test-chat")
