@@ -22,6 +22,7 @@ from ...storage import ImageStorage
 from ..creative import CASE_CATALOG, CREATIVE_ROUTER
 from ..creative.models import CreativeRetrieval
 from ..runtime_logs import RuntimeLogService
+from ..series import ResolvedSeriesAnchor
 from ..settings import SystemSettingsService
 from .context import ConversationContextManager
 
@@ -101,52 +102,17 @@ class ConversationSupport:
             reason=route.reason,
         )
 
-    def _active_series_contract(self, workspace: Workspace) -> dict[str, Any]:
-        settings = workspace.settings or {}
-        if str(settings.get("generation_strategy", "sample")).lower() != "series":
-            return {}
-        anchor = settings.get("series_anchor")
-        contract = anchor.get("contract") if isinstance(anchor, dict) else None
-        asset_id = (
-            str(anchor.get("asset_id", "")).strip().lower() if isinstance(anchor, dict) else ""
-        )
-        if (
-            len(asset_id) != 32
-            or not isinstance(contract, dict)
-            or not contract
-            or db.session.scalar(
-                select(Asset.id).where(
-                    Asset.id == asset_id,
-                    Asset.workspace_id == workspace.id,
-                    Asset.deleted_at.is_(None),
-                )
-            )
-            is None
-        ):
-            raise ServiceError(
-                "系列基准已失效，请重新选择一张生成结果",
-                code="series_anchor_invalid",
-                status_code=409,
-            )
-        return contract
+    @staticmethod
+    def _active_series_anchor(workspace: Workspace) -> ResolvedSeriesAnchor | None:
+        return ResolvedSeriesAnchor.active(workspace)
 
-    def _series_anchor_asset(self, workspace: Workspace) -> Asset | None:
-        if not self._active_series_contract(workspace):
-            return None
-        anchor = (workspace.settings or {}).get("series_anchor")
-        asset_id = str(anchor.get("asset_id", "")) if isinstance(anchor, dict) else ""
-        if not asset_id:
-            return None
-        return self._load_assets(workspace, (asset_id,))[0]
-
-    def _with_series_anchor(self, workspace: Workspace, assets: list[Asset]) -> list[Asset]:
-        anchor = self._series_anchor_asset(workspace)
-        if anchor is None:
-            return assets
-        return self._merge_context_assets(
-            workspace,
-            [anchor, *[asset for asset in assets if asset.id != anchor.id]],
-        )
+    def _with_series_anchor(
+        self,
+        workspace: Workspace,
+        assets: list[Asset],
+        series_anchor: ResolvedSeriesAnchor,
+    ) -> list[Asset]:
+        return self._merge_context_assets(workspace, series_anchor.order_assets(assets))
 
     @staticmethod
     def _draft_references(draft: dict[str, Any], candidates: list[Asset]) -> list[Asset]:

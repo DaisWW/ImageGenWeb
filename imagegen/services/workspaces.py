@@ -27,6 +27,7 @@ from ..models import (
 from ..storage import ImageStorage
 from .billing import BillingService
 from .common import money
+from .series import SeriesAnchor
 from .settings import SystemSettingsService
 from .starter_content import (
     REFERENCE_STARTER_ASSET_NAME,
@@ -339,25 +340,26 @@ class WorkspaceService:
         )
         if asset is None:
             raise ServiceError("系列基准图片不存在", status_code=404)
-        if not isinstance(contract, dict) or not contract:
+        series_anchor = SeriesAnchor.parse(
+            {
+                "asset_id": asset.id,
+                "source_item_id": source_item_id,
+                "contract": contract,
+            }
+        )
+        if series_anchor is None:
             raise ServiceError("该结果没有可复用的系列制作契约", status_code=409)
         sanitized = sanitize_workspace_settings(
             {
                 **(workspace.settings or {}),
                 "generation_strategy": "series",
-                "series_anchor": {
-                    "asset_id": asset.id,
-                    "source_item_id": str(source_item_id).strip().lower()[:32],
-                    "contract": contract,
-                },
+                "series_anchor": series_anchor.as_dict(),
                 "prompt_draft_id": "",
                 "mode": "img2img",
                 "reference_ids": [asset.id],
             },
             self.settings.runtime(),
         )
-        if sanitized.get("generation_strategy") != "series" or not sanitized.get("series_anchor"):
-            raise ServiceError("该结果没有可复用的系列制作契约", status_code=409)
         workspace.settings = sanitized
         workspace.updated_at = utcnow()
         db.session.commit()

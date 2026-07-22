@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ...errors import ServiceError
+from ..series import SeriesAnchor
 
 GENERATION_STRATEGIES = {"sample", "explore", "series"}
 MAX_EXPLORATION_IMAGES = 4
@@ -24,7 +25,7 @@ class GenerationPlan:
         prompt: str,
         count: int,
         draft: dict[str, Any] | None,
-        series_anchor: dict[str, Any] | None,
+        series_anchor: SeriesAnchor | dict[str, Any] | None,
         max_prompt_characters: int,
     ) -> GenerationPlan:
         normalized = normalize_generation_strategy(strategy)
@@ -58,7 +59,11 @@ class GenerationPlan:
                     code="prompt_review_required",
                     status_code=409,
                 )
-            anchor = _series_anchor(series_anchor)
+            anchor = SeriesAnchor.require(
+                series_anchor,
+                invalid_message="系列基准已失效，请重新选择",
+                invalid_code="invalid_request",
+            )
             prompts = tuple(
                 _append_contract(
                     base_prompt,
@@ -67,11 +72,8 @@ class GenerationPlan:
                 )
                 for _ in range(count)
             )
-            metadata["series_anchor"] = {
-                "asset_id": anchor["asset_id"],
-                "source_item_id": anchor.get("source_item_id", ""),
-            }
-            metadata["series_contract"] = anchor["contract"]
+            metadata["series_anchor"] = anchor.metadata()
+            metadata["series_contract"] = anchor.contract
         return cls(strategy=normalized, prompts=prompts, metadata=metadata)
 
 
@@ -104,20 +106,6 @@ def _exploration_variants(value: object, count: int) -> list[dict[str, object]]:
     return variants
 
 
-def _series_anchor(value: object) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise ServiceError("请先选择一张生成结果作为系列基准", status_code=409)
-    asset_id = str(value.get("asset_id", "")).strip().lower()
-    contract = value.get("contract")
-    if len(asset_id) != 32 or not isinstance(contract, dict) or not contract:
-        raise ServiceError("系列基准已失效，请重新选择", status_code=409)
-    return {
-        "asset_id": asset_id,
-        "source_item_id": str(value.get("source_item_id", "")).strip().lower()[:32],
-        "contract": contract,
-    }
-
-
 def _exploration_contract(variant: dict[str, object], *, language: str) -> str:
     payload = json.dumps(variant, ensure_ascii=False, indent=2)
     if language == "en":
@@ -136,8 +124,8 @@ def _exploration_contract(variant: dict[str, object], *, language: str) -> str:
     )
 
 
-def _series_contract(anchor: dict[str, Any], *, language: str) -> str:
-    payload = json.dumps(anchor["contract"], ensure_ascii=False, indent=2)
+def _series_contract(anchor: SeriesAnchor, *, language: str) -> str:
+    payload = json.dumps(anchor.contract, ensure_ascii=False, indent=2)
     if language == "en":
         return (
             "Series continuity contract (must be repeated in this image):\n"

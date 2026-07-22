@@ -235,8 +235,13 @@ class ConversationReplyService(ConversationSupport):
         else:
             candidate_references = []
             review_mode = "text2img"
-        if self._active_series_contract(workspace):
-            candidate_references = self._with_series_anchor(workspace, candidate_references)
+        series_anchor = self._active_series_anchor(workspace)
+        if series_anchor:
+            candidate_references = self._with_series_anchor(
+                workspace,
+                candidate_references,
+                series_anchor,
+            )
             review_mode = "img2img"
         review_candidates = candidate_references if review_mode != "text2img" else attachments
         context_attachments = self._merge_context_assets(
@@ -266,7 +271,7 @@ class ConversationReplyService(ConversationSupport):
             retrieved_cases=retrieval.cases,
             retrieval_confidence=retrieval.confidence,
             retrieval_reason=retrieval.reason,
-            active_series_contract=self._active_series_contract(workspace),
+            active_series_contract=series_anchor.anchor.contract if series_anchor else {},
         )
         try:
             context = self.context.build(

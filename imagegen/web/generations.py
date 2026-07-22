@@ -12,6 +12,7 @@ from ..services import GenerationWorkflow, SubmitGeneration
 from ..services.common import canvas_request_conflicts
 from ..services.generations.contracts import CANVAS_RESOLUTIONS
 from ..services.generations.planning import GenerationPlan, normalize_generation_strategy
+from ..services.series import ResolvedSeriesAnchor
 from . import web
 from .shared import (
     accessible_item,
@@ -69,31 +70,13 @@ def submit_generation():
             (workspace.settings or {}).get("generation_strategy", "sample"),
         )
     )
-    series_anchor = (workspace.settings or {}).get("series_anchor")
+    series_anchor = None
     if strategy == "series":
-        if not isinstance(series_anchor, dict):
-            raise ServiceError("请先选择一张生成结果作为系列基准", status_code=409)
-        anchor_id = str(series_anchor.get("asset_id", "")).strip().lower()
-        if (
-            len(anchor_id) != 32
-            or db.session.scalar(
-                select(Asset.id).where(
-                    Asset.id == anchor_id,
-                    Asset.workspace_id == workspace.id,
-                    Asset.deleted_at.is_(None),
-                )
-            )
-            is None
-        ):
-            raise ServiceError(
-                "系列基准已失效，请重新选择一张生成结果",
-                code="series_anchor_invalid",
-                status_code=409,
-            )
-        ordered_reference_ids = (
-            anchor_id,
-            *[item for item in ordered_reference_ids if item != anchor_id],
+        series_anchor = ResolvedSeriesAnchor.for_workspace(
+            workspace,
+            (workspace.settings or {}).get("series_anchor"),
         )
+        ordered_reference_ids = series_anchor.anchor.order_reference_ids(ordered_reference_ids)
         if mode != "img2img":
             raise ServiceError("系列延续必须使用垫图生图", status_code=409)
     draft_id = str(data.get("prompt_draft_id", "")).strip()
@@ -128,7 +111,7 @@ def submit_generation():
         prompt=prompt,
         count=batch_count,
         draft=draft,
-        series_anchor=series_anchor if strategy == "series" else None,
+        series_anchor=series_anchor.anchor if series_anchor else None,
         max_prompt_characters=runtime.max_prompt_characters,
     )
     workflow = GenerationWorkflow.build(
