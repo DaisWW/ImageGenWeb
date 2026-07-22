@@ -63,6 +63,22 @@ async function mockConfiguredImageChannel(page) {
   }));
 }
 
+async function mockConfiguredChatModel(page, version = "e2e-chat-models") {
+  await page.route("**/api/chat-models", (route) => route.fulfill({
+    json: {
+      version,
+      models: [{
+        id: "e2e-chat",
+        label: "E2E 助手",
+        enabled: true,
+        configured: true,
+        model: "e2e-model",
+        reasoning_effort: "",
+      }],
+    },
+  }));
+}
+
 function rectanglesOverlap(first, second) {
   return first.x < second.x + second.width
     && first.x + first.width > second.x
@@ -83,6 +99,7 @@ module.exports = {
   deleteWorkspace,
   expect,
   loginAsAdmin,
+  mockConfiguredChatModel,
   mockConfiguredImageChannel,
   rectanglesOverlap,
   test,

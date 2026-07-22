@@ -1,5 +1,6 @@
 const {
   expect,
+  mockConfiguredChatModel,
   mockConfiguredImageChannel,
   test,
 } = require("./fixtures");
@@ -167,19 +168,7 @@ test("image detail keeps its reference through multi-turn refinement", {
     }],
   };
 
-  await page.route("**/api/chat-models", (route) => route.fulfill({
-    json: {
-      version: "e2e-chat-models",
-      models: [{
-        id: "e2e-chat",
-        label: "E2E 助手",
-        enabled: true,
-        configured: true,
-        model: "e2e-model",
-        reasoning_effort: "",
-      }],
-    },
-  }));
+  await mockConfiguredChatModel(page);
   await page.route("**/api/generations*", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/generations/active") {

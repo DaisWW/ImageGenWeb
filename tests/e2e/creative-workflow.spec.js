@@ -5,6 +5,7 @@ const {
   deleteWorkspace,
   expect,
   loginAsAdmin,
+  mockConfiguredChatModel,
   mockConfiguredImageChannel,
   rectanglesOverlap,
   test,
@@ -20,19 +21,7 @@ test("AI automatically prepares a gallery template before generation", {
   let promptDraftRequests = 0;
 
   await mockConfiguredImageChannel(page);
-  await page.route("**/api/chat-models", (route) => route.fulfill({
-    json: {
-      version: "e2e-chat-models",
-      models: [{
-        id: "e2e-chat",
-        label: "E2E 助手",
-        enabled: true,
-        configured: true,
-        model: "e2e-model",
-        reasoning_effort: "",
-      }],
-    },
-  }));
+  await mockConfiguredChatModel(page);
   page.on("request", (request) => {
     if (request.method() === "POST" && request.url().includes("/prompt-drafts")) {
       promptDraftRequests += 1;
@@ -175,19 +164,7 @@ test("chat images are used for generation only when their semantic role requires
   let round = 0;
 
   await mockConfiguredImageChannel(page);
-  await page.route("**/api/chat-models", (route) => route.fulfill({
-    json: {
-      version: "e2e-semantic-references",
-      models: [{
-        id: "e2e-chat",
-        label: "E2E 助手",
-        enabled: true,
-        configured: true,
-        model: "e2e-model",
-        reasoning_effort: "",
-      }],
-    },
-  }));
+  await mockConfiguredChatModel(page, "e2e-semantic-references");
   await page.route("**/api/workspaces/*/messages*", async (route) => {
     const request = route.request();
     const targetId = new URL(request.url()).pathname.split("/")[3];

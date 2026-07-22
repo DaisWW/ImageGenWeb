@@ -1,4 +1,9 @@
-const { expect, loginAsAdmin, test } = require("./fixtures");
+const {
+  expect,
+  loginAsAdmin,
+  mockConfiguredChatModel,
+  test,
+} = require("./fixtures");
 
 test("chat waits for message persistence and resends stored messages with new IDs", {
   tag: "@responsive",
@@ -21,19 +26,7 @@ test("chat waits for message persistence and resends stored messages with new ID
   let acceptedMessageId = "";
   let activeRequest = null;
 
-  await page.route("**/api/chat-models", (route) => route.fulfill({
-    json: {
-      version: "e2e-chat-models",
-      models: [{
-        id: "e2e-chat",
-        label: "E2E 助手",
-        enabled: true,
-        configured: true,
-        model: "e2e-model",
-        reasoning_effort: "",
-      }],
-    },
-  }));
+  await mockConfiguredChatModel(page);
   await page.route("**/api/workspaces/*/messages*", async (route) => {
     const request = route.request();
     const targetWorkspaceId = new URL(request.url()).pathname.split("/")[3];
