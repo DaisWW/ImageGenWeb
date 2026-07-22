@@ -84,7 +84,7 @@
   display: grid;
   max-width: 1380px;
   margin: 0 auto 9px;
-  grid-template-columns: auto minmax(190px, 1.25fr) minmax(150px, 1fr) repeat(3, minmax(105px, .65fr)) minmax(92px, .55fr) 72px;
+  grid-template-columns: auto minmax(190px, 1.25fr) minmax(150px, 1fr) repeat(4, minmax(105px, .65fr)) minmax(92px, .55fr) 72px;
   align-items: end;
   gap: 8px;
 }
@@ -122,6 +122,67 @@
 
 .generation-composer .mode-switch {
   grid-column: 1 / -1;
+}
+
+.generation-plan {
+  max-width: 1380px;
+  margin: 0 auto 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-2);
+}
+
+.generation-plan-heading {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.generation-plan-heading span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.generation-plan-list {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 8px;
+}
+
+.generation-plan-item {
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface-1);
+}
+
+.generation-plan-item strong,
+.generation-plan-item span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.generation-plan-item strong {
+  color: var(--text);
+  font-size: 11px;
+}
+
+.generation-plan-item span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
 }
 
 .generation-toggle {

@@ -455,6 +455,9 @@
         direction?.label || "其他应用场景",
         payload.template_label || "自定义 Craft",
         galleryLabel ? `图谱 ${galleryLabel}` : "",
+        payload.retrieval_confidence
+          ? `检索${{ high: "高", medium: "中", low: "低" }[payload.retrieval_confidence] || "低"}置信度`
+          : "",
         payload.edit_recipe_label ? `编辑 ${payload.edit_recipe_label}` : "",
         retrievedCaseLabel ? `案例 ${retrievedCaseLabel}` : "",
         canvasLabel ? `画幅 ${canvasLabel}` : "",
@@ -464,6 +467,9 @@
         styleLabel,
         sceneLabel,
         `${(payload.hard_checks || []).length} 项验收门槛`,
+        Array.isArray(payload.exploration_plan) && payload.exploration_plan.length
+          ? `${payload.exploration_plan.length} 个探索方案`
+          : "",
         `${{ low: "草稿", medium: "精修", high: "成品" }[payload.quality_hint] || "草稿"}建议`,
       ].filter(Boolean);
       metadata.forEach((label) => {

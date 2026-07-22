@@ -117,7 +117,17 @@
             <label class="compact-field"><span>尺寸</span><input id="sizeInput" list="sizeOptions" maxlength="20" placeholder="1024x1024" autocomplete="off" required><datalist id="sizeOptions"></datalist></label>
             <label class="compact-field"><span>格式</span><select id="formatSelect"></select></label>
             <label class="compact-field number-field"><span>张数</span><input id="batchCount" type="number" min="1" max="{{ runtime_settings.max_batch_images }}" value="1"></label>
+            <label class="compact-field strategy-field"><span>生成方式</span><select id="generationStrategy">
+              <option value="sample">同提示词抽样</option>
+              <option value="explore">受控探索方案</option>
+              <option value="series">延续系列</option>
+            </select></label>
           </div>
+
+          <section class="generation-plan" id="generationPlan" hidden>
+            <div class="generation-plan-heading"><strong id="generationPlanTitle">受控探索</strong><span id="generationPlanHint"></span></div>
+            <div class="generation-plan-list" id="generationPlanList"></div>
+          </section>
 
           <div class="reference-strip" id="referenceStrip" hidden>
             <button class="reference-add" type="button" id="referenceAdd"><i data-lucide="image-plus"></i><span id="referenceAddLabel">添加垫图</span><small id="referenceLimit">0 / {{ runtime_settings.max_assets_per_workspace }}</small></button>
@@ -214,6 +224,7 @@
         <button class="button secondary" type="button" id="detailSaveLibrary"><i data-lucide="bookmark-plus"></i>存入图库</button>
         <button class="button secondary" type="button" id="detailRunReview"><i data-lucide="scan-search"></i>AI 验收</button>
         <button class="button secondary" type="button" id="detailApplyReview" hidden><i data-lucide="wrench"></i>按建议继续</button>
+        <button class="button secondary" type="button" id="detailSeriesAnchor"><i data-lucide="layers-3"></i>设为系列基准</button>
         <button class="button secondary" type="button" id="detailReuse"><i data-lucide="image-plus"></i><span id="detailReuseLabel">基于此图继续</span></button>
         <a class="button primary" id="detailDownload" download><i data-lucide="download"></i>下载原图</a>
       </div>

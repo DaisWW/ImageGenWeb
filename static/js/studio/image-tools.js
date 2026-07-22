@@ -21,7 +21,7 @@
       this.detailJobId = job.id;
       this.el.detailImage.src = item.image_url;
       this.prepareImageReveal(this.el.detailImage);
-      this.el.detailPrompt.textContent = job.prompt;
+      this.el.detailPrompt.textContent = item.prompt || job.prompt;
       const transparentLabel = job.transparent_background ? " · 透明背景" : "";
       const stageLabel = { draft: "草稿", refine: "精修", final: "成品" }[
         job.workflow?.generation_stage
@@ -41,6 +41,9 @@
         ["流程", [
           job.workflow?.creative_direction_label || "历史任务",
           job.workflow?.template_label,
+          job.workflow?.generation_strategy === "explore"
+            ? (job.workflow?.variant_plan?.[item.position]?.label || `探索方案 ${item.position + 1}`)
+            : job.workflow?.generation_strategy === "series" ? "系列延续" : "同提示词抽样",
           stageLabel,
         ].filter(Boolean).join(" · ")],
         ["实际图片", `${item.width || "-"} × ${item.height || "-"} · ${UI.formatBytes(item.bytes)}`],
@@ -57,6 +60,15 @@
       this.el.detailReferences.querySelectorAll("img").forEach((image) => this.prepareImageReveal(image));
       this.renderDetailReview(item.review || {});
       this.el.detailDownload.href = item.download_url;
+      const hasSeriesContract = Boolean(
+        job.workflow?.series_contract && Object.keys(job.workflow.series_contract).length,
+      );
+      const isCurrentAnchor = this.activeWorkspace?.settings?.series_anchor?.source_item_id === item.id;
+      this.el.detailSeriesAnchor.disabled = !hasSeriesContract || isCurrentAnchor;
+      this.el.detailSeriesAnchor.innerHTML = isCurrentAnchor
+        ? '<i data-lucide="layers-3"></i>当前系列基准'
+        : '<i data-lucide="layers-3"></i>设为系列基准';
+      UI.icons(this.el.detailSeriesAnchor);
       UI.openDialog(this.el.imageDialog);
     },
 
@@ -469,6 +481,35 @@
       });
     },
 
+    async setDetailAsSeriesAnchor() {
+      if (!this.detailItemId || !this.activeWorkspace || this.detailReferenceBusy) return;
+      const workspace = this.activeWorkspace;
+      this.detailReferenceBusy = true;
+      setDisabled(this.el.detailSeriesAnchor, true);
+      try {
+        const data = await UI.api(`/api/generation-items/${this.detailItemId}/series-anchor`, {
+          method: "POST",
+        });
+        const target = this.workspaces.find((item) => item.id === workspace.id);
+        if (target && data.workspace) Object.assign(target, data.workspace);
+        if (this.activeWorkspace?.id === workspace.id && data.workspace) {
+          Object.assign(this.activeWorkspace, data.workspace);
+          this.setGenerationStrategy("series", false);
+        }
+        await this.applyReferenceAsset(data.asset, {
+          workspace: this.activeWorkspace,
+          dialog: this.el.imageDialog,
+          prompt: "请描述这个系列下一张图片需要改变的内容：",
+          imageToast: "已设为系列基准，可以继续创作",
+        });
+      } catch (error) {
+        UI.toast(error.message, "error");
+      } finally {
+        this.detailReferenceBusy = false;
+        setDisabled(this.el.detailSeriesAnchor, false);
+      }
+    },
+
     async useDetailAsReference({ prepare, prompt, imageToast } = {}) {
       if (!this.detailItemId || !this.activeWorkspace || this.detailReferenceBusy) return;
       const itemId = this.detailItemId;
@@ -476,6 +517,7 @@
       this.detailReferenceBusy = true;
       setDisabled(this.el.detailReuse, true);
       setDisabled(this.el.detailUiKit, true);
+      setDisabled(this.el.detailSeriesAnchor, true);
       setDisabled(this.el.detailApplyReview, true);
       try {
         const data = await UI.api(`/api/generation-items/${itemId}/reference`, {
@@ -494,6 +536,7 @@
         this.detailReferenceBusy = false;
         setDisabled(this.el.detailReuse, false);
         setDisabled(this.el.detailUiKit, false);
+        setDisabled(this.el.detailSeriesAnchor, false);
         setDisabled(this.el.detailApplyReview, !this.detailReviewSuggestion);
       }
     },

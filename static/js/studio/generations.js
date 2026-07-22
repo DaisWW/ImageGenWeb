@@ -15,12 +15,14 @@
 
   Object.assign(StudioApp.prototype, {
     updatePrice() {
-      const count = Math.min(
+      const count = this.generationCount ? this.generationCount() : Math.min(
         this.limits.max_batch_images, Math.max(1, Number(this.el.batchCount.value || 1)),
       );
       const unit = "张";
       const price = Number(this.currentChannel()?.price_rmb || 0);
-      this.el.priceEstimateLabel.textContent = `${count} ${unit}预计总价`;
+      const strategy = this.el.generationStrategy?.value || "sample";
+      const suffix = strategy === "explore" ? "探索方案" : strategy === "series" ? "系列图片" : unit;
+      this.el.priceEstimateLabel.textContent = `${count} ${suffix}预计总价`;
       this.el.priceEstimate.textContent = UI.money(price * count);
       this.channels.forEach((channel, index) => {
         const option = this.el.channelSelect.options[index];
@@ -77,13 +79,29 @@
         }
         if (!this.validateSizeInput(true)) return;
         const selection = this.currentSelection(workspace.id);
+        this.ensureSeriesAnchorSelection(selection);
         const omitted = this.trimReferenceSelection(selection, this.generationReferenceLimit());
         if (omitted) {
           this.renderReferences();
           UI.toast(`渠道垫图上限已更新，已取消 ${omitted} 张超限图片`, "info");
         }
         const referenceIds = [...selection];
+        const reviewedDraft = this.currentPromptDraft();
         const settings = this.collectSettings();
+        if (["explore", "series"].includes(settings.generation_strategy) && !reviewedDraft) {
+          UI.toast(
+            settings.generation_strategy === "series"
+              ? "系列延续需要先使用 AI 整理当前需求"
+              : "探索方案需要先使用 AI 整理最终提示词",
+            "error",
+          );
+          return;
+        }
+        if (settings.generation_strategy === "series"
+          && !workspace.settings?.series_anchor?.asset_id) {
+          UI.toast("请先选择一张生成结果作为系列基准", "error");
+          return;
+        }
         this.updatePromptReviewState();
         const canvasResolution = this.canvasConflict?.resolution || "";
         if (this.canvasConflict && !canvasResolution) {
@@ -99,7 +117,6 @@
           UI.toast("垫图生图至少选择一张垫图", "error");
           return;
         }
-        const reviewedDraft = this.currentPromptDraft();
         settings.prompt_draft_id = reviewedDraft?.id || "";
         await this.flushSettings(workspace.id, requestOptions);
         if (operation.canceled) return;

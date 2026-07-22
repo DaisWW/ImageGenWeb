@@ -33,6 +33,7 @@ test("detail reference actions share one in-flight request", async ({ studioPage
     };
     const detailReuse = document.createElement("button");
     const detailUiKit = document.createElement("button");
+    const detailSeriesAnchor = document.createElement("button");
     const detailApplyReview = document.createElement("button");
     const target = {
       detailItemId: "detail-item",
@@ -42,6 +43,7 @@ test("detail reference actions share one in-flight request", async ({ studioPage
       el: {
         detailReuse,
         detailUiKit,
+        detailSeriesAnchor,
         detailApplyReview,
         imageDialog: document.createElement("dialog"),
       },
@@ -52,6 +54,7 @@ test("detail reference actions share one in-flight request", async ({ studioPage
       const second = window.ImageGenStudio.StudioApp.prototype.useDetailAsReference.call(target);
       const disabledDuringRequest = detailReuse.disabled
         && detailUiKit.disabled
+        && detailSeriesAnchor.disabled
         && detailApplyReview.disabled;
       release();
       await Promise.all([first, second]);
@@ -60,6 +63,7 @@ test("detail reference actions share one in-flight request", async ({ studioPage
         disabledDuringRequest,
         disabledAfterRequest: detailReuse.disabled
           || detailUiKit.disabled
+          || detailSeriesAnchor.disabled
           || detailApplyReview.disabled,
       };
     } finally {

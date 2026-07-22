@@ -298,6 +298,7 @@
       );
       const omitted = this.showGenerationComposer(prompt, message.payload.reference_ids || []);
       this.updatePromptReviewState();
+      this.renderGenerationPlan?.();
       if (omitted > 0) {
         const max = this.generationReferenceLimit();
         UI.toast(`当前渠道最多使用 ${max} 张垫图，已忽略 ${omitted} 张超限或已删除的参考图`);
@@ -525,6 +526,7 @@
       setDisabled(this.el.translatePrompt, locked);
       setDisabled(this.el.chatReferenceButton, locked || referenceUploading);
       setDisabled(this.el.directGenerationButton, locked || referenceUploading);
+      setDisabled(this.el.generationStrategy, locked || referenceUploading);
       const promptReviewed = Boolean(this.currentPromptDraft());
       this.el.promptReviewStatus.classList.toggle("is-reviewed", promptReviewed);
       setText(

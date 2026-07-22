@@ -246,6 +246,11 @@
         transparentBackground: byId("transparentBackground"),
         transparentBackgroundControl: byId("transparentBackgroundControl"),
         batchCount: byId("batchCount"),
+        generationStrategy: byId("generationStrategy"),
+        generationPlan: byId("generationPlan"),
+        generationPlanTitle: byId("generationPlanTitle"),
+        generationPlanHint: byId("generationPlanHint"),
+        generationPlanList: byId("generationPlanList"),
         referenceStrip: byId("referenceStrip"),
         referenceInput: byId("referenceInput"),
         referenceAdd: byId("referenceAdd"),
@@ -272,6 +277,7 @@
         detailReviewSuggestion: byId("detailReviewSuggestion"),
         detailRunReview: byId("detailRunReview"),
         detailApplyReview: byId("detailApplyReview"),
+        detailSeriesAnchor: byId("detailSeriesAnchor"),
         detailUiKit: byId("detailUiKit"),
         detailSlice: byId("detailSlice"),
         detailSaveLibrary: byId("detailSaveLibrary"),
@@ -328,6 +334,7 @@
       }
       this.renderWorkspaceList();
       if (this.activeWorkspace) {
+        this.normalizeGenerationCount?.(true);
         this.renderReferences();
         this.renderChatReferences();
         this.updateInteractionState();
@@ -467,8 +474,13 @@
         }
       });
       this.el.batchCount.addEventListener("input", () => {
+        this.normalizeGenerationCount();
+        this.renderGenerationPlan();
         this.updatePrice();
         this.settingChanged();
+      });
+      this.el.generationStrategy.addEventListener("change", () => {
+        this.setGenerationStrategy(this.el.generationStrategy.value, true);
       });
       this.el.promptInput.addEventListener("input", () => {
         window.clearTimeout(this.promptCounterTimer);
@@ -489,6 +501,7 @@
       this.el.detailUiKit.addEventListener("click", () => this.startUiKitReconstruction());
       this.el.detailRunReview.addEventListener("click", () => this.runDetailReview());
       this.el.detailApplyReview.addEventListener("click", () => this.applyDetailReview());
+      this.el.detailSeriesAnchor.addEventListener("click", () => this.setDetailAsSeriesAnchor());
       this.el.detailSlice.addEventListener("click", () => this.openSliceTool());
       this.el.detailSaveLibrary.addEventListener("click", () => this.saveDetailToLibrary());
       this.el.detailReuse.addEventListener("click", () => this.useDetailAsReference());
