@@ -20,7 +20,9 @@ test("late reference response updates the original workspace cache", async ({
   expect(result).toEqual({ assetIds: ["late-asset"], renders: 1 });
 });
 
-test("detail reference actions share one in-flight request", async ({ studioPage: page }) => {
+test("detail reference actions share one request without enabling unavailable actions", async ({
+  studioPage: page,
+}) => {
   const result = await page.evaluate(async () => {
     const originalApi = window.ImageGenStudio.UI.api;
     let release;
@@ -37,7 +39,9 @@ test("detail reference actions share one in-flight request", async ({ studioPage
     const detailApplyReview = document.createElement("button");
     const target = {
       detailItemId: "detail-item",
+      detailJobId: "detail-job",
       activeWorkspace: { id: "workspace" },
+      jobs: [],
       detailReferenceBusy: false,
       detailReviewSuggestion: "只改变一个问题",
       el: {
@@ -48,6 +52,9 @@ test("detail reference actions share one in-flight request", async ({ studioPage
         imageDialog: document.createElement("dialog"),
       },
       applyReferenceAsset: async () => {},
+      refreshDetailSeriesAnchorState() {
+        window.ImageGenStudio.StudioApp.prototype.refreshDetailSeriesAnchorState.call(this);
+      },
     };
     try {
       const first = window.ImageGenStudio.StudioApp.prototype.useDetailAsReference.call(target);
@@ -61,10 +68,10 @@ test("detail reference actions share one in-flight request", async ({ studioPage
       return {
         calls,
         disabledDuringRequest,
-        disabledAfterRequest: detailReuse.disabled
+        eligibleActionsDisabledAfterRequest: detailReuse.disabled
           || detailUiKit.disabled
-          || detailSeriesAnchor.disabled
           || detailApplyReview.disabled,
+        seriesAnchorDisabledAfterRequest: detailSeriesAnchor.disabled,
       };
     } finally {
       window.ImageGenStudio.UI.api = originalApi;
@@ -74,7 +81,8 @@ test("detail reference actions share one in-flight request", async ({ studioPage
   expect(result).toEqual({
     calls: 1,
     disabledDuringRequest: true,
-    disabledAfterRequest: false,
+    eligibleActionsDisabledAfterRequest: false,
+    seriesAnchorDisabledAfterRequest: true,
   });
 });
 

@@ -15,9 +15,7 @@
 
   Object.assign(StudioApp.prototype, {
     updatePrice() {
-      const count = this.generationCount ? this.generationCount() : Math.min(
-        this.limits.max_batch_images, Math.max(1, Number(this.el.batchCount.value || 1)),
-      );
+      const count = this.generationCount();
       const unit = "张";
       const price = Number(this.currentChannel()?.price_rmb || 0);
       const strategy = this.el.generationStrategy?.value || "sample";

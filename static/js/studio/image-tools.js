@@ -16,6 +16,25 @@
   ].join("\n\n");
 
   Object.assign(StudioApp.prototype, {
+    refreshDetailSeriesAnchorState(job = null, item = null) {
+      job = job || (this.jobs || []).find((entry) => entry.id === this.detailJobId);
+      item = item || job?.items.find((entry) => entry.id === this.detailItemId);
+      const hasSeriesContract = Boolean(
+        job?.workflow?.series_contract && Object.keys(job.workflow.series_contract).length,
+      );
+      const isCurrentAnchor = Boolean(
+        item && this.activeWorkspace?.settings?.series_anchor?.source_item_id === item.id,
+      );
+      setDisabled(
+        this.el.detailSeriesAnchor,
+        this.detailReferenceBusy || !hasSeriesContract || isCurrentAnchor,
+      );
+      this.el.detailSeriesAnchor.innerHTML = isCurrentAnchor
+        ? '<i data-lucide="layers-3"></i>当前系列基准'
+        : '<i data-lucide="layers-3"></i>设为系列基准';
+      UI.icons(this.el.detailSeriesAnchor);
+    },
+
     showDetail(job, item) {
       this.detailItemId = item.id;
       this.detailJobId = job.id;
@@ -60,15 +79,7 @@
       this.el.detailReferences.querySelectorAll("img").forEach((image) => this.prepareImageReveal(image));
       this.renderDetailReview(item.review || {});
       this.el.detailDownload.href = item.download_url;
-      const hasSeriesContract = Boolean(
-        job.workflow?.series_contract && Object.keys(job.workflow.series_contract).length,
-      );
-      const isCurrentAnchor = this.activeWorkspace?.settings?.series_anchor?.source_item_id === item.id;
-      this.el.detailSeriesAnchor.disabled = !hasSeriesContract || isCurrentAnchor;
-      this.el.detailSeriesAnchor.innerHTML = isCurrentAnchor
-        ? '<i data-lucide="layers-3"></i>当前系列基准'
-        : '<i data-lucide="layers-3"></i>设为系列基准';
-      UI.icons(this.el.detailSeriesAnchor);
+      this.refreshDetailSeriesAnchorState(job, item);
       UI.openDialog(this.el.imageDialog);
     },
 
@@ -485,7 +496,7 @@
       if (!this.detailItemId || !this.activeWorkspace || this.detailReferenceBusy) return;
       const workspace = this.activeWorkspace;
       this.detailReferenceBusy = true;
-      setDisabled(this.el.detailSeriesAnchor, true);
+      this.refreshDetailSeriesAnchorState();
       try {
         const data = await UI.api(`/api/generation-items/${this.detailItemId}/series-anchor`, {
           method: "POST",
@@ -506,7 +517,7 @@
         UI.toast(error.message, "error");
       } finally {
         this.detailReferenceBusy = false;
-        setDisabled(this.el.detailSeriesAnchor, false);
+        this.refreshDetailSeriesAnchorState();
       }
     },
 
@@ -517,7 +528,7 @@
       this.detailReferenceBusy = true;
       setDisabled(this.el.detailReuse, true);
       setDisabled(this.el.detailUiKit, true);
-      setDisabled(this.el.detailSeriesAnchor, true);
+      this.refreshDetailSeriesAnchorState();
       setDisabled(this.el.detailApplyReview, true);
       try {
         const data = await UI.api(`/api/generation-items/${itemId}/reference`, {
@@ -536,7 +547,7 @@
         this.detailReferenceBusy = false;
         setDisabled(this.el.detailReuse, false);
         setDisabled(this.el.detailUiKit, false);
-        setDisabled(this.el.detailSeriesAnchor, false);
+        this.refreshDetailSeriesAnchorState();
         setDisabled(this.el.detailApplyReview, !this.detailReviewSuggestion);
       }
     },

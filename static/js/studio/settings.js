@@ -8,6 +8,7 @@
     IMAGE_SIZE_PATTERN,
     IMAGE_DIMENSION_MIN,
     IMAGE_DIMENSION_MAX,
+    GenerationStrategyPolicy,
     setHidden,
     setAttribute,
     setText,
@@ -79,9 +80,8 @@
       this.el.transparentBackground.checked = settings.transparent_background === true;
       this.el.promptInput.value = settings.prompt || "";
       this.updatePromptCounter();
-      this.el.batchCount.value = Math.min(
-        this.limits.max_batch_images, Math.max(1, Number(settings.batch_count || 1)),
-      );
+      this.el.batchCount.value = this.generationStrategyPolicy()
+        .normalizeCount("sample", settings.batch_count);
       const preferred = this.channels.find((channel) => channel.id === settings.channel_id && channel.configured)
         || this.channels.find((channel) => channel.configured)
         || this.channels[0];
@@ -383,14 +383,13 @@
       if (shouldSave) this.settingChanged();
     },
 
+    generationStrategyPolicy() {
+      return new GenerationStrategyPolicy(this.limits.max_batch_images);
+    },
+
     generationCount() {
       const strategy = this.el.generationStrategy.value || "sample";
-      const minimum = strategy === "explore" ? 2 : 1;
-      const maximum = strategy === "explore"
-        ? Math.min(4, this.limits.max_batch_images)
-        : this.limits.max_batch_images;
-      const value = Number(this.el.batchCount.value || minimum);
-      return Math.min(maximum, Math.max(minimum, Number.isFinite(value) ? value : minimum));
+      return this.generationStrategyPolicy().normalizeCount(strategy, this.el.batchCount.value);
     },
 
     ensureSeriesAnchorSelection(selection = this.currentSelection()) {
@@ -410,14 +409,14 @@
 
     normalizeGenerationCount(force = false) {
       const strategy = this.el.generationStrategy.value || "sample";
-      const minimum = strategy === "explore" ? 2 : 1;
-      const maximum = strategy === "explore"
-        ? Math.min(4, this.limits.max_batch_images)
-        : this.limits.max_batch_images;
+      const policy = this.generationStrategyPolicy();
+      const { minimum, maximum } = policy.countRange(strategy);
       this.el.batchCount.min = String(minimum);
       this.el.batchCount.max = String(maximum);
       if (force || this.el.batchCount.value.trim()) {
-        this.el.batchCount.value = String(this.generationCount());
+        this.el.batchCount.value = String(
+          policy.normalizeCount(strategy, this.el.batchCount.value),
+        );
       }
     },
 
@@ -430,20 +429,24 @@
       const img2imgAvailable = Boolean(
         this.currentChannel()?.capabilities?.modes?.includes("img2img"),
       );
-      const explorationAvailable = this.limits.max_batch_images >= 2;
+      const policy = this.generationStrategyPolicy();
+      const explorationAvailable = policy.explorationAvailable;
+      const seriesAvailable = policy.seriesAvailable({ anchorAvailable, img2imgAvailable });
       const exploreOption = [...this.el.generationStrategy.options]
         .find((option) => option.value === "explore");
       if (exploreOption) exploreOption.disabled = !explorationAvailable;
       const seriesOption = [...this.el.generationStrategy.options]
         .find((option) => option.value === "series");
-      if (seriesOption) seriesOption.disabled = !anchorAvailable || !img2imgAvailable;
-      let strategy = ["sample", "explore", "series"].includes(value) ? value : "sample";
-      if (strategy === "explore" && !explorationAvailable) {
-        strategy = "sample";
-        if (shouldSave) UI.toast("当前批量上限不足以进行受控探索，已切回同提示词抽样", "info");
+      if (seriesOption) seriesOption.disabled = !seriesAvailable;
+      const requestedStrategy = policy.normalizeStrategy(value);
+      const strategy = policy.resolveStrategy(requestedStrategy, {
+        anchorAvailable,
+        img2imgAvailable,
+      });
+      if (requestedStrategy === "explore" && strategy !== requestedStrategy && shouldSave) {
+        UI.toast("当前批量上限不足以进行受控探索，已切回同提示词抽样", "info");
       }
-      if (strategy === "series" && (!anchorAvailable || !img2imgAvailable)) {
-        strategy = "sample";
+      if (requestedStrategy === "series" && strategy !== requestedStrategy) {
         if (shouldSave) {
           UI.toast(
             !anchorAvailable ? "请先将一张生成结果设为系列基准" : "当前渠道不支持系列延续",
@@ -453,7 +456,7 @@
       }
       this.el.generationStrategy.value = strategy;
       if (strategy === "explore" && Number(this.el.batchCount.value || 1) < 2) {
-        this.el.batchCount.value = String(Math.min(4, this.limits.max_batch_images));
+        this.el.batchCount.value = String(policy.countRange(strategy).maximum);
       }
       this.normalizeGenerationCount(true);
       if (strategy === "series") {

@@ -19,6 +19,39 @@ function deferred() {
   return { promise, resolve };
 }
 
+test("generation strategy policy owns availability and count limits", async ({
+  studioPage: page,
+}) => {
+  const result = await page.evaluate(() => {
+    const Policy = window.ImageGenStudio.GenerationStrategyPolicy;
+    const policy = new Policy(20);
+    const restricted = new Policy(1);
+    return {
+      sample: [policy.normalizeCount("sample", 0), policy.normalizeCount("sample", 99)],
+      explore: [policy.normalizeCount("explore", 1), policy.normalizeCount("explore", 99)],
+      seriesUnavailable: policy.resolveStrategy("series", {
+        anchorAvailable: true,
+        img2imgAvailable: false,
+      }),
+      seriesAvailable: policy.resolveStrategy("series", {
+        anchorAvailable: true,
+        img2imgAvailable: true,
+      }),
+      restrictedExplore: restricted.resolveStrategy("explore", {}),
+      restrictedRange: restricted.countRange("explore"),
+    };
+  });
+
+  expect(result).toEqual({
+    sample: [1, 20],
+    explore: [2, 4],
+    seriesUnavailable: "sample",
+    seriesAvailable: "series",
+    restrictedExplore: "sample",
+    restrictedRange: { minimum: 1, maximum: 1 },
+  });
+});
+
 test("deleting the last workspace leaves the workspace list empty", {
   tag: "@responsive",
 }, async ({ page }) => {

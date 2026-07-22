@@ -58,6 +58,46 @@
     if (element.getAttribute(name) !== next) element.setAttribute(name, next);
   };
 
+  class GenerationStrategyPolicy {
+    constructor(maxBatchImages) {
+      const maximum = Number(maxBatchImages);
+      this.maxBatchImages = Number.isFinite(maximum) ? Math.max(1, maximum) : 1;
+    }
+
+    normalizeStrategy(value) {
+      return ["sample", "explore", "series"].includes(value) ? value : "sample";
+    }
+
+    get explorationAvailable() {
+      return this.maxBatchImages >= 2;
+    }
+
+    seriesAvailable({ anchorAvailable, img2imgAvailable } = {}) {
+      return Boolean(anchorAvailable && img2imgAvailable);
+    }
+
+    resolveStrategy(value, availability) {
+      const strategy = this.normalizeStrategy(value);
+      if (strategy === "explore" && !this.explorationAvailable) return "sample";
+      if (strategy === "series" && !this.seriesAvailable(availability)) return "sample";
+      return strategy;
+    }
+
+    countRange(value) {
+      const strategy = this.normalizeStrategy(value);
+      if (strategy === "explore" && this.explorationAvailable) {
+        return { minimum: 2, maximum: Math.min(4, this.maxBatchImages) };
+      }
+      return { minimum: 1, maximum: this.maxBatchImages };
+    }
+
+    normalizeCount(strategy, value) {
+      const { minimum, maximum } = this.countRange(strategy);
+      const count = Number(value || minimum);
+      return Math.min(maximum, Math.max(minimum, Number.isFinite(count) ? count : minimum));
+    }
+  }
+
   class StudioApp {
     constructor() {
       this.bootstrap = JSON.parse(document.getElementById("bootstrapData").textContent);
@@ -572,6 +612,7 @@
     setHidden,
     setDisabled,
     setAttribute,
+    GenerationStrategyPolicy,
     StudioApp,
   };
 })();
