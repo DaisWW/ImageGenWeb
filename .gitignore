@@ -1,6 +1,7 @@
 .env
 .ui-perf-data/
 .ui-test-data/
+.tmp-*
 .pytest_cache/
 .ruff_cache/
 .coverage*

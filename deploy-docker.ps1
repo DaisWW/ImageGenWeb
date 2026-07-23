@@ -117,6 +117,7 @@ function Initialize-EnvironmentFile {
     Set-EnvValue $lines "IMAGE_API_KEY" "" | Out-Null
     Set-EnvValue $lines "LUCEN_API_BASE_URL" "https://lucen.plus" | Out-Null
     Set-EnvValue $lines "LUCEN_API_KEY" "" | Out-Null
+    Set-EnvValue $lines "LUCIDA_IMAGE" "snow-ai-studio-lucida:latest" -ReplaceBlank | Out-Null
     Set-EnvValue $lines "LUCIDA_MATTING_URL" "http://lucida:8000" -ReplaceBlank | Out-Null
     Set-EnvValue $lines "LUCIDA_MATTING_MODEL" "lucida" -ReplaceBlank | Out-Null
     Set-EnvValue $lines "LUCIDA_MATTING_TIMEOUT_SECONDS" "120" -ReplaceBlank | Out-Null
@@ -253,11 +254,52 @@ try {
         throw "缺少 Lucida 源码/权重：请准备 .tmp-lucida-src\lucida-main（含 serving 与 .model\lucida）。"
     }
 
-    $composeArguments = @("compose", "--project-directory", $projectDir, "--profile", "lucida", "up", "-d", "--remove-orphans")
-    if (-not $NoBuild) {
-        $composeArguments += "--build"
+    $lucidaImage = "snow-ai-studio-lucida:latest"
+    $envLines = if (Test-Path -LiteralPath $envPath) { [IO.File]::ReadAllLines($envPath) } else { @() }
+    foreach ($line in $envLines) {
+        if ($line.StartsWith("LUCIDA_IMAGE=", [StringComparison]::Ordinal)) {
+            $configuredImage = $line.Substring("LUCIDA_IMAGE=".Length).Trim()
+            if (-not [string]::IsNullOrWhiteSpace($configuredImage)) {
+                $lucidaImage = $configuredImage
+            }
+            break
+        }
     }
-    & docker @composeArguments
+
+    function Test-LocallyUsableLucidaImage {
+        param([string]$Image)
+
+        docker image inspect $Image *> $null
+        if ($LASTEXITCODE -ne 0) {
+            return $false
+        }
+
+        docker run --rm --gpus all --entrypoint python $Image -c "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)" *> $null
+        return $LASTEXITCODE -eq 0
+    }
+
+    if (-not $NoBuild) {
+        Write-Host "正在构建主站与 Worker 镜像..."
+        & docker compose --project-directory $projectDir build web worker
+        if ($LASTEXITCODE -ne 0) {
+            throw "主站/Worker 镜像构建失败。"
+        }
+    }
+
+    if (-not (Test-LocallyUsableLucidaImage -Image $lucidaImage)) {
+        if ($NoBuild) {
+            throw "找不到可用的 GPU Lucida 镜像 $lucidaImage；请去掉 -NoBuild 让脚本先构建。"
+        }
+        Write-Host "正在构建 Docker GPU Lucida 镜像（首次可能需要较长时间）..."
+        & docker compose --project-directory $projectDir --profile lucida build lucida
+        if ($LASTEXITCODE -ne 0 -or -not (Test-LocallyUsableLucidaImage -Image $lucidaImage)) {
+            throw "GPU Lucida 镜像构建或 CUDA 检查失败。请确认 Docker Desktop 已启用 NVIDIA runtime。"
+        }
+    } else {
+        Write-Host "复用已存在的 GPU Lucida 镜像：$lucidaImage" -ForegroundColor Green
+    }
+
+    & docker compose --project-directory $projectDir --profile lucida up -d --no-build --force-recreate --remove-orphans
     if ($LASTEXITCODE -ne 0) {
         throw "docker compose 启动失败。"
     }

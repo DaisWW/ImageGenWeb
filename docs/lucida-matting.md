@@ -11,20 +11,25 @@
 LUCIDA_MATTING_URL=http://lucida:8000
 LUCIDA_MATTING_MODEL=lucida
 LUCIDA_MATTING_TIMEOUT_SECONDS=120
+LUCIDA_IMAGE=snow-ai-studio-lucida:latest
 # 默认 CUDA 12.4 torch；CPU 回退可设 https://download.pytorch.org/whl/cpu
 LUCIDA_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
 ```
 
-3. 启动（含 Lucida profile）：
+3. 一键部署（默认含 Lucida GPU 服务）：
 
 ```powershell
-docker compose --profile lucida up -d --build
+.\deploy-docker.cmd
 ```
+
+脚本会复用本地已通过 CUDA 检查的 `LUCIDA_IMAGE`，只在镜像不存在或无法使用 GPU 时重新构建。
+只重启现有镜像可直接运行 `.\deploy-docker.ps1 -Lan -NoBuild`。
 
 需要：Docker Desktop 启用 NVIDIA runtime，本机有可用 NVIDIA GPU。
 
 | 变量 | 说明 | 示例 |
 | --- | --- | --- |
+| `LUCIDA_IMAGE` | Lucida GPU 镜像 | `snow-ai-studio-lucida:latest` |
 | `LUCIDA_MATTING_URL` | Lucida 根地址 | `http://lucida:8000` |
 | `LUCIDA_MATTING_MODEL` | `/remove?model=` | `lucida` |
 | `LUCIDA_MATTING_TIMEOUT_SECONDS` | 读超时秒数 | `120` |

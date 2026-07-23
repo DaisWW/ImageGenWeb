@@ -49,6 +49,7 @@ services:
 
   lucida:
     profiles: ["lucida"]
+    image: ${LUCIDA_IMAGE:-snow-ai-studio-lucida:latest}
     build:
       context: .
       dockerfile: docker/lucida/Dockerfile
