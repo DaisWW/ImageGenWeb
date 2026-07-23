@@ -67,11 +67,12 @@ tests/integration/ 业务与 HTTP 合同测试
 
 本地开发仍使用 `7860`，Docker 对外端口为 `18081`，二者不会冲突。如通过单个 HTTPS 反向代理部署，将 `.env` 中的 `COOKIE_SECURE` 和 `TRUST_PROXY_HEADERS` 都改为 `true`。
 
-Compose 包含三个容器：
+Compose 默认通过 `deploy-docker` 启用四个服务：
 
 - `web`：Flask/Gunicorn Web 服务，启动前执行 Alembic 数据库迁移。
 - `worker`：独立队列 Worker，执行生图、结算和 30 天清理。
 - `db`：PostgreSQL 17。
+- `lucida`：Docker 内 Lucida 抠图服务（默认 CUDA GPU；勾选透明背景时由 Worker 自动调用）。
 
 当前架构明确只支持一个 Gunicorn Web 进程和一个 Worker。登录限流、对话与工作站互斥是 Web 进程内状态，Worker 则通过数据库租约拒绝第二个活跃实例；不要通过增加 Gunicorn worker 数或复制 Compose 服务进行水平扩容。
 

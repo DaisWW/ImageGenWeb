@@ -2,8 +2,6 @@
 
 勾选 **透明背景** 时：上游按普通不透明图生成；Worker 成功后调用 Lucida 抠图，再把带真实 Alpha 的结果入库计费。
 
-详情页 **Lucida 抠图 / Lucida ZIP** 仍可作为对已有不透明结果的显式后处理下载入口。
-
 ## 启用方式（Docker 一体 + GPU）
 
 1. 准备 Lucida 源码与权重到 `.tmp-lucida-src/lucida-main`（权重目录 `.model/lucida`）
@@ -38,7 +36,6 @@ docker compose --profile lucida up -d --build
 
 - 透明背景 **不再** 向生图上游发送 `background=transparent`
 - 未配置 `LUCIDA_MATTING_URL` 时，勾选透明背景的任务会失败（如 `matting_unavailable`）
-- 已有真实 Alpha 的结果，详情页显式抠图会返回 `409`
 - 默认 Compose profile 不含 Lucida；主站可单独启动
 
 ## 性能

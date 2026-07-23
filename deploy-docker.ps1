@@ -117,6 +117,12 @@ function Initialize-EnvironmentFile {
     Set-EnvValue $lines "IMAGE_API_KEY" "" | Out-Null
     Set-EnvValue $lines "LUCEN_API_BASE_URL" "https://lucen.plus" | Out-Null
     Set-EnvValue $lines "LUCEN_API_KEY" "" | Out-Null
+    Set-EnvValue $lines "LUCIDA_MATTING_URL" "http://lucida:8000" -ReplaceBlank | Out-Null
+    Set-EnvValue $lines "LUCIDA_MATTING_MODEL" "lucida" -ReplaceBlank | Out-Null
+    Set-EnvValue $lines "LUCIDA_MATTING_TIMEOUT_SECONDS" "120" -ReplaceBlank | Out-Null
+    Set-EnvValue $lines "LUCIDA_TORCH_INDEX_URL" "https://download.pytorch.org/whl/cu124" -ReplaceBlank | Out-Null
+    Set-EnvValue $lines "LUCIDA_PRELOAD_MODEL" "1" -ReplaceBlank | Out-Null
+    Set-EnvValue $lines "LUCIDA_MODEL_PATH" "./.tmp-lucida-src/lucida-main/.model/lucida" -ReplaceBlank | Out-Null
     Set-EnvValue $lines "IMAGEGEN_PORT" ([string]$Port) | Out-Null
     $bindHost = if ($Lan) { "0.0.0.0" } else { "127.0.0.1" }
     Set-EnvValue $lines "IMAGEGEN_BIND_HOST" $bindHost | Out-Null
@@ -239,7 +245,15 @@ try {
         throw "端口 $Port 已被其他进程占用。请停止占用进程，或使用 -Port 选择其他端口。"
     }
 
-    $composeArguments = @("compose", "--project-directory", $projectDir, "up", "-d", "--remove-orphans")
+
+    $lucidaSource = Join-Path $projectDir ".tmp-lucida-src\lucida-main"
+    $lucidaModel = Join-Path $lucidaSource ".model\lucida\config.json"
+    $lucidaServing = Join-Path $lucidaSource "serving\app.py"
+    if (-not (Test-Path -LiteralPath $lucidaServing) -or -not (Test-Path -LiteralPath $lucidaModel)) {
+        throw "缺少 Lucida 源码/权重：请准备 .tmp-lucida-src\lucida-main（含 serving 与 .model\lucida）。"
+    }
+
+    $composeArguments = @("compose", "--project-directory", $projectDir, "--profile", "lucida", "up", "-d", "--remove-orphans")
     if (-not $NoBuild) {
         $composeArguments += "--build"
     }
@@ -249,7 +263,7 @@ try {
     }
 
     $healthUrl = "http://127.0.0.1:$Port/health"
-    $deadline = (Get-Date).AddMinutes(3)
+    $deadline = (Get-Date).AddMinutes(15)
     $healthy = $false
     do {
         try {
@@ -264,12 +278,13 @@ try {
     } while ((Get-Date) -lt $deadline)
     if (-not $healthy) {
         docker compose --project-directory $projectDir ps
-        throw "服务未能在 3 分钟内通过健康检查。请运行：docker compose logs web worker"
+        throw "服务未能在 15 分钟内通过健康检查。请运行：docker compose --profile lucida logs web worker lucida"
     }
 
     Write-Host ""
-    Write-Host "Snow AI Studio 已启动。" -ForegroundColor Green
+    Write-Host "Snow AI Studio 已启动（含 Docker Lucida GPU 抠图）。" -ForegroundColor Green
     Write-Host "本机地址：http://127.0.0.1:$Port"
+    Write-Host "透明背景：勾选后自动经 Lucida 后处理（LUCIDA_MATTING_URL=http://lucida:8000）"
     if ($Lan) {
         foreach ($address in Get-LanAddresses) {
             Write-Host "局域网地址（明文 HTTP）：http://${address}:$Port"
