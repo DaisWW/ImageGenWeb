@@ -183,6 +183,22 @@
   scrollbar-gutter: stable;
 }
 
+.library-modal.is-image-dragover .library-content::after {
+  position: absolute;
+  inset: 8px;
+  z-index: 3;
+  display: grid;
+  place-content: center;
+  border: 2px dashed var(--accent);
+  border-radius: 10px;
+  background: rgb(239 157 81 / 10%);
+  color: var(--accent);
+  content: "拖入图片导入图库";
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
 .library-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
@@ -350,6 +366,14 @@
 .library-state strong {
   color: var(--text-soft);
   font-size: 12px;
+}
+
+.library-empty > span {
+  max-width: 18em;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: center;
 }
 
 .library-error > svg {

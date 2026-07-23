@@ -581,8 +581,14 @@
       this.el.librarySelectAllButton.addEventListener("click", () => this.selectAllLibraryImages());
       this.el.libraryClearSelectionButton.addEventListener("click", () => this.clearLibrarySelection());
       this.el.libraryConfirmButton.addEventListener("click", () => this.confirmLibrarySelection());
-      this.el.libraryDropArea.addEventListener("dragover", (event) => this.handleLibraryDrag(event));
-      this.el.libraryDropArea.addEventListener("drop", (event) => this.handleLibraryDrop(event));
+      this.el.libraryDialog.addEventListener("dragenter", (event) => this.handleLibraryDrag(event));
+      this.el.libraryDialog.addEventListener("dragover", (event) => this.handleLibraryDrag(event));
+      this.el.libraryDialog.addEventListener("dragleave", (event) => this.handleLibraryDragLeave(event));
+      this.el.libraryDialog.addEventListener("drop", (event) => this.handleLibraryDrop(event));
+      this.el.libraryDialog.addEventListener("close", () => {
+        this.el.libraryDialog.classList.remove("is-image-dragover");
+      });
+      document.addEventListener("paste", (event) => this.handleLibraryPaste(event));
       document.addEventListener("visibilitychange", () => {
         if (document.hidden) return;
         this.updateWorkspaceJobDisplays();

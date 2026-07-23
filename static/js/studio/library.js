@@ -279,18 +279,69 @@
     handleLibraryDrag(event) {
       if (![...(event.dataTransfer?.types || [])].includes("Files")) return;
       event.preventDefault();
-      const blocked = this.libraryImages === null
-        || this.libraryLoading
-        || this.libraryUploading
-        || this.libraryBusy;
-      event.dataTransfer.dropEffect = blocked ? "none" : "copy";
+      if (!this.libraryCanAcceptImages()) {
+        event.dataTransfer.dropEffect = "none";
+        return;
+      }
+      event.dataTransfer.dropEffect = "copy";
+      this.el.libraryDialog.classList.add("is-image-dragover");
+    },
+
+    handleLibraryDragLeave(event) {
+      if (this.el.libraryDialog.contains(event.relatedTarget)) return;
+      this.el.libraryDialog.classList.remove("is-image-dragover");
     },
 
     handleLibraryDrop(event) {
       if (![...(event.dataTransfer?.types || [])].includes("Files")) return;
       event.preventDefault();
-      if (this.libraryImages === null || this.libraryLoading || this.libraryUploading || this.libraryBusy) return;
+      this.el.libraryDialog.classList.remove("is-image-dragover");
+      if (!this.libraryCanAcceptImages()) return;
       this.uploadLibraryImages([...event.dataTransfer.files]);
+    },
+
+    libraryCanAcceptImages() {
+      return Boolean(this.el.libraryDialog?.open)
+        && this.libraryImages !== null
+        && !this.libraryLoading
+        && !this.libraryUploading
+        && !this.libraryBusy;
+    },
+
+    clipboardImageFiles(clipboardData) {
+      const items = [...(clipboardData?.items || [])];
+      const itemFiles = items
+        .filter((item) => item.kind === "file")
+        .map((item) => item.getAsFile())
+        .filter(Boolean);
+      const files = itemFiles.length
+        ? itemFiles
+        : [...(clipboardData?.files || [])];
+      return files.map((file, index) => {
+        if (file.name) return file;
+        const extension = ({
+          "image/png": "png",
+          "image/jpeg": "jpg",
+          "image/webp": "webp",
+        })[file.type.toLowerCase()] || "png";
+        return new File([file], `clipboard-${Date.now()}-${index + 1}.${extension}`, {
+          type: file.type || "image/png",
+          lastModified: file.lastModified || Date.now(),
+        });
+      });
+    },
+
+    handleLibraryPaste(event) {
+      if (!this.el.libraryDialog?.open) return;
+      const files = this.clipboardImageFiles(event.clipboardData);
+      if (!files.length) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!this.libraryCanAcceptImages()) {
+        UI.toast("图库当前无法导入图片", "error");
+        return;
+      }
+      this.uploadLibraryImages(files);
     },
 
     async handleLibraryClick(event) {

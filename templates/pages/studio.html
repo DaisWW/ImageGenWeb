@@ -286,13 +286,13 @@
       <button class="icon-button" type="button" data-close-dialog="libraryDialog" aria-label="关闭"><i data-lucide="x"></i></button>
     </div>
     <div>
-      <button class="button secondary small" type="button" id="libraryUploadButton"><i data-lucide="image-plus"></i>导入图片</button>
+      <button class="button secondary small" type="button" id="libraryUploadButton" title="支持选择文件、拖入或粘贴导入"><i data-lucide="image-plus"></i>导入图片</button>
       <input id="libraryInput" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
     </div>
     <div class="library-content" id="libraryDropArea">
       <div class="library-state" id="libraryLoading" role="status" hidden><i data-lucide="loader-circle"></i><strong>正在加载图库</strong></div>
       <div class="library-state library-error" id="libraryError" role="alert" hidden><i data-lucide="circle-alert"></i><strong>图库加载失败</strong><button class="icon-button" type="button" id="libraryRetryButton" title="重新加载" aria-label="重新加载"><i data-lucide="refresh-cw"></i></button></div>
-      <div class="library-empty" id="libraryEmpty" hidden><i data-lucide="images"></i><strong>图库为空</strong></div>
+      <div class="library-empty" id="libraryEmpty" hidden><i data-lucide="images"></i><strong>图库为空</strong><span>可点击导入，或直接拖入 / 粘贴图片</span></div>
       <div class="library-grid" id="libraryGrid"></div>
       <div class="library-pagination" id="libraryPagination" hidden><button class="button secondary small" type="button" id="libraryLoadMoreButton"><i data-lucide="chevrons-down"></i>加载更多</button></div>
     </div>
