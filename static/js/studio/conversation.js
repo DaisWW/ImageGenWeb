@@ -34,6 +34,91 @@
       }
     },
 
+
+    latestOpenClarification(workspaceId = this.activeWorkspace?.id) {
+      if (!workspaceId) return null;
+      const ordered = [...this.messages]
+        .filter((message) => (
+          !message.workspace_id || message.workspace_id === workspaceId
+        ))
+        .sort((left, right) => String(left.created_at || "").localeCompare(String(right.created_at || ""))
+          || String(left.id || "").localeCompare(String(right.id || "")));
+      for (let index = ordered.length - 1; index >= 0; index -= 1) {
+        const message = ordered[index];
+        if (message.role !== "assistant") continue;
+        if (message.payload?.status === "ready" && message.kind === "prompt_draft") return null;
+        if (message.payload?.status === "needs_clarification") return message;
+      }
+      return null;
+    },
+
+    clarificationSourceAttachmentIds(clarification, workspaceId = this.activeWorkspace?.id) {
+      if (!clarification || !workspaceId) return [];
+      const activeIds = new Set(
+        (this.workspaces.find((item) => item.id === workspaceId)?.assets || [])
+          .map((asset) => asset.id),
+      );
+      const fromPayload = (clarification.payload?.reference_ids || [])
+        .filter((id) => activeIds.has(id));
+      if (fromPayload.length) return fromPayload;
+      const sourceId = clarification.payload?.reply_to_message_id;
+      const source = this.messages.find((message) => (
+        message.id === sourceId && message.role === "user"
+      ));
+      const attachmentIds = (source?.attachments || [])
+        .map((asset) => asset.id)
+        .filter((id) => activeIds.has(id));
+      if (attachmentIds.length) return attachmentIds;
+      return (source?.payload?.generation_reference_ids || [])
+        .filter((id) => activeIds.has(id));
+    },
+
+    ensureClarificationChatReferences(workspaceId = this.activeWorkspace?.id) {
+      if (!workspaceId) return false;
+      const clarification = this.latestOpenClarification(workspaceId);
+      const ids = this.clarificationSourceAttachmentIds(clarification, workspaceId);
+      if (!ids.length) return false;
+
+      const chatSelection = this.currentChatSelection(workspaceId);
+      let chatChanged = false;
+      if (!chatSelection.size) {
+        ids.forEach((id) => chatSelection.add(id));
+        chatChanged = true;
+      }
+
+      // Keep generation-panel pad selection in sync for the same open request.
+      const generationSelection = this.currentSelection(workspaceId);
+      let generationChanged = false;
+      if (!generationSelection.size) {
+        ids.forEach((id) => generationSelection.add(id));
+        this.trimReferenceSelection(generationSelection, this.generationReferenceLimit());
+        generationChanged = generationSelection.size > 0;
+        if (generationChanged && this.activeWorkspace?.id === workspaceId) {
+          if ((this.el.modeSwitch?.dataset.mode || "text2img") === "text2img") {
+            this.setMode("img2img", false);
+          }
+          this.renderReferences();
+          this.settingChanged?.();
+        }
+      }
+
+      if (chatChanged) this.renderChatReferences();
+      return chatChanged || generationChanged;
+    },
+
+    restoreChatReferencesAfterClarification(workspaceId = this.activeWorkspace?.id) {
+      if (!workspaceId || this.activeWorkspace?.id !== workspaceId) return;
+      const restored = this.ensureClarificationChatReferences(workspaceId);
+      if (restored) {
+        this.renderChatReferences();
+        if (!this._clarificationPadToastAt
+          || Date.now() - this._clarificationPadToastAt > 4000) {
+          this._clarificationPadToastAt = Date.now();
+          UI.toast("已自动沿用上一轮垫图，可继续回答澄清问题", "info");
+        }
+      }
+    },
+
     async sendChatMessage(event) {
       event.preventDefault();
       if (!this.activeWorkspace || this.workspaceChatBusy() || this.workspaceHasActiveJob()) return;
@@ -45,6 +130,7 @@
       const workspaceId = workspace.id;
       const modelId = this.el.chatModelSelect.value;
       const content = this.el.chatInput.value.trim();
+      this.ensureClarificationChatReferences(workspaceId);
       const selection = this.currentChatSelection();
       const omitted = this.trimReferenceSelection(
         selection,
@@ -189,6 +275,7 @@
         this.outgoingMessages.delete(message.id);
         if (this.activeWorkspace?.id === message.workspace_id) {
           this.mergeConversationMessages(data.messages, data.context);
+          this.restoreChatReferencesAfterClarification(message.workspace_id);
           this.renderMessages();
         }
         const workspace = this.workspaces.find((item) => item.id === message.workspace_id);

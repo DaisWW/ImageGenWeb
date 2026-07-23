@@ -289,6 +289,122 @@ class TestConversationImages(PlatformTestCase):
         self.assertEqual([part["type"] for part in model_content], ["text", "image_url"])
         self.assertIn("当前生成模式是 img2img", self.chat_client.calls[-1]["system"])
 
+
+
+    def test_clarification_follow_up_inherits_chat_attachments_without_explicit_generation_refs(self):
+        workspace = self.create_workspace("澄清后继承聊天垫图")
+        reference = self.services.workspaces.add_assets(
+            workspace,
+            [("chat-pad.png", png_bytes((44, 120, 90)))],
+        )[0]
+        self.chat_client.reply_content = json.dumps(
+            {
+                "status": "needs_clarification",
+                "questions": ["角色是否保留？\nA. 删除（推荐）\nB. 保留\nC. 弱化\nD. 其他（请自定义）"],
+                "creative_direction": "poster",
+            },
+            ensure_ascii=False,
+        )
+        _first_user, clarification = self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="基于这张垫图调整风格和调色",
+            attachment_ids=(reference.id,),
+        )
+        self.assertEqual(clarification.payload["status"], "needs_clarification")
+
+        self.chat_client.reply_content = json.dumps(
+            {
+                "status": "ready",
+                "summary_zh": "删除左侧角色并保持垫图冷灰雪景色调",
+                "prompt": "参考图 1 保留雪山木屋冷灰色调，删除左侧角色",
+                "creative_direction": "poster",
+                "template_id": "custom",
+                "style_tags": [],
+                "scene_tags": [],
+                "selection_reason": "用户确认删除角色并延续垫图风格。",
+                "brief": {"deliverable": "海报"},
+                "hard_checks": ["无左侧角色"],
+                "quality_hint": "low",
+            },
+            ensure_ascii=False,
+        )
+        follow_up, assistant = self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="A",
+        )
+
+        self.assertEqual(follow_up.attachments, [])
+        self.assertEqual(assistant.kind, "prompt_draft")
+        self.assertEqual(assistant.payload["reference_ids"], [reference.id])
+        self.assertEqual(assistant.payload["generation_mode"], "img2img")
+        model_content = self.chat_client.calls[-1]["messages"][-1]["content"]
+        self.assertIn("image_url", [part["type"] for part in model_content])
+
+    def test_clarification_follow_up_inherits_latest_pad_images(self):
+        workspace = self.create_workspace("澄清后自动垫图")
+        reference = self.services.workspaces.add_assets(
+            workspace,
+            [("pad.png", png_bytes((12, 88, 160)))],
+        )[0]
+        self.chat_client.reply_content = json.dumps(
+            {
+                "status": "needs_clarification",
+                "questions": [
+                    "左侧角色是否保留？\nA. 删除（推荐）\nB. 保留\nC. 弱化\nD. 其他（请自定义）",
+                    "最终画幅采用哪一种？\nA. 1:1（推荐）\nB. 16:9\nC. 4:5\nD. 其他（请自定义）",
+                ],
+                "creative_direction": "poster",
+            },
+            ensure_ascii=False,
+        )
+        first_user, clarification = self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="基于最新的垫图帮我分析，要风格调调和垫图一致",
+            attachment_ids=(reference.id,),
+            generation_mode="img2img",
+            generation_reference_ids=(reference.id,),
+        )
+        self.assertEqual(clarification.payload["status"], "needs_clarification")
+        self.assertEqual(first_user.payload["generation_reference_ids"], [reference.id])
+        self.assertEqual(clarification.payload.get("reference_ids"), [reference.id])
+        self.assertEqual(
+            [attachment.asset_id for attachment in clarification.attachments],
+            [reference.id],
+        )
+
+        self.chat_client.reply_content = json.dumps(
+            {
+                "status": "ready",
+                "summary_zh": "删除左侧角色并改为 1:1 海报",
+                "prompt": "参考图 1 保留雪山木屋枯树月光冷灰色调，删除左侧角色，输出 1:1 海报",
+                "creative_direction": "poster",
+                "template_id": "custom",
+                "style_tags": [],
+                "scene_tags": [],
+                "selection_reason": "用户确认删除角色并使用 1:1 画幅。",
+                "brief": {"deliverable": "海报"},
+                "hard_checks": ["无左侧角色"],
+                "quality_hint": "low",
+            },
+            ensure_ascii=False,
+        )
+        follow_up, assistant = self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="A A",
+        )
+
+        self.assertEqual(follow_up.attachments, [])
+        self.assertEqual(assistant.kind, "prompt_draft")
+        self.assertEqual(assistant.payload["generation_mode"], "img2img")
+        self.assertEqual(assistant.payload["reference_ids"], [reference.id])
+        model_content = self.chat_client.calls[-1]["messages"][-1]["content"]
+        self.assertEqual([part["type"] for part in model_content], ["text", "image_url"])
+        self.assertIn("当前生成模式是 img2img", self.chat_client.calls[-1]["system"])
+
     def test_chat_requires_explicit_img2img_references(self):
         workspace = self.create_workspace("显式垫图")
         settings = dict(workspace.settings)
