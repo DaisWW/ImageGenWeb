@@ -47,6 +47,7 @@ class ConversationOperationRegistry:
         self.settings = settings
         self._operation_lock = Lock()
         self._operations: dict[str, ConversationOperation] = {}
+        self._inflight_chats: dict[int, ConversationOperation] = {}
         self._canceled_operations: dict[tuple[str, str], float] = {}
 
     def state(self, workspace_id: str) -> dict[str, Any]:
@@ -139,11 +140,7 @@ class ConversationOperationRegistry:
             if active is not None:
                 raise self._busy_error(active)
             if enforce_chat_capacity:
-                chat_operations = tuple(
-                    active
-                    for active in self._operations.values()
-                    if active.kind not in {"generation_submission", "workspace_mutation"}
-                )
+                chat_operations = tuple(self._inflight_chats.values())
                 user_operations = sum(
                     active.user_id == workspace.user_id for active in chat_operations
                 )
@@ -159,6 +156,7 @@ class ConversationOperationRegistry:
                         code="conversation_capacity",
                         status_code=503,
                     )
+                self._inflight_chats[id(operation)] = operation
             self._operations[workspace.id] = operation
         try:
             yield operation
@@ -166,6 +164,7 @@ class ConversationOperationRegistry:
             with self._operation_lock:
                 if self._operations.get(workspace.id) is operation:
                     self._operations.pop(workspace.id, None)
+                self._inflight_chats.pop(id(operation), None)
 
     @staticmethod
     def _busy_error(operation: ConversationOperation) -> ServiceError:

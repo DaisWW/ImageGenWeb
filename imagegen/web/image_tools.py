@@ -27,6 +27,7 @@ from .shared import (
     storage,
 )
 
+
 @web.post("/api/generation-items/<item_id>/reference")
 @login_required
 def reuse_generation_item(item_id: str):
@@ -36,6 +37,7 @@ def reuse_generation_item(item_id: str):
     workspace = owned_workspace(item.job.workspace_id)
     asset, created = _generation_item_asset(item, workspace)
     return jsonify(asset=workspace_dict(workspace, [asset])["assets"][0]), (201 if created else 200)
+
 
 @web.post("/api/generation-items/<item_id>/series-anchor")
 @login_required
@@ -61,6 +63,7 @@ def set_generation_series_anchor(item_id: str):
         asset=workspace_dict(workspace, [asset])["assets"][0],
         workspace=workspace_dict(workspace),
     ), 201
+
 
 def _generation_item_asset(item, workspace):
     extension = image_extension(item.output_mime_type)
@@ -88,6 +91,7 @@ def _generation_item_asset(item, workspace):
     )
     return assets[0], True
 
+
 @web.post("/api/generation-items/<item_id>/review")
 @login_required
 def review_generation_item(item_id: str):
@@ -99,6 +103,7 @@ def review_generation_item(item_id: str):
     )
     return jsonify(review=review)
 
+
 @web.post("/api/generation-items/<item_id>/slice-analysis")
 @login_required
 def analyze_generation_item_slices(item_id: str):
@@ -109,6 +114,7 @@ def analyze_generation_item_slices(item_id: str):
         storage().read(item.output_path), prompt=item.prompt or item.job.prompt
     )
     return jsonify(analysis=analysis)
+
 
 @web.post("/api/generation-items/<item_id>/slice-export")
 @login_required
@@ -153,4 +159,3 @@ def export_generation_item_slices(item_id: str):
     workspace = owned_workspace(item.job.workspace_id)
     asset = services().workspaces.add_assets(workspace, crops)[0]
     return jsonify(asset=workspace_dict(workspace, [asset])["assets"][0]), 201
-

@@ -5,6 +5,8 @@ import io
 import json
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import select
+
 from imagegen.extensions import db
 from imagegen.models import ConversationMessage, ConversationState
 from imagegen.services import ServiceError
@@ -289,9 +291,9 @@ class TestConversationImages(PlatformTestCase):
         self.assertEqual([part["type"] for part in model_content], ["text", "image_url"])
         self.assertIn("当前生成模式是 img2img", self.chat_client.calls[-1]["system"])
 
-
-
-    def test_clarification_follow_up_inherits_chat_attachments_without_explicit_generation_refs(self):
+    def test_clarification_follow_up_inherits_chat_attachments_without_explicit_generation_refs(
+        self,
+    ):
         workspace = self.create_workspace("澄清后继承聊天垫图")
         reference = self.services.workspaces.add_assets(
             workspace,
@@ -300,7 +302,9 @@ class TestConversationImages(PlatformTestCase):
         self.chat_client.reply_content = json.dumps(
             {
                 "status": "needs_clarification",
-                "questions": ["角色是否保留？\nA. 删除（推荐）\nB. 保留\nC. 弱化\nD. 其他（请自定义）"],
+                "questions": [
+                    "角色是否保留？\nA. 删除（推荐）\nB. 保留\nC. 弱化\nD. 其他（请自定义）"
+                ],
                 "creative_direction": "poster",
             },
             ensure_ascii=False,
@@ -333,6 +337,7 @@ class TestConversationImages(PlatformTestCase):
             workspace,
             model_id="test-chat",
             content="A",
+            clarification_reply_to_id=clarification.id,
         )
 
         self.assertEqual(follow_up.attachments, [])
@@ -395,6 +400,7 @@ class TestConversationImages(PlatformTestCase):
             workspace,
             model_id="test-chat",
             content="A A",
+            clarification_reply_to_id=clarification.id,
         )
 
         self.assertEqual(follow_up.attachments, [])
@@ -404,6 +410,65 @@ class TestConversationImages(PlatformTestCase):
         model_content = self.chat_client.calls[-1]["messages"][-1]["content"]
         self.assertEqual([part["type"] for part in model_content], ["text", "image_url"])
         self.assertIn("当前生成模式是 img2img", self.chat_client.calls[-1]["system"])
+
+    def test_new_text_task_does_not_inherit_an_unanswered_clarification(self):
+        workspace = self.create_workspace("澄清后切换新任务")
+        reference = self.services.workspaces.add_assets(
+            workspace,
+            [("old-pad.png", png_bytes((12, 88, 160)))],
+        )[0]
+        self.chat_client.reply_content = json.dumps(
+            {
+                "status": "needs_clarification",
+                "questions": ["旧任务中的角色是否保留？"],
+                "creative_direction": "poster",
+            },
+            ensure_ascii=False,
+        )
+        _old_user, old_clarification = self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="旧任务：按垫图修改",
+            generation_mode="img2img",
+            generation_reference_ids=(reference.id,),
+        )
+
+        self.chat_client.reply_content = json.dumps(
+            {
+                "status": "needs_clarification",
+                "questions": ["宇航猫使用什么颜色？"],
+                "creative_direction": "illustration",
+            },
+            ensure_ascii=False,
+        )
+        user_message, assistant = self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="新任务：画一只宇航猫，不参考旧图",
+            generation_mode="text2img",
+        )
+
+        self.assertEqual(user_message.payload["clarification_reply_to_id"], "")
+        self.assertEqual(assistant.payload["generation_mode"], "text2img")
+        self.assertEqual(assistant.payload["reference_ids"], [])
+        model_content = self.chat_client.calls[-1]["messages"][-1]["content"]
+        self.assertIsInstance(model_content, str)
+
+        with self.assertRaises(ServiceError) as raised:
+            self.services.conversations.send(
+                workspace,
+                model_id="test-chat",
+                content="回答已经过期的旧问题",
+                clarification_reply_to_id=old_clarification.id,
+            )
+        self.assertEqual(raised.exception.code, "conversation_clarification_closed")
+        self.assertIsNone(
+            db.session.scalar(
+                select(ConversationMessage).where(
+                    ConversationMessage.content == "回答已经过期的旧问题"
+                )
+            )
+        )
 
     def test_chat_requires_explicit_img2img_references(self):
         workspace = self.create_workspace("显式垫图")

@@ -59,14 +59,13 @@ services:
     gpus: all
     environment:
       LUCIDA_MATTING_MODEL: ${LUCIDA_MATTING_MODEL:-lucida}
-      LUCIDA_PRELOAD_MODEL: ${LUCIDA_PRELOAD_MODEL:-1}
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
     volumes:
       - lucida-hf-cache:/root/.cache/huggingface
       - ${LUCIDA_MODEL_PATH:-./.tmp-lucida-src/lucida-main/.model/lucida}:/models/lucida:ro
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)"]
       interval: 15s
       timeout: 5s
       retries: 30

@@ -160,6 +160,7 @@ def send_conversation_message(workspace_id: str):
         attachment_ids=tuple(str(item) for item in attachment_ids),
         generation_reference_ids=tuple(str(item) for item in generation_reference_ids),
         generation_mode=str(data.get("generation_mode", "")),
+        clarification_reply_to_id=str(data.get("clarification_reply_to_id", "")),
         message_id=str(data.get("message_id", "")),
         operation_id=str(data.get("operation_id", "")),
     )

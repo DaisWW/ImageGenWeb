@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import io
 import json
 from dataclasses import replace
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
-from PIL import Image
 from sqlalchemy import func, select
 
 from imagegen.extensions import db

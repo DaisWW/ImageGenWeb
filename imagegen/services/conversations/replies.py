@@ -19,6 +19,7 @@ from ...models import (
     utcnow,
 )
 from ..prompt_drafts import PromptDraftReview
+from .clarifications import ClarificationReferenceResolver
 from .operations import ConversationOperation, ConversationOperationRegistry
 from .prompts import generation_mode_prompt
 from .support import ConversationDependencies, ConversationSupport
@@ -32,6 +33,7 @@ class ConversationReplyService(ConversationSupport):
     ):
         super().__init__(dependencies)
         self.operations = operations
+        self.clarifications = ClarificationReferenceResolver(self._load_assets)
 
     def send(
         self,
@@ -42,6 +44,7 @@ class ConversationReplyService(ConversationSupport):
         attachment_ids: tuple[str, ...] = (),
         generation_reference_ids: tuple[str, ...] = (),
         generation_mode: str = "",
+        clarification_reply_to_id: str = "",
         message_id: str = "",
         operation_id: str = "",
     ) -> tuple[ConversationMessage, ConversationMessage]:
@@ -61,6 +64,7 @@ class ConversationReplyService(ConversationSupport):
                 attachment_ids=attachment_ids,
                 generation_reference_ids=generation_reference_ids,
                 generation_mode=generation_mode,
+                clarification_reply_to_id=clarification_reply_to_id,
                 message_id=message_id,
                 operation=operation,
             )
@@ -130,6 +134,7 @@ class ConversationReplyService(ConversationSupport):
         attachment_ids: tuple[str, ...],
         generation_reference_ids: tuple[str, ...],
         generation_mode: str,
+        clarification_reply_to_id: str,
         message_id: str,
         operation: ConversationOperation,
     ) -> tuple[ConversationMessage, ConversationMessage]:
@@ -142,6 +147,10 @@ class ConversationReplyService(ConversationSupport):
                 "auto" if attachment_ids and configured_mode != "img2img" else configured_mode
             )
         generation_mode = self._normalize_generation_mode(requested_mode)
+        clarification_reply_to_id = str(clarification_reply_to_id or "").strip().lower()
+        if clarification_reply_to_id:
+            clarification_reply_to_id = self._message_id(clarification_reply_to_id)
+            self.clarifications.ensure_open(workspace, clarification_reply_to_id)
         if generation_mode == "text2img" and generation_reference_ids:
             raise ServiceError("文生图消息不能携带垫图")
         if generation_mode == "auto" and generation_reference_ids:
@@ -154,6 +163,7 @@ class ConversationReplyService(ConversationSupport):
             attachment_ids=attachment_ids,
             generation_reference_ids=generation_reference_ids,
             generation_mode=generation_mode,
+            clarification_reply_to_id=clarification_reply_to_id,
         )
         if existing is not None:
             reply = self._linked_reply(workspace, existing)
@@ -182,6 +192,7 @@ class ConversationReplyService(ConversationSupport):
             payload={
                 "generation_mode": generation_mode,
                 "generation_reference_ids": [asset.id for asset in generation_references],
+                "clarification_reply_to_id": clarification_reply_to_id,
             },
             provider_id=model.identifier,
             provider_label=model.label,
@@ -235,8 +246,9 @@ class ConversationReplyService(ConversationSupport):
         else:
             candidate_references = []
             review_mode = "text2img"
-        if not candidate_references:
-            inherited = self._open_clarification_references(workspace, user_message)
+        clarification_reply_to_id = str(payload.get("clarification_reply_to_id", "")).strip()
+        if not candidate_references and clarification_reply_to_id:
+            inherited = self.clarifications.resolve(workspace, clarification_reply_to_id)
             if inherited is not None:
                 candidate_references, review_mode = inherited
         series_anchor = self._active_series_anchor(workspace)
@@ -321,9 +333,7 @@ class ConversationReplyService(ConversationSupport):
             # Keep pad images on open clarifications so follow-up answers inherit them.
             draft["reference_ids"] = [asset.id for asset in candidate_references]
             if draft.get("generation_mode") not in {"img2img", "auto"}:
-                draft["generation_mode"] = (
-                    "img2img" if review_mode == "img2img" else "auto"
-                )
+                draft["generation_mode"] = "img2img" if review_mode == "img2img" else "auto"
         reply_content, message_kind = review.message_content(draft)
         payload = {**draft, "reply_to_message_id": user_message.id}
         generation_references = self._draft_references(draft, candidate_references)
@@ -364,135 +374,6 @@ class ConversationReplyService(ConversationSupport):
         db.session.commit()
         return assistant_message
 
-
-    def _open_clarification_references(
-        self,
-        workspace: Workspace,
-        user_message: ConversationMessage,
-    ) -> tuple[list[Asset], str] | None:
-        """Reuse pad images from the latest unresolved clarification turn."""
-        messages = list(
-            db.session.scalars(
-                select(ConversationMessage)
-                .options(
-                    selectinload(ConversationMessage.attachments).selectinload(
-                        ConversationAttachment.asset
-                    )
-                )
-                .where(
-                    ConversationMessage.workspace_id == workspace.id,
-                    ConversationMessage.id != user_message.id,
-                    ConversationMessage.created_at <= user_message.created_at,
-                )
-                .order_by(
-                    ConversationMessage.created_at.desc(),
-                    ConversationMessage.id.desc(),
-                )
-                .limit(40)
-            )
-        )
-        if not messages:
-            return None
-
-        by_id = {message.id: message for message in messages}
-        for message in messages:
-            if message.role != "assistant":
-                continue
-            payload = message.payload or {}
-            status = str(payload.get("status", "")).strip().lower()
-            if status == "ready" and message.kind == "prompt_draft":
-                return None
-            if status != "needs_clarification":
-                continue
-
-            payload_reference_ids = tuple(
-                str(item) for item in payload.get("reference_ids", []) if str(item).strip()
-            )
-            if payload_reference_ids:
-                try:
-                    references = self._load_assets(workspace, payload_reference_ids)
-                except ServiceError:
-                    references = []
-                if references:
-                    mode = str(payload.get("generation_mode", "auto")).strip().lower()
-                    if mode not in {"auto", "img2img"}:
-                        mode = "img2img" if len(references) else "auto"
-                    return references, mode if mode in {"auto", "img2img"} else "auto"
-
-            reply_to = str(payload.get("reply_to_message_id", "")).strip()
-            visited: set[str] = set()
-            while reply_to and reply_to not in visited:
-                visited.add(reply_to)
-                source = by_id.get(reply_to)
-                if source is None:
-                    source = db.session.scalar(
-                        select(ConversationMessage)
-                        .options(
-                            selectinload(ConversationMessage.attachments).selectinload(
-                                ConversationAttachment.asset
-                            )
-                        )
-                        .where(
-                            ConversationMessage.id == reply_to,
-                            ConversationMessage.workspace_id == workspace.id,
-                            ConversationMessage.role == "user",
-                        )
-                    )
-                    if source is not None:
-                        by_id[source.id] = source
-                if source is None or source.role != "user":
-                    break
-
-                source_payload = source.payload or {}
-                generation_reference_ids = tuple(
-                    str(item) for item in source_payload.get("generation_reference_ids", [])
-                )
-                generation_mode = str(source_payload.get("generation_mode", "")).strip().lower()
-                attachments = [
-                    attachment.asset
-                    for attachment in source.attachments
-                    if attachment.asset is not None
-                ]
-                if generation_mode == "img2img" or generation_reference_ids:
-                    if generation_reference_ids:
-                        try:
-                            references = self._load_assets(workspace, generation_reference_ids)
-                        except ServiceError:
-                            references = []
-                    else:
-                        references = attachments
-                    if references:
-                        return references, "img2img"
-                if generation_mode in {"", "auto"} and attachments:
-                    return attachments, "auto"
-
-                # Multi-hop clarification: walk to the previous user turn that still
-                # has pad images.
-                previous_reply_id = str(source_payload.get("reply_message_id", "")).strip()
-                previous_assistant = by_id.get(previous_reply_id)
-                if previous_assistant is None or previous_assistant.role != "assistant":
-                    # Search for the assistant that replied before this user turn.
-                    previous_assistant = next(
-                        (
-                            item
-                            for item in messages
-                            if item.role == "assistant"
-                            and item.created_at < source.created_at
-                            and str((item.payload or {}).get("status", ""))
-                            == "needs_clarification"
-                        ),
-                        None,
-                    )
-                if previous_assistant is None:
-                    break
-                if str((previous_assistant.payload or {}).get("status", "")) != "needs_clarification":
-                    break
-                reply_to = str(
-                    (previous_assistant.payload or {}).get("reply_to_message_id", "")
-                ).strip()
-            return None
-        return None
-
     @staticmethod
     def _normalize_generation_mode(value: str) -> str:
         mode = str(value or "").strip().lower()
@@ -528,6 +409,7 @@ class ConversationReplyService(ConversationSupport):
         attachment_ids: tuple[str, ...],
         generation_reference_ids: tuple[str, ...],
         generation_mode: str,
+        clarification_reply_to_id: str,
     ) -> ConversationMessage | None:
         message = db.session.scalar(
             select(ConversationMessage)
@@ -551,6 +433,8 @@ class ConversationReplyService(ConversationSupport):
             )
             != generation_reference_ids
             or str((message.payload or {}).get("generation_mode", "text2img")) != generation_mode
+            or str((message.payload or {}).get("clarification_reply_to_id", ""))
+            != clarification_reply_to_id
         ):
             raise ServiceError(
                 "消息 ID 已被其他内容使用",

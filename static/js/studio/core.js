@@ -125,6 +125,7 @@
       this.conversationContext = null;
       this.referenceSelections = new Map();
       this.chatReferenceSelections = new Map();
+      this.clarificationReplies = new Map();
       this.chatDrafts = new Map();
       this.chatOperations = new Map();
       this.outgoingMessages = new Map();
@@ -263,6 +264,8 @@
         translatePrompt: byId("translatePrompt"),
         contextStatus: byId("contextStatus"),
         directGenerationButton: byId("directGenerationButton"),
+        chatClarification: byId("chatClarification"),
+        chatClarificationCancel: byId("chatClarificationCancel"),
         chatReferenceStrip: byId("chatReferenceStrip"),
         chatReferenceList: byId("chatReferenceList"),
         chatReferenceButton: byId("chatReferenceButton"),
@@ -445,6 +448,9 @@
       this.el.canvasConflictApply.addEventListener("click", () => this.applyCanvasRequest());
       this.el.canvasConflictKeep.addEventListener("click", () => this.keepPanelCanvas());
       this.el.chatReferenceButton.addEventListener("click", () => this.toggleChatReferences());
+      this.el.chatClarificationCancel.addEventListener("click", () => {
+        this.cancelClarificationContinuation();
+      });
       this.el.chatReferenceList.addEventListener("click", (event) => this.handleChatReferenceClick(event));
       this.el.messageList.addEventListener("click", (event) => {
         const cancelChatButton = event.target.closest("[data-cancel-chat]");
@@ -453,6 +459,11 @@
             cancelChatButton.dataset.cancelWorkspace,
             cancelChatButton.dataset.cancelOperation,
           );
+          return;
+        }
+        const clarificationButton = event.target.closest("[data-continue-clarification]");
+        if (clarificationButton) {
+          this.continueClarification(clarificationButton.dataset.continueClarification);
           return;
         }
         const retrySendButton = event.target.closest("[data-retry-send]");

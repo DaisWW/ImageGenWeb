@@ -34,7 +34,6 @@
       }
     },
 
-
     latestOpenClarification(workspaceId = this.activeWorkspace?.id) {
       if (!workspaceId) return null;
       const ordered = [...this.messages]
@@ -52,71 +51,33 @@
       return null;
     },
 
-    clarificationSourceAttachmentIds(clarification, workspaceId = this.activeWorkspace?.id) {
-      if (!clarification || !workspaceId) return [];
-      const activeIds = new Set(
-        (this.workspaces.find((item) => item.id === workspaceId)?.assets || [])
-          .map((asset) => asset.id),
-      );
-      const fromPayload = (clarification.payload?.reference_ids || [])
-        .filter((id) => activeIds.has(id));
-      if (fromPayload.length) return fromPayload;
-      const sourceId = clarification.payload?.reply_to_message_id;
-      const source = this.messages.find((message) => (
-        message.id === sourceId && message.role === "user"
-      ));
-      const attachmentIds = (source?.attachments || [])
-        .map((asset) => asset.id)
-        .filter((id) => activeIds.has(id));
-      if (attachmentIds.length) return attachmentIds;
-      return (source?.payload?.generation_reference_ids || [])
-        .filter((id) => activeIds.has(id));
-    },
-
-    ensureClarificationChatReferences(workspaceId = this.activeWorkspace?.id) {
-      if (!workspaceId) return false;
+    continueClarification(messageId) {
+      const workspaceId = this.activeWorkspace?.id;
       const clarification = this.latestOpenClarification(workspaceId);
-      const ids = this.clarificationSourceAttachmentIds(clarification, workspaceId);
-      if (!ids.length) return false;
-
-      const chatSelection = this.currentChatSelection(workspaceId);
-      let chatChanged = false;
-      if (!chatSelection.size) {
-        ids.forEach((id) => chatSelection.add(id));
-        chatChanged = true;
+      if (!clarification || clarification.id !== messageId) {
+        UI.toast("该澄清问题已结束，请选择最新问题", "info");
+        return;
       }
-
-      // Keep generation-panel pad selection in sync for the same open request.
-      const generationSelection = this.currentSelection(workspaceId);
-      let generationChanged = false;
-      if (!generationSelection.size) {
-        ids.forEach((id) => generationSelection.add(id));
-        this.trimReferenceSelection(generationSelection, this.generationReferenceLimit());
-        generationChanged = generationSelection.size > 0;
-        if (generationChanged && this.activeWorkspace?.id === workspaceId) {
-          if ((this.el.modeSwitch?.dataset.mode || "text2img") === "text2img") {
-            this.setMode("img2img", false);
-          }
-          this.renderReferences();
-          this.settingChanged?.();
-        }
-      }
-
-      if (chatChanged) this.renderChatReferences();
-      return chatChanged || generationChanged;
+      this.clarificationReplies.set(workspaceId, messageId);
+      this.renderClarificationContinuation();
+      this.el.chatInput.focus();
     },
 
-    restoreChatReferencesAfterClarification(workspaceId = this.activeWorkspace?.id) {
-      if (!workspaceId || this.activeWorkspace?.id !== workspaceId) return;
-      const restored = this.ensureClarificationChatReferences(workspaceId);
-      if (restored) {
-        this.renderChatReferences();
-        if (!this._clarificationPadToastAt
-          || Date.now() - this._clarificationPadToastAt > 4000) {
-          this._clarificationPadToastAt = Date.now();
-          UI.toast("已自动沿用上一轮垫图，可继续回答澄清问题", "info");
-        }
-      }
+    cancelClarificationContinuation() {
+      const workspaceId = this.activeWorkspace?.id;
+      if (!workspaceId) return;
+      this.clarificationReplies.delete(workspaceId);
+      this.renderClarificationContinuation();
+      this.el.chatInput.focus();
+    },
+
+    renderClarificationContinuation() {
+      const workspaceId = this.activeWorkspace?.id;
+      const selectedId = workspaceId ? this.clarificationReplies.get(workspaceId) : "";
+      const open = this.latestOpenClarification(workspaceId);
+      const active = Boolean(selectedId && open?.id === selectedId);
+      if (selectedId && !active) this.clarificationReplies.delete(workspaceId);
+      this.el.chatClarification.hidden = !active;
     },
 
     async sendChatMessage(event) {
@@ -130,7 +91,6 @@
       const workspaceId = workspace.id;
       const modelId = this.el.chatModelSelect.value;
       const content = this.el.chatInput.value.trim();
-      this.ensureClarificationChatReferences(workspaceId);
       const selection = this.currentChatSelection();
       const omitted = this.trimReferenceSelection(
         selection,
@@ -171,11 +131,14 @@
         attachment_ids: attachmentIds,
         generation_mode: generationMode,
         generation_reference_ids: generationReferenceIds,
+        clarification_reply_to_id: this.clarificationReplies.get(workspaceId) || "",
         created_at: new Date().toISOString(),
       };
       workspace.settings.prompt_draft_id = "";
       this.el.chatInput.value = "";
       this.chatDrafts.set(workspaceId, "");
+      this.clarificationReplies.delete(workspaceId);
+      this.renderClarificationContinuation();
       selection.clear();
       this.chatReferencePickerOpen = false;
       this.renderChatReferences();
@@ -230,6 +193,7 @@
         attachment_ids: attachmentIds,
         generation_mode: generationMode,
         generation_reference_ids: generationReferenceIds,
+        clarification_reply_to_id: original.payload?.clarification_reply_to_id || "",
         created_at: new Date().toISOString(),
       };
       workspace.settings.prompt_draft_id = "";
@@ -254,6 +218,7 @@
             attachment_ids: message.attachment_ids,
             generation_mode: message.generation_mode,
             generation_reference_ids: message.generation_reference_ids,
+            clarification_reply_to_id: message.clarification_reply_to_id || "",
           },
           signal: operation.controller.signal,
         }),
@@ -275,7 +240,6 @@
         this.outgoingMessages.delete(message.id);
         if (this.activeWorkspace?.id === message.workspace_id) {
           this.mergeConversationMessages(data.messages, data.context);
-          this.restoreChatReferencesAfterClarification(message.workspace_id);
           this.renderMessages();
         }
         const workspace = this.workspaces.find((item) => item.id === message.workspace_id);

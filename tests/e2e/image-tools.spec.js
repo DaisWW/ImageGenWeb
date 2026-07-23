@@ -305,6 +305,7 @@ test("image detail keeps its reference through multi-turn refinement", {
   let chatRound = 0;
   const sentAttachmentIds = [];
   const sentGenerationReferenceIds = [];
+  const sentClarificationReplyIds = [];
   let promptDraftRequests = 0;
   await page.route("**/api/workspaces/*/messages", async (route) => {
     if (route.request().method() !== "POST") {
@@ -315,6 +316,7 @@ test("image detail keeps its reference through multi-turn refinement", {
     const body = route.request().postDataJSON();
     sentAttachmentIds.push(body.attachment_ids);
     sentGenerationReferenceIds.push(body.generation_reference_ids);
+    sentClarificationReplyIds.push(body.clarification_reply_to_id);
     const ready = chatRound === 2;
     const assistant = ready
       ? {
@@ -347,7 +349,12 @@ test("image detail keeps its reference through multi-turn refinement", {
         role: "assistant",
         kind: "message",
         content: "已保留主体，背景还需要确认。",
-        payload: { reply_to_message_id: body.message_id },
+        payload: {
+          status: "needs_clarification",
+          reference_ids: [referenceAsset.id],
+          generation_mode: "img2img",
+          reply_to_message_id: body.message_id,
+        },
         provider_label: "E2E 助手",
         created_at: createdAt,
         attachments: [],
@@ -491,6 +498,7 @@ test("image detail keeps its reference through multi-turn refinement", {
   await page.locator("#chatForm").evaluate((form) => form.requestSubmit());
   await expect(page.locator(".message-row.assistant", { hasText: "背景还需要确认" }))
     .toBeVisible();
+  await page.getByRole("button", { name: "继续回答" }).click();
   await page.locator("#chatInput").fill("背景使用纯白色，可以生成了。");
   await page.locator("#chatForm").evaluate((form) => form.requestSubmit());
 
@@ -498,6 +506,7 @@ test("image detail keeps its reference through multi-turn refinement", {
   await expect(draft).toContainText("只把背景改成纯白色");
   expect(sentAttachmentIds).toEqual([[referenceAsset.id], []]);
   expect(sentGenerationReferenceIds).toEqual([[referenceAsset.id], [referenceAsset.id]]);
+  expect(sentClarificationReplyIds).toEqual(["", "e2e-refine-assistant-1"]);
   expect(promptDraftRequests).toBe(0);
   await draft.getByRole("button", { name: "使用此提示词生图" }).click();
   await expect(page.locator("#modeSwitch")).toHaveAttribute("data-mode", "img2img");

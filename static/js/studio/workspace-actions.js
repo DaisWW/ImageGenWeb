@@ -95,6 +95,7 @@
         await UI.api(`/api/workspaces/${workspaceId}`, { method: "DELETE" });
         this.referenceSelections.delete(workspaceId);
         this.chatReferenceSelections.delete(workspaceId);
+        this.clarificationReplies.delete(workspaceId);
         this.chatDrafts.delete(workspaceId);
         this.chatOperations.delete(workspaceId);
         this.canceledChatOperationIds.delete(workspaceId);
@@ -146,6 +147,7 @@
         this.conversationContext = null;
         this.referenceSelections.set(workspace.id, new Set());
         this.chatReferenceSelections.set(workspace.id, new Set());
+        this.clarificationReplies.delete(workspace.id);
         this.chatDrafts.set(workspace.id, "");
         this.canceledChatOperationIds.delete(workspace.id);
         this.clearOutgoingMessages(workspace.id);

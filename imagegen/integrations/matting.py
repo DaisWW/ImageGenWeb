@@ -30,6 +30,28 @@ class LucidaMattingClient:
     def enabled(self) -> bool:
         return bool(self.base_url.strip())
 
+    def healthcheck(self) -> None:
+        if not self.enabled:
+            return
+        session = self.session or requests.Session()
+        try:
+            response = session.get(
+                f"{self.base_url.rstrip('/')}/ready",
+                timeout=(2, 5),
+            )
+        except requests.RequestException as exc:
+            raise ServiceError(
+                "Lucida 抠图服务未就绪",
+                code="matting_unavailable",
+                status_code=503,
+            ) from exc
+        if response.status_code >= 400:
+            raise ServiceError(
+                "Lucida 抠图服务未就绪",
+                code="matting_unavailable",
+                status_code=503,
+            )
+
     def remove_background(self, content: bytes, *, filename: str = "image.png") -> bytes:
         if not self.enabled:
             raise ServiceError(

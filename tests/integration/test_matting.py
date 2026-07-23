@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import io
-
 import requests
-from PIL import Image
 
 from imagegen.errors import ServiceError
 from imagegen.integrations.matting import LucidaMattingClient, image_has_real_alpha
@@ -15,7 +12,9 @@ from tests.support.platform import (
 
 
 class FakeMattingResponse:
-    def __init__(self, *, content: bytes = b"", status_code: int = 200, payload=None, text: str = ""):
+    def __init__(
+        self, *, content: bytes = b"", status_code: int = 200, payload=None, text: str = ""
+    ):
         self.content = content
         self.status_code = status_code
         self._payload = payload
@@ -28,7 +27,9 @@ class FakeMattingResponse:
 
 
 class RecordingMattingSession:
-    def __init__(self, *, response: FakeMattingResponse | None = None, error: Exception | None = None):
+    def __init__(
+        self, *, response: FakeMattingResponse | None = None, error: Exception | None = None
+    ):
         self.response = response
         self.error = error
         self.calls = []
@@ -38,6 +39,12 @@ class RecordingMattingSession:
         if self.error is not None:
             raise self.error
         return self.response or FakeMattingResponse(content=transparent_icon_png_bytes())
+
+    def get(self, url, **kwargs):
+        self.calls.append({"url": url, **kwargs})
+        if self.error is not None:
+            raise self.error
+        return self.response or FakeMattingResponse()
 
 
 class TestLucidaMattingClient(PlatformTestCase):
@@ -64,6 +71,27 @@ class TestLucidaMattingClient(PlatformTestCase):
             disabled.remove_background(png_bytes())
         self.assertEqual(ctx.exception.code, "matting_unavailable")
         self.assertEqual(ctx.exception.status_code, 503)
+
+    def test_healthcheck_requires_ready_service(self):
+        ready_session = RecordingMattingSession()
+        LucidaMattingClient(
+            base_url="http://lucida.local:8756/",
+            session=ready_session,
+        ).healthcheck()
+        self.assertEqual(ready_session.calls[0]["url"], "http://lucida.local:8756/ready")
+        self.assertEqual(ready_session.calls[0]["timeout"], (2, 5))
+
+        for session in (
+            RecordingMattingSession(response=FakeMattingResponse(status_code=503)),
+            RecordingMattingSession(error=requests.ConnectionError("down")),
+        ):
+            with self.subTest(session=session), self.assertRaises(ServiceError) as ctx:
+                LucidaMattingClient(
+                    base_url="http://lucida.local",
+                    session=session,
+                ).healthcheck()
+            self.assertEqual(ctx.exception.code, "matting_unavailable")
+            self.assertEqual(ctx.exception.status_code, 503)
 
     def test_client_timeout_upstream_and_opaque(self):
         timeout_client = LucidaMattingClient(
@@ -106,11 +134,8 @@ class TestLucidaMattingClient(PlatformTestCase):
 
         invalid = LucidaMattingClient(
             base_url="http://lucida.local",
-            session=RecordingMattingSession(
-                response=FakeMattingResponse(content=b"not-an-image")
-            ),
+            session=RecordingMattingSession(response=FakeMattingResponse(content=b"not-an-image")),
         )
         with self.assertRaises(ServiceError) as invalid_ctx:
             invalid.remove_background(png_bytes())
         self.assertEqual(invalid_ctx.exception.code, "matting_invalid_result")
-

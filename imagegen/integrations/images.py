@@ -271,7 +271,6 @@ class ProviderFactory:
         raise ProviderError(f"不支持的渠道适配器：{channel.adapter}", code="adapter_error")
 
 
-
 def _request_id(response: requests.Response) -> str:
     return (
         response.headers.get("x-request-id")

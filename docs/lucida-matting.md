@@ -22,8 +22,8 @@ LUCIDA_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
 .\deploy-docker.cmd
 ```
 
-脚本会复用本地已通过 CUDA 检查的 `LUCIDA_IMAGE`，只在镜像不存在或无法使用 GPU 时重新构建。
-只重启现有镜像可直接运行 `.\deploy-docker.ps1 -Lan -NoBuild`。
+脚本每次执行缓存感知构建，源码未变化时会直接复用 Docker 缓存；随后校验 CUDA、启动服务并等待 Lucida 模型就绪。
+只有明确要复用当前镜像时，才运行 `.\deploy-docker.ps1 -Lan -NoBuild`。
 
 需要：Docker Desktop 启用 NVIDIA runtime，本机有可用 NVIDIA GPU。
 
@@ -35,7 +35,6 @@ LUCIDA_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
 | `LUCIDA_MATTING_TIMEOUT_SECONDS` | 读超时秒数 | `120` |
 | `LUCIDA_MODEL_PATH` | 权重挂载源目录 | `./.tmp-lucida-src/lucida-main/.model/lucida` |
 | `LUCIDA_TORCH_INDEX_URL` | torch 安装源 | `https://download.pytorch.org/whl/cu124` |
-| `LUCIDA_PRELOAD_MODEL` | 启动时预加载模型 | `1` |
 
 ## 行为边界
 

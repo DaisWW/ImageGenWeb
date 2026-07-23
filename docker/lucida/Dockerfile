@@ -28,8 +28,7 @@ COPY .tmp-lucida-src/lucida-main/benchmark/ benchmark/
 RUN pip install .
 
 COPY .tmp-lucida-src/lucida-main/serving/ serving/
-COPY docker/lucida/docker-entrypoint.sh /docker-entrypoint.sh
-RUN sed -i 's/\r$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh
+COPY docker/lucida/runtime.py lucida_runtime.py
 
 EXPOSE 8000
-ENTRYPOINT ["/docker-entrypoint.sh"]
+CMD ["uvicorn", "lucida_runtime:app", "--host", "0.0.0.0", "--port", "8000"]

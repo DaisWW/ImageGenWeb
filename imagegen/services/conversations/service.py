@@ -109,6 +109,7 @@ class ConversationService:
         attachment_ids: tuple[str, ...] = (),
         generation_reference_ids: tuple[str, ...] = (),
         generation_mode: str = "",
+        clarification_reply_to_id: str = "",
         message_id: str = "",
         operation_id: str = "",
     ) -> tuple[ConversationMessage, ConversationMessage]:
@@ -119,6 +120,7 @@ class ConversationService:
             attachment_ids=attachment_ids,
             generation_reference_ids=generation_reference_ids,
             generation_mode=generation_mode,
+            clarification_reply_to_id=clarification_reply_to_id,
             message_id=message_id,
             operation_id=operation_id,
         )

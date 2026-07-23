@@ -8,9 +8,24 @@
 }
 .chat-toolbar,
 .chat-input-row,
+.chat-clarification,
 .chat-reference-strip {
   max-width: 980px;
   margin-inline: auto;
+}
+
+.chat-clarification {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding: 7px 10px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+  font-size: 11px;
 }
 
 .chat-toolbar {

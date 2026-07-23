@@ -142,6 +142,7 @@
       const timelineChanged = this.reconcileTimeline(timeline);
       setHidden(this.el.conversationEmpty, timeline.length > 0);
       this.renderContextStatus();
+      this.renderClarificationContinuation();
       this.updateInteractionState();
       if (keepAtBottom && timelineChanged) this.scrollConversation();
     },
@@ -391,10 +392,22 @@
       const isActionableMessage = message.kind === "message" && Boolean(message.id);
       const canCopy = isActionableMessage && Boolean(message.content?.trim());
       const canResend = isActionableMessage && message.role === "user" && !message.delivery_state;
-      if (cancelAction || canCopy || canResend) {
+      const canContinueClarification = isActionableMessage
+        && message.role === "assistant"
+        && message.payload?.status === "needs_clarification"
+        && this.latestOpenClarification()?.id === message.id;
+      if (cancelAction || canContinueClarification || canCopy || canResend) {
         const actions = document.createElement("div");
         actions.className = "message-actions";
         if (cancelAction) actions.append(cancelAction);
+        if (canContinueClarification) {
+          const continueButton = document.createElement("button");
+          continueButton.type = "button";
+          continueButton.className = "button ghost small";
+          continueButton.dataset.continueClarification = message.id;
+          continueButton.textContent = "继续回答";
+          actions.append(continueButton);
+        }
         if (canCopy) {
           const copy = document.createElement("button");
           copy.type = "button";

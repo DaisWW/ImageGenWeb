@@ -45,6 +45,14 @@ def health():
         current_app.extensions["image_storage"].healthcheck()
     except Exception:
         storage_status = "unavailable"
+    matting = "disabled"
+    matting_client = current_app.extensions.get("lucida_matting_client")
+    if matting_client is not None and matting_client.enabled:
+        try:
+            matting_client.healthcheck()
+            matting = "ready"
+        except Exception:
+            matting = "unavailable"
     worker = "unavailable"
     title = ""
     if database == "ready":
@@ -64,12 +72,13 @@ def health():
         except Exception:
             db.session.rollback()
             database = "unavailable"
-    ok = database == storage_status == worker == "ready"
+    ok = database == storage_status == worker == "ready" and matting != "unavailable"
     return jsonify(
         ok=ok,
         database=database,
         storage=storage_status,
         worker=worker,
+        matting=matting,
         title=title,
         version=__version__,
     ), (200 if ok else 503)

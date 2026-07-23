@@ -122,7 +122,6 @@ function Initialize-EnvironmentFile {
     Set-EnvValue $lines "LUCIDA_MATTING_MODEL" "lucida" -ReplaceBlank | Out-Null
     Set-EnvValue $lines "LUCIDA_MATTING_TIMEOUT_SECONDS" "120" -ReplaceBlank | Out-Null
     Set-EnvValue $lines "LUCIDA_TORCH_INDEX_URL" "https://download.pytorch.org/whl/cu124" -ReplaceBlank | Out-Null
-    Set-EnvValue $lines "LUCIDA_PRELOAD_MODEL" "1" -ReplaceBlank | Out-Null
     Set-EnvValue $lines "LUCIDA_MODEL_PATH" "./.tmp-lucida-src/lucida-main/.model/lucida" -ReplaceBlank | Out-Null
     Set-EnvValue $lines "IMAGEGEN_PORT" ([string]$Port) | Out-Null
     $bindHost = if ($Lan) { "0.0.0.0" } else { "127.0.0.1" }
@@ -279,10 +278,10 @@ try {
     }
 
     if (-not $NoBuild) {
-        Write-Host "正在构建主站与 Worker 镜像..."
-        & docker compose --project-directory $projectDir build web worker
+        Write-Host "正在构建主站、Worker 与 GPU Lucida 镜像（已缓存层会自动复用）..."
+        & docker compose --project-directory $projectDir --profile lucida build web worker lucida
         if ($LASTEXITCODE -ne 0) {
-            throw "主站/Worker 镜像构建失败。"
+            throw "Docker 镜像构建失败。"
         }
     }
 
@@ -290,13 +289,9 @@ try {
         if ($NoBuild) {
             throw "找不到可用的 GPU Lucida 镜像 $lucidaImage；请去掉 -NoBuild 让脚本先构建。"
         }
-        Write-Host "正在构建 Docker GPU Lucida 镜像（首次可能需要较长时间）..."
-        & docker compose --project-directory $projectDir --profile lucida build lucida
-        if ($LASTEXITCODE -ne 0 -or -not (Test-LocallyUsableLucidaImage -Image $lucidaImage)) {
-            throw "GPU Lucida 镜像构建或 CUDA 检查失败。请确认 Docker Desktop 已启用 NVIDIA runtime。"
-        }
+        throw "GPU Lucida 镜像 CUDA 检查失败。请确认 Docker Desktop 已启用 NVIDIA runtime。"
     } else {
-        Write-Host "复用已存在的 GPU Lucida 镜像：$lucidaImage" -ForegroundColor Green
+        Write-Host "GPU Lucida 镜像 CUDA 检查通过：$lucidaImage" -ForegroundColor Green
     }
 
     & docker compose --project-directory $projectDir --profile lucida up -d --no-build --force-recreate --remove-orphans

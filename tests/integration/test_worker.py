@@ -295,6 +295,7 @@ class TestWorker(PlatformTestCase):
         self.assertNotEqual(db.session.get(WorkerState, 1).heartbeat_at, old_heartbeat)
         healthy = client.get("/health")
         self.assertEqual(healthy.status_code, 200)
+        self.assertEqual(healthy.json["matting"], "disabled")
         self.assertEqual(healthy.json["storage"], "ready")
         self.assertEqual(healthy.json["worker"], "ready")
 
@@ -315,6 +316,27 @@ class TestWorker(PlatformTestCase):
 
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json["storage"], "unavailable")
+
+    def test_comprehensive_health_requires_enabled_matting(self):
+        state = db.session.get(WorkerState, 1)
+        state.worker_id = "health-matting-worker"
+        state.heartbeat_at = utcnow()
+        db.session.commit()
+        session = _StaticMattingSession(transparent_icon_png_bytes())
+        self.app.extensions["lucida_matting_client"] = LucidaMattingClient(
+            base_url="http://lucida.test",
+            session=session,
+        )
+
+        ready = self.app.test_client().get("/health")
+        self.assertEqual(ready.status_code, 200)
+        self.assertEqual(ready.json["matting"], "ready")
+        self.assertEqual(session.calls[-1]["url"], "http://lucida.test/ready")
+
+        session.health_status = 503
+        unavailable = self.app.test_client().get("/health")
+        self.assertEqual(unavailable.status_code, 503)
+        self.assertEqual(unavailable.json["matting"], "unavailable")
 
     def test_worker_periodic_recovery_skips_live_future_and_recovers_abandoned_claim(self):
         workspace = self.create_workspace()
@@ -436,6 +458,15 @@ class _StaticMattingSession:
     def __init__(self, content: bytes):
         self.content = content
         self.calls = []
+        self.health_status = 200
+
+    def get(self, url, **kwargs):
+        self.calls.append({"url": url, **kwargs})
+
+        class _Response:
+            status_code = self.health_status
+
+        return _Response()
 
     def post(self, url, **kwargs):
         self.calls.append({"url": url, **kwargs})
@@ -452,4 +483,3 @@ class _StaticMattingSession:
                 raise ValueError("no json")
 
         return _Response(content)
-

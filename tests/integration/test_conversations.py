@@ -281,6 +281,36 @@ class TestConversations(PlatformTestCase):
         )
         self.assertEqual(assistant_message.role, "assistant")
 
+    def test_canceled_chat_keeps_counting_toward_capacity_until_request_returns(self):
+        workspaces = [self.create_workspace(f"取消容量 {index}") for index in range(3)]
+        conversations = self.services.conversations
+
+        with ExitStack() as active_requests:
+            for index, workspace in enumerate(workspaces[:2]):
+                operation_id = str(index + 1) * 32
+                active_requests.enter_context(
+                    conversations.operations.workspace_operation(
+                        workspace,
+                        "reply",
+                        "等待回复",
+                        operation_id=operation_id,
+                    )
+                )
+                self.assertTrue(conversations.cancel_operation(workspace.id, operation_id))
+                self.assertFalse(conversations.operation_state(workspace.id)["busy"])
+
+            with self.assertRaises(ServiceError) as raised:
+                with conversations.operations.workspace_operation(
+                    workspaces[2],
+                    "reply",
+                    "等待回复",
+                    operation_id="3" * 32,
+                ):
+                    pass
+
+        self.assertEqual(raised.exception.code, "conversation_user_limit")
+        self.assertEqual(raised.exception.status_code, 429)
+
     def test_chat_cancel_tombstones_are_consumed_at_zero_timestamp(self):
         workspace = self.create_workspace("零时间取消")
         conversations = self.services.conversations
