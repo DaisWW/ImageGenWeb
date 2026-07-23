@@ -4,15 +4,33 @@ set -eu
 if [ -d /models/lucida ] && [ -f /models/lucida/config.json ]; then
   python - <<'PY'
 from pathlib import Path
-reg = Path("/app/bgr/registry.py")
-text = reg.read_text(encoding="utf-8")
-old = '"lucida": {"model_id": "egeorcun/lucida", "input_size": 1024},'
-new = '"lucida": {"model_id": "/models/lucida", "input_size": 1024},'
-if old in text:
-    reg.write_text(text.replace(old, new, 1), encoding="utf-8")
-    print("using local model at /models/lucida")
+import re
+
+reg = Path('/app/bgr/registry.py')
+text = reg.read_text(encoding='utf-8')
+pattern = re.compile(
+    r'("lucida"\s*:\s*\{\s*"model_id"\s*:\s*)(?:r)?(["\'])(.*?)(\2)(\s*,\s*"input_size"\s*:\s*1024\s*\})'
+)
+new_text, count = pattern.subn(r'\1"/models/lucida"\5', text, count=1)
+if count:
+    reg.write_text(new_text, encoding='utf-8')
+    print('using local model at /models/lucida')
 else:
-    print("registry already customized or marker missing")
+    print('registry rewrite failed')
+    print([line for line in text.splitlines() if 'lucida' in line and 'model_id' in line][:5])
+PY
+fi
+
+if [ "${LUCIDA_PRELOAD_MODEL:-1}" = "1" ]; then
+  python - <<'PY' || true
+import os
+model = os.environ.get('LUCIDA_MATTING_MODEL', 'lucida') or 'lucida'
+try:
+    from bgr.registry import get_segmenter
+    get_segmenter(model)
+    print(f'preloaded model: {model}')
+except Exception as exc:
+    print(f'preload skipped: {exc}')
 PY
 fi
 
