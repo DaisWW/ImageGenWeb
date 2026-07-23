@@ -13,6 +13,7 @@ test("image detail actions explain their purpose", async ({ studioPage: page }) 
   expect(titles).toEqual({
     detailUiKit: "把完整游戏界面作为结构和风格参考，先拆解组件树，再逐个重建可开发的原子资源。",
     detailSlice: "识别规则排列的图集网格；确认行列和切片后，可下载或存入图库。",
+    detailMatting: "调用本机 Lucida 抠图并下载透明 PNG；不会覆盖原图，也不会改写生成记录。已有真实 Alpha 时会拒绝。",
     detailSaveLibrary: "将当前生成图保存到工作站图库，便于以后作为参考图复用。",
     detailRunReview: "让 AI 按提示词和硬门槛检查当前图片，并给出单点修正建议。",
     detailApplyReview: "把当前图作为参考并载入验收建议，继续生成精修版本。",

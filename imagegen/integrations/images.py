@@ -2,31 +2,20 @@ from __future__ import annotations
 
 import base64
 import binascii
-import io
 import ipaddress
 import socket
 import threading
-import warnings
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import requests
-from PIL import Image, UnidentifiedImageError
 from requests.adapters import HTTPAdapter
 
 from ..config.channels import Channel
 from .diagnostics import response_summary
 
 MAX_OUTPUT_BYTES = 50 * 1024 * 1024
-MAX_TRANSPARENCY_PIXELS = 40_000_000
-TRANSPARENT_BACKGROUND_SUFFIX = (
-    "\n\nTechnical output requirements for transparency: place the requested subject on a "
-    "genuinely transparent canvas. Do not draw or simulate a transparency checkerboard. "
-    "Preserve a clean, well-defined silhouette with smooth anti-aliased edges and fully "
-    "transparent pixels immediately outside it. Avoid unintended matte colors, halos, fringes, "
-    "glow, shadows, stray pixels, and semi-transparent specks around the contour."
-)
 
 
 class PinnedHostSSLAdapter(HTTPAdapter):
@@ -93,12 +82,11 @@ class OpenAIImagesAdapter:
     def generate(self, channel: Channel, request: GenerationRequest) -> ProviderResult:
         endpoint = "edits" if request.references else "generations"
         url = _api_endpoint(channel.base_url, f"images/{endpoint}")
-        prompt = request.prompt
-        if request.transparent_background:
-            prompt = f"{prompt.rstrip()}{TRANSPARENT_BACKGROUND_SUFFIX}"
+        # Transparent backgrounds are produced by Lucida post-processing in the
+        # worker, not by requesting native provider alpha.
         payload: dict[str, Any] = {
             "model": request.model,
-            "prompt": prompt,
+            "prompt": request.prompt,
             "n": 1,
             "size": request.size,
             "quality": request.quality,
@@ -106,8 +94,6 @@ class OpenAIImagesAdapter:
         }
         if request.output_format in {"jpeg", "webp"}:
             payload["output_compression"] = request.compression
-        if request.transparent_background:
-            payload["background"] = "transparent"
         headers = {"Authorization": f"Bearer {channel.api_key}"}
         request_data: dict[str, Any]
         if request.references:
@@ -176,8 +162,6 @@ class OpenAIImagesAdapter:
 
         if len(content) > MAX_OUTPUT_BYTES:
             raise ProviderError("生成图片超过 50 MiB 限制", code="output_too_large")
-        if request.transparent_background:
-            _validate_transparent_image(content)
         return ProviderResult(content=content, request_id=request_id)
 
     def _extract(
@@ -286,32 +270,6 @@ class ProviderFactory:
             return self._openai_images
         raise ProviderError(f"不支持的渠道适配器：{channel.adapter}", code="adapter_error")
 
-
-def _validate_transparent_image(content: bytes) -> None:
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(content)) as image:
-                width, height = image.size
-                if width * height > MAX_TRANSPARENCY_PIXELS:
-                    raise ProviderError(
-                        "生成图片像素数量超过透明背景校验限制",
-                        code="output_too_large",
-                    )
-                image.load()
-                alpha_extrema = image.convert("RGBA").getchannel("A").getextrema()
-    except ProviderError:
-        raise
-    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
-        raise ProviderError("生成图片像素数量超过安全限制", code="invalid_response") from exc
-    except (UnidentifiedImageError, OSError, ValueError) as exc:
-        raise ProviderError("上游返回的图片无效", code="invalid_response") from exc
-
-    if alpha_extrema[0] == 255:
-        raise ProviderError(
-            "上游未返回真实透明背景图片",
-            code="transparent_background_missing",
-        )
 
 
 def _request_id(response: requests.Response) -> str:

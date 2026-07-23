@@ -262,6 +262,7 @@
           : "布局参数无效",
       );
       setDisabled(this.el.sliceDownload, !selected || this.sliceBusy);
+      setDisabled(this.el.sliceMatting, !selected || this.sliceBusy);
       setDisabled(this.el.sliceSaveLibrary, !selected || this.sliceBusy);
       setDisabled(this.el.sliceReuse, selected !== 1 || this.sliceBusy);
     },
@@ -294,6 +295,11 @@
         if (action === "download") {
           await this.downloadSlices(boxes);
           UI.toast("已导出 " + boxes.length + " 个切片", "success");
+          return;
+        }
+        if (action === "matting") {
+          await this.downloadSlices(boxes, { action: "matting" });
+          UI.toast("已导出 " + boxes.length + " 个 Lucida 切片", "success");
           return;
         }
         const data = await UI.api(
@@ -356,7 +362,8 @@
       });
     },
 
-    async downloadSlices(boxes) {
+    async downloadSlices(boxes, options = {}) {
+      const action = options.action === "matting" ? "matting" : "download";
       const headers = new Headers({
         Accept: "application/zip",
         "Content-Type": "application/json",
@@ -369,7 +376,7 @@
           method: "POST",
           credentials: "same-origin",
           headers,
-          body: JSON.stringify({ action: "download", boxes }),
+          body: JSON.stringify({ action, boxes }),
         },
       );
       if (!response.ok) {
@@ -380,11 +387,51 @@
       const url = URL.createObjectURL(await response.blob());
       const link = document.createElement("a");
       link.href = url;
-      link.download = "image_" + this.sliceItemId + "_slices.zip";
+      link.download = action === "matting"
+        ? "image_" + this.sliceItemId + "_slices_lucida.zip"
+        : "image_" + this.sliceItemId + "_slices.zip";
       document.body.append(link);
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
+    },
+
+    async downloadDetailMatting() {
+      if (!this.detailItemId || this.detailMattingBusy) return;
+      this.detailMattingBusy = true;
+      setDisabled(this.el.detailMatting, true);
+      try {
+        const headers = new Headers({ Accept: "image/png" });
+        const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || "";
+        if (csrfToken) headers.set("X-CSRFToken", csrfToken);
+        const response = await fetch(
+          "/api/generation-items/" + this.detailItemId + "/matting",
+          {
+            method: "POST",
+            credentials: "same-origin",
+            headers,
+          },
+        );
+        if (!response.ok) {
+          const payload = (response.headers.get("content-type") || "").includes("application/json")
+            ? await response.json() : null;
+          throw new Error(payload?.error || "Lucida 抠图失败（HTTP " + response.status + "）");
+        }
+        const url = URL.createObjectURL(await response.blob());
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "image_" + this.detailItemId + "_lucida.png";
+        document.body.append(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+        UI.toast("已下载 Lucida 透明 PNG", "success");
+      } catch (error) {
+        UI.toast(error.message, "error");
+      } finally {
+        this.detailMattingBusy = false;
+        setDisabled(this.el.detailMatting, false);
+      }
     },
 
     async startUiKitReconstruction() {

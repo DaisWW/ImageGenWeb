@@ -15,6 +15,7 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import selectinload
 
 from .config.channels import ChannelRegistry
+from .errors import ServiceError
 from .extensions import db
 from .integrations.images import (
     GenerationRequest,
@@ -22,6 +23,7 @@ from .integrations.images import (
     ProviderFactory,
     ReferencePayload,
 )
+from .integrations.matting import LucidaMattingClient
 from .models import GenerationItem, GenerationJob, User, WorkerState, utcnow
 from .services import RetentionService, money
 from .storage import ImageStorage, StorageError
@@ -331,8 +333,25 @@ class GenerationWorker:
                         references=references,
                     ),
                 )
+                content = result.content
+                if item.job.transparent_background:
+                    content = self._apply_lucida_matting(
+                        content,
+                        filename=f"image_{item.id}.{item.job.output_format or 'png'}",
+                    )
                 with self._settlement_lock:
-                    self._settle_success(item_id, result.content, result.request_id, started)
+                    self._settle_success(item_id, content, result.request_id, started)
+            except ServiceError as exc:
+                with self._settlement_lock:
+                    self._settle_failure(
+                        item_id,
+                        code=exc.code,
+                        message=str(exc),
+                        upstream_status=exc.status_code,
+                        upstream_request_id="",
+                        started=started,
+                        details={"stage": "lucida_matting"},
+                    )
             except ProviderError as exc:
                 with self._settlement_lock:
                     self._settle_failure(
@@ -369,6 +388,12 @@ class GenerationWorker:
                     )
             finally:
                 db.session.remove()
+
+    def _apply_lucida_matting(self, content: bytes, *, filename: str) -> bytes:
+        client = self.app.extensions.get("lucida_matting_client")
+        if client is None:
+            client = LucidaMattingClient()
+        return client.remove_background(content, filename=filename)
 
     def _request_references(self, item: GenerationItem) -> tuple[ReferencePayload, ...]:
         return tuple(

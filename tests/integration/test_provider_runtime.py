@@ -14,7 +14,6 @@ from imagegen.integrations.diagnostics import response_summary
 from imagegen.integrations.images import (
     GenerationRequest,
     OpenAIImagesAdapter,
-    ProviderError,
     ReferencePayload,
 )
 from imagegen.integrations.openai_chat import OpenAIChatClient, OpenAIChatError
@@ -65,19 +64,14 @@ class TestProviderAndRuntime(PlatformTestCase):
         self.assertNotIn("data", session.request)
         self.assertEqual(session.request["headers"]["Content-Type"], "application/json")
 
+        # Transparent backgrounds are handled by Lucida in the worker; provider stays opaque.
         transparent_result = adapter.generate(
             channel,
             replace(request, transparent_background=True),
         )
-        self.assertEqual(session.request["json"]["background"], "transparent")
-        self.assertTrue(session.request["json"]["prompt"].startswith(request.prompt))
-        self.assertIn("genuinely transparent canvas", session.request["json"]["prompt"])
-        self.assertIn("transparency checkerboard", session.request["json"]["prompt"])
-        self.assertIn("semi-transparent specks", session.request["json"]["prompt"])
-        self.assertEqual(transparent_result.content, session.transparent_content)
-        with Image.open(io.BytesIO(transparent_result.content)) as image:
-            self.assertEqual(image.mode, "RGBA")
-            self.assertEqual(image.getchannel("A").getextrema(), (0, 255))
+        self.assertNotIn("background", session.request["json"])
+        self.assertEqual(session.request["json"]["prompt"], request.prompt)
+        self.assertEqual(transparent_result.content, png_bytes())
 
         subject = png_bytes((220, 35, 45))
         layout = png_bytes((25, 80, 220))
@@ -92,8 +86,8 @@ class TestProviderAndRuntime(PlatformTestCase):
         edit_result = adapter.generate(channel, edit_request)
         self.assertEqual(session.request["url"], "https://relay.example/v1/images/edits")
         self.assertEqual(session.request["data"]["n"], "1")
-        self.assertEqual(session.request["data"]["background"], "transparent")
-        self.assertIn("genuinely transparent canvas", session.request["data"]["prompt"])
+        self.assertNotIn("background", session.request["data"])
+        self.assertEqual(session.request["data"]["prompt"], request.prompt)
         self.assertEqual([part[0] for part in session.request["files"]], ["image[]", "image[]"])
         self.assertEqual(
             [part[1][0] for part in session.request["files"]],
@@ -104,56 +98,56 @@ class TestProviderAndRuntime(PlatformTestCase):
             [subject, layout],
         )
         self.assertNotIn("Content-Type", session.request["headers"])
-        with Image.open(io.BytesIO(edit_result.content)) as image:
-            self.assertEqual(image.getchannel("A").getextrema(), (0, 255))
+        self.assertEqual(edit_result.content, png_bytes())
 
-    def test_transparent_background_does_not_retry_when_model_rejects_request(self):
+    def test_transparent_background_does_not_send_native_provider_flags(self):
         channel = self.app.extensions["channel_registry"].get("test")
         adapter = OpenAIImagesAdapter()
         session = RejectingTransparencySession()
         adapter._local.session = session
 
-        with self.assertRaisesRegex(ProviderError, "Transparent background is not supported"):
-            adapter.generate(
-                channel,
-                GenerationRequest(
-                    prompt="极简上传图标",
-                    model="model-a",
-                    size="1024x1024",
-                    quality="high",
-                    output_format="png",
-                    compression=90,
-                    transparent_background=True,
-                ),
-            )
+        # Even when upstream would reject native transparency, Lucida path never asks for it.
+        result = adapter.generate(
+            channel,
+            GenerationRequest(
+                prompt="极简上传图标",
+                model="model-a",
+                size="1024x1024",
+                quality="high",
+                output_format="png",
+                compression=90,
+                transparent_background=True,
+            ),
+        )
 
         self.assertEqual(len(session.requests), 1)
-        self.assertEqual(session.requests[0]["json"]["background"], "transparent")
-        self.assertIn("genuinely transparent canvas", session.requests[0]["json"]["prompt"])
+        self.assertNotIn("background", session.requests[0]["json"])
+        self.assertEqual(session.requests[0]["json"]["prompt"], "极简上传图标")
+        self.assertEqual(result.content, png_bytes())
 
-    def test_transparent_background_rejects_opaque_provider_image(self):
+    def test_transparent_background_accepts_opaque_provider_image(self):
         content = png_bytes((35, 160, 110))
         channel = self.app.extensions["channel_registry"].get("test")
         adapter = OpenAIImagesAdapter()
         session = RecordingImageSession(transparent_content=content)
         adapter._local.session = session
 
-        with self.assertRaisesRegex(ProviderError, "上游未返回真实透明背景图片") as error:
-            adapter.generate(
-                channel,
-                GenerationRequest(
-                    prompt="极简上传图标",
-                    model="model-a",
-                    size="1024x1024",
-                    quality="high",
-                    output_format="png",
-                    compression=90,
-                    transparent_background=True,
-                ),
-            )
+        result = adapter.generate(
+            channel,
+            GenerationRequest(
+                prompt="极简上传图标",
+                model="model-a",
+                size="1024x1024",
+                quality="high",
+                output_format="png",
+                compression=90,
+                transparent_background=True,
+            ),
+        )
 
-        self.assertEqual(error.exception.code, "transparent_background_missing")
+        self.assertEqual(result.content, png_bytes())
         self.assertEqual(len(session.requests), 1)
+        self.assertNotIn("background", session.requests[0]["json"])
 
     def test_chat_request_sends_configured_reasoning_effort(self):
         model = self.app.extensions["chat_model_registry"].get("test-chat")

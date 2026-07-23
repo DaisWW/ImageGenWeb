@@ -20,6 +20,7 @@ from .config import (
 from .container import ApplicationServices
 from .errors import ServiceError
 from .extensions import compress, csrf, db, login_manager
+from .integrations.matting import LucidaMattingClient
 from .models import GenerationQueueState, User, WorkerState
 from .serializers import display_amount
 from .services import (
@@ -67,6 +68,14 @@ def create_app(config: dict | None = None) -> Flask:
             str(BASE_DIR / "config" / "chat_models.yaml"),
         ),
         IMAGE_STORAGE_PATH=os.environ.get("IMAGE_STORAGE_PATH", str(data_dir / "files")),
+        LUCIDA_MATTING_URL=os.environ.get("LUCIDA_MATTING_URL", "").strip(),
+        LUCIDA_MATTING_MODEL=os.environ.get("LUCIDA_MATTING_MODEL", "lucida").strip() or "lucida",
+        LUCIDA_MATTING_TIMEOUT_SECONDS=_env_float(
+            "LUCIDA_MATTING_TIMEOUT_SECONDS",
+            default=120.0,
+            minimum=1.0,
+            maximum=1800.0,
+        ),
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         SESSION_COOKIE_SECURE=os.environ.get("COOKIE_SECURE", "").lower() in {"1", "true", "yes"},
@@ -143,6 +152,11 @@ def create_app(config: dict | None = None) -> Flask:
     app.extensions["chat_model_registry"] = chat_models
     app.extensions["image_storage"] = storage
     app.extensions["imagegen_services"] = services
+    app.extensions["lucida_matting_client"] = LucidaMattingClient(
+        base_url=str(app.config.get("LUCIDA_MATTING_URL", "") or ""),
+        model=str(app.config.get("LUCIDA_MATTING_MODEL", "lucida") or "lucida"),
+        timeout_seconds=float(app.config.get("LUCIDA_MATTING_TIMEOUT_SECONDS", 120.0) or 120.0),
+    )
     app.register_blueprint(web)
     _register_handlers(app)
 
@@ -294,3 +308,20 @@ def _persistent_secret(data_dir: Path) -> str:
     value = secrets.token_hex(32)
     path.write_text(value, encoding="utf-8")
     return value
+
+
+def _env_float(
+    name: str,
+    *,
+    default: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return max(minimum, min(maximum, value))

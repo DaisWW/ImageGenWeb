@@ -321,6 +321,7 @@
         detailSeriesAnchor: byId("detailSeriesAnchor"),
         detailUiKit: byId("detailUiKit"),
         detailSlice: byId("detailSlice"),
+        detailMatting: byId("detailMatting"),
         detailSaveLibrary: byId("detailSaveLibrary"),
         detailReuse: byId("detailReuse"),
         detailDownload: byId("detailDownload"),
@@ -340,6 +341,7 @@
         sliceList: byId("sliceList"),
         sliceSaveLibrary: byId("sliceSaveLibrary"),
         sliceReuse: byId("sliceReuse"),
+        sliceMatting: byId("sliceMatting"),
         sliceDownload: byId("sliceDownload"),
         libraryDialog: byId("libraryDialog"),
         libraryTargetLabel: byId("libraryTargetLabel"),
@@ -544,6 +546,7 @@
       this.el.detailApplyReview.addEventListener("click", () => this.applyDetailReview());
       this.el.detailSeriesAnchor.addEventListener("click", () => this.setDetailAsSeriesAnchor());
       this.el.detailSlice.addEventListener("click", () => this.openSliceTool());
+      this.el.detailMatting.addEventListener("click", () => this.downloadDetailMatting());
       this.el.detailSaveLibrary.addEventListener("click", () => this.saveDetailToLibrary());
       this.el.detailReuse.addEventListener("click", () => this.useDetailAsReference());
       this.el.sliceLayoutFields.addEventListener("input", () => this.rebuildSliceGrid());
@@ -560,6 +563,7 @@
       });
       this.el.sliceSaveLibrary.addEventListener("click", () => this.exportSlices("library"));
       this.el.sliceReuse.addEventListener("click", () => this.exportSlices("reference"));
+      this.el.sliceMatting.addEventListener("click", () => this.exportSlices("matting"));
       this.el.sliceDownload.addEventListener("click", () => this.exportSlices("download"));
       this.el.sliceDialog.addEventListener("close", () => {
         this.sliceItemId = null;

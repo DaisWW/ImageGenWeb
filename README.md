@@ -39,7 +39,7 @@ templates/        页面模板和共享局部模板
 tests/integration/ 业务与 HTTP 合同测试
 ```
 
-详细模块边界、事务归属和扩展规则见 [`docs/architecture.md`](docs/architecture.md)。根目录保留启动脚本、Docker、Alembic 和依赖清单；`data/`、`outputs/`、`backups/`、`.ui-test-data/` 均为运行时数据，不属于源码结构。
+详细模块边界、事务归属和扩展规则见 [`docs/architecture.md`](docs/architecture.md)。可选 Lucida 抠图服务见 [`docs/lucida-matting.md`](docs/lucida-matting.md)。根目录保留启动脚本、Docker、Alembic 和依赖清单；`data/`、`outputs/`、`backups/`、`.ui-test-data/` 均为运行时数据，不属于源码结构。
 
 ## Docker 部署
 

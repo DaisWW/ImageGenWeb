@@ -20,6 +20,9 @@ x-app: &app
     IMAGE_API_KEY: ${IMAGE_API_KEY}
     LUCEN_API_BASE_URL: ${LUCEN_API_BASE_URL:-https://lucen.plus}
     LUCEN_API_KEY: ${LUCEN_API_KEY:-}
+    LUCIDA_MATTING_URL: ${LUCIDA_MATTING_URL:-}
+    LUCIDA_MATTING_MODEL: ${LUCIDA_MATTING_MODEL:-lucida}
+    LUCIDA_MATTING_TIMEOUT_SECONDS: ${LUCIDA_MATTING_TIMEOUT_SECONDS:-120}
     COOKIE_SECURE: ${COOKIE_SECURE:-false}
     TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
     IMAGEGEN_DATA_DIR: /data
@@ -43,6 +46,24 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+
+  lucida:
+    profiles: ["lucida"]
+    build:
+      context: .
+      dockerfile: docker/lucida/Dockerfile
+    restart: unless-stopped
+    environment:
+      LUCIDA_MATTING_MODEL: ${LUCIDA_MATTING_MODEL:-lucida}
+    volumes:
+      - lucida-hf-cache:/root/.cache/huggingface
+      - ${LUCIDA_MODEL_PATH:-./.tmp-lucida-src/lucida-main/.model/lucida}:/models/lucida:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
 
   web:
     <<: *app
@@ -78,3 +99,4 @@ services:
 volumes:
   imagegen-data:
   postgres-data:
+  lucida-hf-cache:

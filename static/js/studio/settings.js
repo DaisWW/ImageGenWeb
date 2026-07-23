@@ -361,7 +361,7 @@
       if (!available) this.el.transparentBackground.checked = false;
       this.el.transparentBackgroundControl.classList.toggle("is-disabled", !available);
       this.el.transparentBackgroundControl.title = available
-        ? "生成包含 Alpha 通道的透明背景图片"
+        ? "生成后由 Lucida 自动抠成透明背景 PNG/WebP（不请求上游原生透明）"
         : "透明背景仅支持 PNG 或 WebP";
     },
 

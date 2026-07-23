@@ -19,3 +19,11 @@ backups
 output
 outputs
 tests
+
+# Lucida source used only for docker/lucida image build
+.tmp-lucida-src/**/.venv
+.tmp-lucida-src/**/.venv-cpu
+.tmp-lucida-src/**/.model
+.tmp-lucida-src/**/results*
+.tmp-lucida-src/**/__pycache__
+lucida-main.zip

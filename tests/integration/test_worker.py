@@ -7,12 +7,14 @@ from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
+from PIL import Image
 from sqlalchemy import func, select
 
 from imagegen.extensions import db
 from imagegen.integrations.images import (
     ProviderResult,
 )
+from imagegen.integrations.matting import LucidaMattingClient
 from imagegen.models import (
     GenerationItem,
     GenerationJob,
@@ -29,6 +31,7 @@ from tests.support.platform import (
     HoldingExecutor,
     PlatformTestCase,
     png_bytes,
+    transparent_icon_png_bytes,
 )
 
 
@@ -38,6 +41,10 @@ class TestWorker(PlatformTestCase):
         job = self.submit(workspace, transparent_background=True)
         worker = self.create_worker()
         worker.providers = FakeProviderFactory()
+        self.app.extensions["lucida_matting_client"] = LucidaMattingClient(
+            base_url="http://lucida.test",
+            session=_StaticMattingSession(transparent_icon_png_bytes()),
+        )
         channel = self.app.extensions["channel_registry"].get("test")
         self.assertTrue(worker._claim(job.items[0].id, channel))
         worker._process_item(job.items[0].id)
@@ -51,6 +58,9 @@ class TestWorker(PlatformTestCase):
         self.assertEqual(user.balance_rmb, Decimal("18.7500"))
         self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
         self.assertTrue(self.app.extensions["image_storage"].read(item.output_path).is_file())
+        with Image.open(self.app.extensions["image_storage"].read(item.output_path)) as image:
+            self.assertEqual(image.convert("RGBA").getchannel("A").getextrema()[0], 0)
+
         charge_count = db.session.scalar(
             select(func.count(WalletLedger.id)).where(
                 WalletLedger.generation_item_id == item.id,
@@ -420,3 +430,26 @@ class TestWorker(PlatformTestCase):
         self.record_generation_durations([600], model="other-model")
 
         self.assertEqual(self.services.generations.estimate_seconds(job, channel), Decimal("100"))
+
+
+class _StaticMattingSession:
+    def __init__(self, content: bytes):
+        self.content = content
+        self.calls = []
+
+    def post(self, url, **kwargs):
+        self.calls.append({"url": url, **kwargs})
+        content = self.content
+
+        class _Response:
+            status_code = 200
+            text = ""
+
+            def __init__(self, body: bytes):
+                self.content = body
+
+            def json(self):
+                raise ValueError("no json")
+
+        return _Response(content)
+
