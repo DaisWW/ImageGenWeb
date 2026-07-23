@@ -51,9 +51,14 @@ services:
     profiles: ["lucida"]
     image: ${LUCIDA_IMAGE:-snow-ai-studio-lucida:latest}
     build:
-      context: .
-      dockerfile: docker/lucida/Dockerfile
+      context: docker/lucida
+      dockerfile: Dockerfile
+      additional_contexts:
+        lucida_bgr: ./.tmp-lucida-src/lucida-main/bgr
+        lucida_benchmark: ./.tmp-lucida-src/lucida-main/benchmark
+        lucida_serving: ./.tmp-lucida-src/lucida-main/serving
       args:
+        LUCIDA_BASE_IMAGE: ${LUCIDA_BASE_IMAGE:-docker.m.daocloud.io/library/python:3.12-slim}
         TORCH_INDEX_URL: ${LUCIDA_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu124}
     restart: unless-stopped
     gpus: all

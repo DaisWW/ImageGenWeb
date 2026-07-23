@@ -20,10 +20,6 @@ output
 outputs
 tests
 
-# Lucida source used only for docker/lucida image build
-.tmp-lucida-src/**/.venv
-.tmp-lucida-src/**/.venv-cpu
-.tmp-lucida-src/**/.model
-.tmp-lucida-src/**/results*
-.tmp-lucida-src/**/__pycache__
+# Lucida uses narrow named contexts declared in compose.yaml.
+.tmp-lucida-src
 lucida-main.zip

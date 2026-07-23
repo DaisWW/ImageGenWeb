@@ -1,5 +1,5 @@
-ARG PYTHON_IMAGE=docker.m.daocloud.io/library/python:3.12-slim
-FROM ${PYTHON_IMAGE}
+ARG LUCIDA_BASE_IMAGE=docker.m.daocloud.io/library/python:3.12-slim
+FROM ${LUCIDA_BASE_IMAGE}
 
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
 
@@ -22,13 +22,16 @@ WORKDIR /app
 RUN pip install --upgrade pip \
  && pip install torch torchvision --index-url "${TORCH_INDEX_URL}"
 
-COPY .tmp-lucida-src/lucida-main/pyproject.toml ./
-COPY .tmp-lucida-src/lucida-main/bgr/ bgr/
-COPY .tmp-lucida-src/lucida-main/benchmark/ benchmark/
+COPY pyproject.toml ./
+COPY --from=lucida_bgr . bgr/
+COPY --from=lucida_benchmark . benchmark/
 RUN pip install .
 
-COPY .tmp-lucida-src/lucida-main/serving/ serving/
-COPY docker/lucida/runtime.py lucida_runtime.py
+COPY --from=lucida_serving . serving/
+COPY runtime.py lucida_runtime.py
+
+LABEL io.snow-ai-studio.lucida-runtime="uvicorn-preload-v1"
 
 EXPOSE 8000
+ENTRYPOINT []
 CMD ["uvicorn", "lucida_runtime:app", "--host", "0.0.0.0", "--port", "8000"]

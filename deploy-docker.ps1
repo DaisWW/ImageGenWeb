@@ -248,12 +248,16 @@ try {
 
     $lucidaSource = Join-Path $projectDir ".tmp-lucida-src\lucida-main"
     $lucidaModel = Join-Path $lucidaSource ".model\lucida\config.json"
+    $lucidaRegistry = Join-Path $lucidaSource "bgr\registry.py"
+    $lucidaBenchmark = Join-Path $lucidaSource "benchmark\__init__.py"
     $lucidaServing = Join-Path $lucidaSource "serving\app.py"
-    if (-not (Test-Path -LiteralPath $lucidaServing) -or -not (Test-Path -LiteralPath $lucidaModel)) {
-        throw "缺少 Lucida 源码/权重：请准备 .tmp-lucida-src\lucida-main（含 serving 与 .model\lucida）。"
+    if (@($lucidaRegistry, $lucidaBenchmark, $lucidaServing, $lucidaModel) |
+        Where-Object { -not (Test-Path -LiteralPath $_) }) {
+        throw "缺少 Lucida 源码/权重：请准备 .tmp-lucida-src\lucida-main（含 bgr、benchmark、serving 与 .model\lucida）。"
     }
 
     $lucidaImage = "snow-ai-studio-lucida:latest"
+    $lucidaBaseImage = "snow-ai-studio-lucida-base:cu124"
     $envLines = if (Test-Path -LiteralPath $envPath) { [IO.File]::ReadAllLines($envPath) } else { @() }
     foreach ($line in $envLines) {
         if ($line.StartsWith("LUCIDA_IMAGE=", [StringComparison]::Ordinal)) {
@@ -278,10 +282,40 @@ try {
     }
 
     if (-not $NoBuild) {
-        Write-Host "正在构建主站、Worker 与 GPU Lucida 镜像（已缓存层会自动复用）..."
-        & docker compose --project-directory $projectDir --profile lucida build web worker lucida
+        Write-Host "正在构建主站与 Worker 镜像..."
+        & docker compose --project-directory $projectDir build web worker
         if ($LASTEXITCODE -ne 0) {
-            throw "Docker 镜像构建失败。"
+            throw "主站/Worker 镜像构建失败。"
+        }
+
+        $lucidaBuildBase = $lucidaBaseImage
+        if (-not (Test-LocallyUsableLucidaImage -Image $lucidaBuildBase)) {
+            if (Test-LocallyUsableLucidaImage -Image $lucidaImage) {
+                Write-Host "将现有 GPU Lucida 镜像登记为构建底座：$lucidaBaseImage"
+                docker tag $lucidaImage $lucidaBaseImage
+                if ($LASTEXITCODE -ne 0) {
+                    throw "无法登记 GPU Lucida 构建底座。"
+                }
+                $lucidaBuildBase = $lucidaBaseImage
+            } else {
+                $lucidaBuildBase = "docker.m.daocloud.io/library/python:3.12-slim"
+                Write-Host "未找到 GPU 底座，将执行首次 CUDA 依赖构建（可能需要较长时间）。"
+            }
+        } else {
+            Write-Host "复用 GPU Lucida 构建底座：$lucidaBaseImage" -ForegroundColor Green
+        }
+
+        Write-Host "正在构建 Lucida 运行镜像..."
+        & docker compose --project-directory $projectDir build `
+            --build-arg "LUCIDA_BASE_IMAGE=$lucidaBuildBase" lucida
+        if ($LASTEXITCODE -ne 0) {
+            throw "GPU Lucida 镜像构建失败。"
+        }
+        if ($lucidaBuildBase -eq "docker.m.daocloud.io/library/python:3.12-slim") {
+            docker tag $lucidaImage $lucidaBaseImage
+            if ($LASTEXITCODE -ne 0) {
+                throw "无法保存 GPU Lucida 构建底座。"
+            }
         }
     }
 

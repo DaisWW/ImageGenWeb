@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from bgr.registry import MODEL_SPECS
@@ -19,6 +20,12 @@ def _preload_model() -> None:
     _segmenter = _load_segmenter(MODEL)
 
 
+@asynccontextmanager
+async def _lifespan(_app):
+    _preload_model()
+    yield
+
+
 @app.get("/ready")
 def ready() -> dict[str, str]:
     if _segmenter is None:
@@ -30,4 +37,4 @@ def ready() -> dict[str, str]:
     }
 
 
-app.add_event_handler("startup", _preload_model)
+app.router.lifespan_context = _lifespan
