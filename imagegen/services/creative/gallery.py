@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
+from .matching import query_terms, text_match_score
 from .models import GalleryCategory, PromptTemplate
 
 _SKILL_REFERENCE_REVISION = "ecc9c5420c265f6677edc5f4d255bca02497ef71"
@@ -34,6 +35,45 @@ class GalleryAtlas:
 
     def get(self, identifier: object) -> GalleryCategory | None:
         return self._by_id.get(str(identifier or "").strip().lower())
+
+    def match(
+        self,
+        query: str,
+        *,
+        direction_id: str | None = None,
+        limit: int = 3,
+    ) -> tuple[str, ...]:
+        terms = query_terms(query)
+        if not terms or limit <= 0:
+            return ()
+        normalized_query = str(query or "").strip().lower()
+        ranked: list[tuple[float, str]] = []
+        for category in self.categories:
+            if not self._compatible(category, direction_id):
+                continue
+            identifier_text = category.identifier.replace("-", " ")
+            score = text_match_score(
+                terms,
+                f"{identifier_text} {category.label} {category.prompt_schema}",
+                4,
+            )
+            if category.identifier in normalized_query or identifier_text in normalized_query:
+                score += 40.0
+            if category.label.lower() in normalized_query:
+                score += 40.0
+            if score > 0:
+                ranked.append((score, category.identifier))
+        if not ranked:
+            return ()
+        ranked.sort(key=lambda item: (-item[0], item[1]))
+        minimum_score = max(8.0, ranked[0][0] * 0.35)
+        return tuple(identifier for score, identifier in ranked if score >= minimum_score)[
+            : min(limit, 3)
+        ]
+
+    def compatible(self, identifier: object, direction_id: str | None) -> bool:
+        category = self.get(identifier)
+        return category is not None and self._compatible(category, direction_id)
 
     def source_url(self, identifier: str) -> str:
         category = self._by_id[identifier]

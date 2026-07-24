@@ -149,6 +149,7 @@ class ConversationService:
         mode: str = "",
         reference_ids: tuple[str, ...] = (),
         creative_direction_id: str = "auto",
+        gallery_category_id: str = "auto",
     ) -> ConversationMessage:
         return self.prompt_drafts.create_prompt_draft(
             workspace,
@@ -157,6 +158,7 @@ class ConversationService:
             mode=mode,
             reference_ids=reference_ids,
             creative_direction_id=creative_direction_id,
+            gallery_category_id=gallery_category_id,
         )
 
     def validate_generation_draft(

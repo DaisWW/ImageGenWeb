@@ -23,6 +23,31 @@
       this.el.creativeDirectionSelect.value = valid ? selectedId : "auto";
     },
 
+    galleryCategoryCompatible(category, directionId = "auto") {
+      return category.id === "auto"
+        || directionId === "auto"
+        || category.id === "edit-endpoint-showcase"
+        || (category.direction_ids || []).includes(directionId);
+    },
+
+    renderGalleryCategoryOptions(selectedId = "auto") {
+      const directionId = this.el.creativeDirectionSelect.value || "auto";
+      const options = this.galleryCategories.map((category) => {
+        const option = document.createElement("option");
+        option.value = category.id;
+        option.textContent = category.label;
+        option.title = [category.case_range, category.description].filter(Boolean).join(" · ");
+        option.disabled = !this.galleryCategoryCompatible(category, directionId);
+        return option;
+      });
+      this.el.galleryCategorySelect.replaceChildren(...options);
+      const selected = this.galleryCategories.find((category) => category.id === selectedId);
+      this.el.galleryCategorySelect.value = selected
+        && this.galleryCategoryCompatible(selected, directionId)
+        ? selectedId
+        : "auto";
+    },
+
     referenceSelectionLimit(target, workspace = this.activeWorkspace) {
       if (target === "chat") return this.limits.max_chat_attachments;
       const channelId = workspace?.id === this.activeWorkspace?.id

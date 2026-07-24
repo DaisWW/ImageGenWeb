@@ -17,6 +17,7 @@ from imagegen.services.creative import (
     SCENE_TAG_LABELS,
     STYLE_TAG_LABELS,
     creative_direction_dicts,
+    gallery_category_dicts,
 )
 from tests.support.platform import (
     PlatformTestCase,
@@ -31,6 +32,13 @@ class TestPromptDrafts(PlatformTestCase):
         self.assertEqual(len(SCENE_TAG_LABELS), 15)
         self.assertEqual(len(PROMPT_TEMPLATES), 42)
         self.assertEqual(len(GALLERY_ATLAS.categories), 31)
+        gallery_options = gallery_category_dicts()
+        self.assertEqual(len(gallery_options), 32)
+        self.assertEqual(gallery_options[0]["id"], "auto")
+        self.assertEqual(
+            {item["id"] for item in gallery_options[1:]},
+            {category.identifier for category in GALLERY_ATLAS.categories},
+        )
         self.assertEqual(
             len({category.identifier for category in GALLERY_ATLAS.categories}),
             len(GALLERY_ATLAS.categories),
@@ -58,6 +66,14 @@ class TestPromptDrafts(PlatformTestCase):
         metadata = GALLERY_ATLAS.metadata(["research-paper-figures"])
         self.assertEqual(metadata["gallery_case_ranges"], ["skill:75-95"])
         self.assertIn(GALLERY_ATLAS.revision, metadata["gallery_category_urls"][0])
+        for category in GALLERY_ATLAS.categories:
+            self.assertEqual(
+                GALLERY_ATLAS.match(
+                    f"{category.identifier} {category.label}",
+                    direction_id=category.direction_ids[0],
+                )[0],
+                category.identifier,
+            )
 
     def test_gallery_atlas_uses_explicit_template_case_and_direction_fallbacks(self):
         self.assertEqual(
@@ -206,6 +222,49 @@ class TestPromptDrafts(PlatformTestCase):
         self.assertEqual(locked.payload["creative_direction"], "product")
         self.assertEqual(locked.payload["template_id"], "custom")
         self.assertEqual(locked.payload["gallery_categories"], ["product-and-food"])
+
+    def test_prompt_draft_preserves_locked_gallery_category_before_template(self):
+        workspace = self.create_workspace("锁定水彩图谱")
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="画一幅雨后花园水彩插画，保留纸张纹理和透明叠色。",
+        )
+        self.chat_client.prompt_draft_content = json.dumps(
+            {
+                "status": "ready",
+                "summary_zh": "雨后花园水彩插画。",
+                "prompt": "雨后花园，透明水彩叠色与可见纸张纹理。",
+                "creative_direction": "illustration",
+                "template_id": "anime-manga-production-board",
+                "gallery_categories": ["typography-and-posters"],
+                "style_tags": ["Watercolor"],
+                "scene_tags": ["Editorial"],
+                "selection_reason": "用户锁定了水彩图谱。",
+                "brief": {"deliverable": "水彩插画", "subject": "雨后花园"},
+                "hard_checks": ["保留透明叠色和纸张纹理"],
+                "quality_hint": "medium",
+            },
+            ensure_ascii=False,
+        )
+
+        draft = self.services.conversations.create_prompt_draft(
+            workspace,
+            model_id="test-chat",
+            translate_to_english=False,
+            creative_direction_id="auto",
+            gallery_category_id="watercolor",
+        )
+
+        self.assertEqual(draft.payload["creative_direction"], "illustration")
+        self.assertEqual(draft.payload["template_id"], "custom")
+        self.assertEqual(draft.payload["gallery_categories"], ["watercolor"])
+        self.assertEqual(draft.payload["gallery_category_labels"], ["水彩"])
+        self.assertEqual(workspace.settings["gallery_category_id"], "watercolor")
+        self.assertIn(
+            "用户已锁定 Gallery 类别 `watercolor`",
+            self.chat_client.calls[-1]["system"],
+        )
 
     def test_game_ui_draft_keeps_template_case_refs_and_production_spec(self):
         workspace = self.create_workspace("游戏 HUD")

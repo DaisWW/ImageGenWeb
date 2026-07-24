@@ -58,6 +58,7 @@
             <label class="compact-field chat-model-field"><span>对话模型</span><select id="chatModelSelect" required></select></label>
             <div class="creative-direction-control">
               <label class="compact-field creative-direction-field"><span>创作方向</span><select id="creativeDirectionSelect"></select></label>
+              <label class="compact-field gallery-category-field"><span>图谱类别</span><select id="galleryCategorySelect"></select></label>
               <a class="icon-button" id="promptGalleryLink" href="{{ prompt_gallery_url }}" target="_blank" rel="noopener" title="浏览 GPT Image 2 提示词图库" aria-label="浏览 GPT Image 2 提示词图库"><i data-lucide="external-link"></i></a>
             </div>
             <label class="toggle-line" title="自动整理时输出英文提示词">
@@ -311,7 +312,7 @@
   </div>
 </dialog>
 
-<script id="bootstrapData" type="application/json">{{ {"user": user, "workspaces": workspaces, "max_workspaces": max_workspaces, "runtime_settings": runtime_settings, "history_retention_days": history_retention_days, "channels": channels, "chat_models": chat_models, "creative_directions": creative_directions}|tojson }}</script>
+<script id="bootstrapData" type="application/json">{{ {"user": user, "workspaces": workspaces, "max_workspaces": max_workspaces, "runtime_settings": runtime_settings, "history_retention_days": history_retention_days, "channels": channels, "chat_models": chat_models, "creative_directions": creative_directions, "gallery_categories": gallery_categories}|tojson }}</script>
 {% endblock %}
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/studio/core.js') }}" defer></script>

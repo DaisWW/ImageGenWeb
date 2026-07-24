@@ -119,6 +119,7 @@
       this.channels = this.bootstrap.channels;
       this.chatModels = this.bootstrap.chat_models || [];
       this.creativeDirections = this.bootstrap.creative_directions || [];
+      this.galleryCategories = this.bootstrap.gallery_categories || [];
       this.activeWorkspace = null;
       this.jobs = [];
       this.messages = [];
@@ -191,6 +192,7 @@
       });
       this.cacheElements();
       this.renderCreativeDirectionOptions();
+      this.renderGalleryCategoryOptions();
       this.applyRuntimeSettings(this.limits, this.historyRetentionDays);
       this.bindEvents();
       this.renderWorkspaceList();
@@ -261,6 +263,7 @@
         chatForm: byId("chatForm"),
         chatModelSelect: byId("chatModelSelect"),
         creativeDirectionSelect: byId("creativeDirectionSelect"),
+        galleryCategorySelect: byId("galleryCategorySelect"),
         translatePrompt: byId("translatePrompt"),
         contextStatus: byId("contextStatus"),
         directGenerationButton: byId("directGenerationButton"),
@@ -440,6 +443,15 @@
       this.el.chatForm.addEventListener("drop", (event) => this.handleChatDrop(event));
       this.el.chatModelSelect.addEventListener("change", () => this.settingChanged());
       this.el.creativeDirectionSelect.addEventListener("change", () => {
+        const selectedGallery = this.el.galleryCategorySelect.value || "auto";
+        this.renderGalleryCategoryOptions(selectedGallery);
+        if (selectedGallery !== "auto" && this.el.galleryCategorySelect.value === "auto") {
+          UI.toast("所选图谱类别与新创作方向不兼容，已恢复 AI 自动匹配", "info");
+        }
+        this.settingChanged();
+        this.updatePromptReviewState();
+      });
+      this.el.galleryCategorySelect.addEventListener("change", () => {
         this.settingChanged();
         this.updatePromptReviewState();
       });

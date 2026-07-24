@@ -103,6 +103,13 @@ test("AI automatically prepares a gallery template before generation", {
     .getAttribute("data-workspace-id");
 
   await expect(page.locator("#creativeDirectionSelect")).toHaveValue("auto");
+  await expect(page.locator("#galleryCategorySelect option")).toHaveCount(32);
+  await page.locator("#galleryCategorySelect").selectOption("watercolor");
+  await page.locator("#creativeDirectionSelect").selectOption("product");
+  await expect(page.locator("#galleryCategorySelect")).toHaveValue("auto");
+  await page.locator("#creativeDirectionSelect").selectOption("auto");
+  await page.locator("#galleryCategorySelect").selectOption("typography-and-posters");
+  await expect(page.locator("#galleryCategorySelect")).toHaveValue("typography-and-posters");
   await page.locator("#chatInput").fill("竖版运动鞋新品发布海报，标题 AIR ZERO");
   await page.locator("#chatForm").evaluate((form) => form.requestSubmit());
   await expect(page.locator(".prompt-draft-content").last()).toBeVisible();
@@ -122,6 +129,7 @@ test("AI automatically prepares a gallery template before generation", {
   await expect(page.locator("#generationForm")).toBeVisible();
   await expect(page.locator("#promptReviewStatus")).toContainText("最终提示词已就绪");
   await expect(page.locator("#creativeDirectionSelect")).toHaveValue("auto");
+  await expect(page.locator("#galleryCategorySelect")).toHaveValue("typography-and-posters");
   await expect(page.getByRole("button", { name: "草稿", exact: true })).toHaveCount(0);
   await expect(page.locator("#canvasConflict")).toBeVisible();
   await expect(page.locator("#canvasConflictMessage")).toContainText("1920×1080");

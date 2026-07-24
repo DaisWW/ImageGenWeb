@@ -6,6 +6,7 @@ from imagegen.services.creative import (
     CASE_CATALOG,
     CREATIVE_ROUTER,
     EDIT_RECIPES,
+    GALLERY_ATLAS,
     creative_direction_prompt,
 )
 
@@ -76,6 +77,49 @@ class TestCreativeCatalog(unittest.TestCase):
         self.assertIn("game-ui-gameplay-hud", routed_prompt)
         self.assertIn("gallery", routed_prompt.lower())
         self.assertNotIn("document-publishing", routed_prompt)
+
+    def test_gallery_category_match_precedes_template_routing(self):
+        gallery_categories = GALLERY_ATLAS.match(
+            "像素艺术角色精灵图，使用有限色板且不要抗锯齿",
+            direction_id="illustration",
+        )
+        templates = CREATIVE_ROUTER.route(
+            "像素艺术角色精灵图，使用有限色板且不要抗锯齿",
+            direction_id="illustration",
+            gallery_categories=gallery_categories,
+        )
+        prompt = creative_direction_prompt(
+            "illustration",
+            template_candidates=templates,
+            gallery_category_id="pixel-art",
+            gallery_candidates=gallery_categories,
+        )
+        cases = CASE_CATALOG.search(
+            "像素艺术角色精灵图，使用有限色板且不要抗锯齿",
+            direction_id="illustration",
+            templates=templates,
+            gallery_categories=gallery_categories,
+            gallery_category_locked=True,
+        )
+
+        self.assertEqual(gallery_categories[0], "pixel-art")
+        self.assertIn("用户已锁定 Gallery 类别 `pixel-art`", prompt)
+        self.assertIn("Case 52-53", prompt)
+        self.assertEqual(cases[0].gallery_category, "pixel-art")
+        self.assertTrue(all(case.gallery_category == "pixel-art" for case in cases))
+
+    def test_automatic_gallery_match_boosts_without_filtering_template_directions(self):
+        query = "product launch poster with bold typography and headline AIR ZERO"
+
+        automatic = CREATIVE_ROUTER.route(query, gallery_categories=("watercolor",))
+        locked = CREATIVE_ROUTER.route(
+            query,
+            gallery_categories=("watercolor",),
+            gallery_category_locked=True,
+        )
+
+        self.assertEqual(automatic[0].direction_id, "poster")
+        self.assertEqual(locked, ())
 
     def test_router_requires_game_and_data_context_for_specialized_templates(self):
         architecture_query = "北欧公寓室内建筑可视化，广角自然光"

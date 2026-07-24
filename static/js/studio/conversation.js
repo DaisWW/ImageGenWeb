@@ -574,6 +574,7 @@
       setAttribute(this.el.chatSendButton, "aria-label", sendTitle);
       setDisabled(this.el.chatModelSelect, locked || !hasModel);
       setDisabled(this.el.creativeDirectionSelect, locked);
+      setDisabled(this.el.galleryCategorySelect, locked);
       setDisabled(this.el.translatePrompt, locked);
       setDisabled(this.el.chatReferenceButton, locked || referenceUploading);
       setDisabled(this.el.directGenerationButton, locked || referenceUploading);

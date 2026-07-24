@@ -86,15 +86,25 @@ class CreativeRouter:
         query: str,
         *,
         direction_id: str = "auto",
+        gallery_categories: tuple[str, ...] = (),
+        gallery_category_locked: bool = False,
         limit: int = 3,
     ) -> tuple[PromptTemplate, ...]:
-        return self.match(query, direction_id=direction_id, limit=limit).templates
+        return self.match(
+            query,
+            direction_id=direction_id,
+            gallery_categories=gallery_categories,
+            gallery_category_locked=gallery_category_locked,
+            limit=limit,
+        ).templates
 
     def match(
         self,
         query: str,
         *,
         direction_id: str = "auto",
+        gallery_categories: tuple[str, ...] = (),
+        gallery_category_locked: bool = False,
         limit: int = 3,
     ) -> TemplateRoute:
         terms = query_terms(query)
@@ -102,6 +112,12 @@ class CreativeRouter:
             return TemplateRoute((), "low", "需求中的可检索视觉信息不足。")
         term_set = set(terms)
         locked_direction = str(direction_id or "auto").strip().lower()
+        selected_galleries = tuple(
+            category
+            for identifier in gallery_categories[:3]
+            if (category := GALLERY_ATLAS.get(identifier)) is not None
+        )
+        selected_gallery_ids = {category.identifier for category in selected_galleries}
         ranked: list[tuple[float, str, PromptTemplate]] = []
         for template in self.templates:
             if locked_direction not in {"", "auto"} and template.direction_id != locked_direction:
@@ -112,6 +128,9 @@ class CreativeRouter:
                 for identifier in GALLERY_ATLAS.for_template(template)
                 if (category := GALLERY_ATLAS.get(identifier)) is not None
             ]
+            gallery_ids = {category.identifier for category in galleries}
+            if gallery_category_locked and selected_gallery_ids.isdisjoint(gallery_ids):
+                continue
             score = sum(
                 (
                     text_match_score(
@@ -136,6 +155,9 @@ class CreativeRouter:
                     ),
                 )
             )
+            for index, category in enumerate(selected_galleries):
+                if category.identifier in gallery_ids:
+                    score += 16.0 - index * 4.0
             if _DIRECTION_DEFAULT_TEMPLATES.get(template.direction_id) == template.identifier:
                 score += 4.0
             if (

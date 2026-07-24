@@ -19,7 +19,7 @@ from ...models import (
     new_public_id,
 )
 from ...storage import ImageStorage
-from ..creative import CASE_CATALOG, CREATIVE_ROUTER
+from ..creative import CASE_CATALOG, CREATIVE_ROUTER, GALLERY_ATLAS
 from ..creative.models import CreativeRetrieval
 from ..runtime_logs import RuntimeLogService
 from ..series import ResolvedSeriesAnchor
@@ -85,19 +85,44 @@ class ConversationSupport:
         workspace: Workspace,
         *,
         direction_id: str,
+        gallery_category_id: str = "auto",
     ) -> CreativeRetrieval:
         query = self._creative_query(workspace)
-        route = CREATIVE_ROUTER.match(query, direction_id=direction_id)
+        normalized_direction = str(direction_id or "auto").strip().lower()
+        direction_filter = None if normalized_direction == "auto" else normalized_direction
+        normalized_gallery = str(gallery_category_id or "auto").strip().lower()
+        gallery_category_locked = normalized_gallery != "auto"
+        if normalized_gallery == "auto":
+            gallery_categories = GALLERY_ATLAS.match(
+                query,
+                direction_id=direction_filter,
+            )
+        else:
+            category = GALLERY_ATLAS.get(normalized_gallery)
+            if category is None:
+                raise ServiceError("图谱类别无效")
+            if not GALLERY_ATLAS.compatible(normalized_gallery, direction_filter):
+                raise ServiceError("图谱类别与创作方向不兼容")
+            gallery_categories = (category.identifier,)
+        route = CREATIVE_ROUTER.match(
+            query,
+            direction_id=direction_id,
+            gallery_categories=gallery_categories,
+            gallery_category_locked=gallery_category_locked,
+        )
         case_limit = {"high": 3, "medium": 4, "low": 5}[route.confidence]
         cases = CASE_CATALOG.search(
             query,
             direction_id=direction_id,
             templates=route.templates,
+            gallery_categories=gallery_categories,
+            gallery_category_locked=gallery_category_locked,
             limit=case_limit,
         )
         return CreativeRetrieval(
             templates=route.templates,
             cases=cases,
+            gallery_categories=gallery_categories,
             confidence=route.confidence,
             reason=route.reason,
         )
@@ -242,6 +267,7 @@ class ConversationSupport:
         model_id: str,
         translate_to_english: bool | None = None,
         creative_direction_id: str | None = None,
+        gallery_category_id: str | None = None,
     ) -> None:
         settings = dict(workspace.settings or {})
         settings["chat_model_id"] = model_id
@@ -249,6 +275,8 @@ class ConversationSupport:
             settings["translate_prompt"] = translate_to_english
         if creative_direction_id is not None:
             settings["creative_direction_id"] = creative_direction_id
+        if gallery_category_id is not None:
+            settings["gallery_category_id"] = gallery_category_id
         workspace.settings = settings
 
     @staticmethod

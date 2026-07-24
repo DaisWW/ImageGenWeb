@@ -5,6 +5,7 @@ from typing import Any
 from ..errors import ServiceError
 from ..validation import as_bool
 from .common import normalize_image_size
+from .creative.gallery import GALLERY_ATLAS
 from .series import SeriesAnchor
 from .settings import RuntimeSettings
 
@@ -12,6 +13,7 @@ ALLOWED_WORKSPACE_SETTING_KEYS = {
     "chat_model_id",
     "translate_prompt",
     "creative_direction_id",
+    "gallery_category_id",
     "prompt_draft_id",
     "generation_stage",
     "reference_ids",
@@ -34,6 +36,7 @@ def default_workspace_settings() -> dict[str, Any]:
         "chat_model_id": "",
         "translate_prompt": False,
         "creative_direction_id": "auto",
+        "gallery_category_id": "auto",
         "prompt_draft_id": "",
         "generation_stage": "draft",
         "mode": "text2img",
@@ -62,6 +65,17 @@ def sanitize_workspace_settings(raw: Any, runtime: RuntimeSettings | None = None
     settings["chat_model_id"] = str(settings["chat_model_id"])[:64]
     settings["translate_prompt"] = as_bool(settings["translate_prompt"])
     settings["creative_direction_id"] = str(settings["creative_direction_id"])[:40]
+    gallery_category_id = str(settings["gallery_category_id"]).strip().lower()[:80]
+    if gallery_category_id != "auto" and GALLERY_ATLAS.get(gallery_category_id) is None:
+        gallery_category_id = "auto"
+    direction_id = str(settings["creative_direction_id"]).strip().lower()
+    direction_filter = None if direction_id == "auto" else direction_id
+    if gallery_category_id != "auto" and not GALLERY_ATLAS.compatible(
+        gallery_category_id,
+        direction_filter,
+    ):
+        gallery_category_id = "auto"
+    settings["gallery_category_id"] = gallery_category_id
     settings["prompt_draft_id"] = str(settings["prompt_draft_id"])[:32]
     settings["generation_stage"] = str(settings["generation_stage"]).lower()
     if settings["generation_stage"] not in {"draft", "refine", "final"}:

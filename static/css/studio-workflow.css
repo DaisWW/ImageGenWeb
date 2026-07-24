@@ -30,7 +30,11 @@
 }
 
 .creative-direction-field {
-  width: min(220px, 27vw);
+  width: min(180px, 22vw);
+}
+
+.gallery-category-field {
+  width: min(210px, 25vw);
 }
 
 .creative-direction-control .icon-button {
@@ -376,12 +380,15 @@ body:has(#generationForm:not([hidden])):has(#toastRegion .toast) #generationForm
 }
 
 @media (max-width: 720px) {
-  .creative-direction-field { width: min(210px, 52vw); }
+  .creative-direction-field,
+  .gallery-category-field { width: min(190px, 42vw); }
 }
 
 @media (max-width: 430px) {
   .creative-direction-control,
-  .creative-direction-field { width: 100%; }
+  .creative-direction-field,
+  .gallery-category-field { width: 100%; }
+  .creative-direction-control { flex-wrap: wrap; }
   .chat-toolbar .creative-direction-control { grid-column: 1 / -1; }
   .slice-preview-scroll { padding: 10px; }
   .slice-controls { padding: 15px; }

@@ -216,6 +216,7 @@ def create_prompt_draft(workspace_id: str):
         mode=str(data.get("mode", "")),
         reference_ids=tuple(str(item) for item in reference_ids),
         creative_direction_id=str(data.get("creative_direction_id", "auto")),
+        gallery_category_id=str(data.get("gallery_category_id", "auto")),
     )
     return jsonify(
         message=conversation_message_dict(message),

@@ -33,6 +33,7 @@ class PromptDraftWorkflow(ConversationSupport):
         mode: str = "",
         reference_ids: tuple[str, ...] = (),
         creative_direction_id: str = "auto",
+        gallery_category_id: str = "auto",
     ) -> ConversationMessage:
         with self.operations.workspace_operation(
             workspace, "prompt_draft", "正在检查并总结生图需求"
@@ -44,6 +45,7 @@ class PromptDraftWorkflow(ConversationSupport):
                 mode=mode,
                 reference_ids=reference_ids,
                 creative_direction_id=creative_direction_id,
+                gallery_category_id=gallery_category_id,
             )
 
     def _create_prompt_draft(
@@ -55,7 +57,9 @@ class PromptDraftWorkflow(ConversationSupport):
         mode: str,
         reference_ids: tuple[str, ...],
         creative_direction_id: str,
+        gallery_category_id: str,
     ) -> ConversationMessage:
+        gallery_category_id = str(gallery_category_id or "auto").strip().lower()
         self._ensure_workspace_unlocked(workspace)
         model = self._model(model_id)
         if not db.session.scalar(
@@ -83,6 +87,7 @@ class PromptDraftWorkflow(ConversationSupport):
         retrieval = self._creative_matches(
             workspace,
             direction_id=creative_direction_id,
+            gallery_category_id=gallery_category_id,
         )
         review = PromptDraftReview(
             translate_to_english=translate_to_english,
@@ -93,9 +98,11 @@ class PromptDraftWorkflow(ConversationSupport):
             ),
             generation_mode=effective_mode,
             creative_direction_id=creative_direction_id,
+            gallery_category_id=gallery_category_id,
             max_prompt_characters=self.settings.runtime().max_prompt_characters,
             reference_count=len(attachments),
             template_candidates=retrieval.templates,
+            gallery_candidates=retrieval.gallery_categories,
             retrieved_cases=retrieval.cases,
             retrieval_confidence=retrieval.confidence,
             retrieval_reason=retrieval.reason,
@@ -171,6 +178,7 @@ class PromptDraftWorkflow(ConversationSupport):
             model_id=model.identifier,
             translate_to_english=translate_to_english,
             creative_direction_id=creative_direction_id,
+            gallery_category_id=gallery_category_id,
         )
         workspace.updated_at = utcnow()
         db.session.commit()

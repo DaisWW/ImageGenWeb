@@ -267,9 +267,11 @@ class ConversationReplyService(ConversationSupport):
         pending = self._user_model_message(user_message.content, context_attachments)
         settings = workspace.settings or {}
         direction_id = str(settings.get("creative_direction_id", "auto"))
+        gallery_category_id = str(settings.get("gallery_category_id", "auto"))
         retrieval = self._creative_matches(
             workspace,
             direction_id=direction_id,
+            gallery_category_id=gallery_category_id,
         )
         review = PromptDraftReview(
             translate_to_english=settings.get("translate_prompt") is True,
@@ -281,9 +283,11 @@ class ConversationReplyService(ConversationSupport):
             ),
             generation_mode=review_mode,
             creative_direction_id=direction_id,
+            gallery_category_id=gallery_category_id,
             max_prompt_characters=self.settings.runtime().max_prompt_characters,
             reference_count=len(candidate_references),
             template_candidates=retrieval.templates,
+            gallery_candidates=retrieval.gallery_categories,
             retrieved_cases=retrieval.cases,
             retrieval_confidence=retrieval.confidence,
             retrieval_reason=retrieval.reason,

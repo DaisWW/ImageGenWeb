@@ -31,9 +31,11 @@ class PromptDraftReview:
     generation_prompt: str = ""
     generation_mode: str = "text2img"
     creative_direction_id: str = "auto"
+    gallery_category_id: str = "auto"
     max_prompt_characters: int = 8000
     reference_count: int = 0
     template_candidates: tuple[PromptTemplate, ...] = ()
+    gallery_candidates: tuple[str, ...] = ()
     retrieved_cases: tuple[CreativeCase, ...] = ()
     retrieval_confidence: str = "low"
     retrieval_reason: str = ""
@@ -56,6 +58,8 @@ class PromptDraftReview:
         direction_section = creative_direction_prompt(
             self.creative_direction_id,
             template_candidates=self.template_candidates,
+            gallery_category_id=self.gallery_category_id,
+            gallery_candidates=self.gallery_candidates,
         )
         case_section = CASE_CATALOG.prompt(self.retrieved_cases)
         confidence_labels = {"high": "高", "medium": "中", "low": "低"}
@@ -180,7 +184,9 @@ ready 时还必须完成一次交付前审查：
             "questions": questions,
             "language": "en" if self.translate_to_english else "zh",
             "creative_direction": _direction_id(
-                payload.get("creative_direction"), self.creative_direction_id
+                payload.get("creative_direction"),
+                self.creative_direction_id,
+                self.gallery_category_id,
             ),
             "reference_usage": _reference_usage(payload.get("reference_usage")),
             "reference_reason": _text(payload.get("reference_reason"), 500),
@@ -192,8 +198,12 @@ ready 时还必须完成一次交付前审查：
         prompt = _text(payload.get("prompt"), self.max_prompt_characters)
         if not summary or not prompt:
             return None
-        direction_id = _direction_id(payload.get("creative_direction"), self.creative_direction_id)
-        catalog = _catalog_selection(payload, direction_id)
+        direction_id = _direction_id(
+            payload.get("creative_direction"),
+            self.creative_direction_id,
+            self.gallery_category_id,
+        )
+        catalog = _catalog_selection(payload, direction_id, self.gallery_category_id)
         direction = get_creative_direction(direction_id)
         reference_usage = _reference_usage(payload.get("reference_usage"))
         edit_enabled = self.generation_mode == "img2img" or (
@@ -260,27 +270,38 @@ ready 时还必须完成一次交付前审查：
         }
 
 
-def _direction_id(value: Any, fallback: str) -> str:
-    selected = str(fallback or "auto").strip().lower()
-    if selected != "auto":
-        try:
-            get_creative_direction(selected)
-            return selected
-        except ValueError:
-            pass
-    candidate = str(value or fallback or "auto").strip().lower()
-    if candidate == "auto":
-        return "other"
+def _direction_id(value: Any, fallback: str, gallery_category_id: str = "auto") -> str:
+    locked_direction = str(fallback or "auto").strip().lower()
+    direction_id = (
+        locked_direction if locked_direction != "auto" else str(value or "other").strip().lower()
+    )
+    if direction_id == "auto":
+        direction_id = "other"
     try:
-        get_creative_direction(candidate)
+        get_creative_direction(direction_id)
     except ValueError:
-        return "other"
-    return candidate
+        direction_id = "other"
+    gallery_category = GALLERY_ATLAS.get(gallery_category_id)
+    if gallery_category is not None and not GALLERY_ATLAS.compatible(
+        gallery_category.identifier,
+        direction_id,
+    ):
+        return gallery_category.direction_ids[0] if gallery_category.direction_ids else "other"
+    return direction_id
 
 
-def _catalog_selection(payload: dict[str, Any], direction_id: str) -> dict[str, Any]:
+def _catalog_selection(
+    payload: dict[str, Any],
+    direction_id: str,
+    gallery_category_id: str = "auto",
+) -> dict[str, Any]:
     template_id = normalize_template_id(payload.get("template_id"), direction_id)
     template = get_prompt_template(template_id)
+    locked_gallery = GALLERY_ATLAS.get(gallery_category_id)
+    if template is not None and locked_gallery is not None:
+        if locked_gallery.identifier not in GALLERY_ATLAS.for_template(template):
+            template_id = "custom"
+            template = None
     style_tags = normalize_catalog_tags(payload.get("style_tags"))
     scene_tags = normalize_catalog_tags(payload.get("scene_tags"), scene=True)
     if template is not None:
@@ -293,11 +314,15 @@ def _catalog_selection(payload: dict[str, Any], direction_id: str) -> dict[str, 
         case_refs = list(template.case_refs) or [
             f"awesome:{case_id}" for case_id in template.example_case_ids
         ]
-    gallery_categories = GALLERY_ATLAS.select(
-        payload.get("gallery_categories"),
-        preferred=template.gallery_categories if template else (),
-        case_refs=case_refs,
-        direction_id=direction_id,
+    gallery_categories = (
+        [locked_gallery.identifier]
+        if locked_gallery is not None
+        else GALLERY_ATLAS.select(
+            payload.get("gallery_categories"),
+            preferred=template.gallery_categories if template else (),
+            case_refs=case_refs,
+            direction_id=direction_id,
+        )
     )
     return {
         "template_id": template_id,

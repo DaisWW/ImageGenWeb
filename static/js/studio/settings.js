@@ -76,6 +76,7 @@
       this.referenceSelections.set(this.activeWorkspace.id, referenceSelection);
       this.renderChatModelOptions(settings.chat_model_id);
       this.renderCreativeDirectionOptions(settings.creative_direction_id || "auto");
+      this.renderGalleryCategoryOptions(settings.gallery_category_id || "auto");
       this.el.translatePrompt.checked = settings.translate_prompt === true;
       this.el.transparentBackground.checked = settings.transparent_background === true;
       this.el.promptInput.value = settings.prompt || "";
@@ -546,6 +547,9 @@
       if (selectedDirection !== "auto" && payload.creative_direction !== selectedDirection) {
         return null;
       }
+      const selectedGallery = this.el.galleryCategorySelect.value || "auto";
+      if (selectedGallery !== "auto"
+        && !(payload.gallery_categories || []).includes(selectedGallery)) return null;
       const expectedReferences = mode === "img2img" ? (payload.reference_ids || []) : [];
       const selectedReferences = mode === "img2img" ? [...this.currentSelection()] : [];
       if (expectedReferences.length !== selectedReferences.length
@@ -577,6 +581,7 @@
         chat_model_id: this.el.chatModelSelect.value,
         translate_prompt: this.el.translatePrompt.checked,
         creative_direction_id: this.el.creativeDirectionSelect.value || "auto",
+        gallery_category_id: this.el.galleryCategorySelect.value || "auto",
         prompt_draft_id: this.activeWorkspace?.settings?.prompt_draft_id || "",
         generation_stage: this.activeWorkspace?.settings?.generation_stage || "draft",
         reference_ids: [...this.currentSelection()],

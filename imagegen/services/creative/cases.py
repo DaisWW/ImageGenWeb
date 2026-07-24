@@ -44,6 +44,8 @@ class CaseCatalog:
         *,
         direction_id: str = "auto",
         templates: tuple[PromptTemplate, ...] = (),
+        gallery_categories: tuple[str, ...] = (),
+        gallery_category_locked: bool = False,
         limit: int = 3,
     ) -> tuple[CreativeCase, ...]:
         terms = query_terms(query)
@@ -51,7 +53,12 @@ class CaseCatalog:
             return ()
         direction_id = str(direction_id or "auto").strip().lower()
         preferred_directions: dict[str, float] = {}
-        preferred_galleries: dict[str, float] = {}
+        preferred_galleries = {
+            identifier: 28.0 - index * 4.0
+            for index, identifier in enumerate(gallery_categories[:3])
+            if GALLERY_ATLAS.get(identifier) is not None
+        }
+        locked_gallery_ids = set(preferred_galleries) if gallery_category_locked else set()
         for index, template in enumerate(templates[:3]):
             direction_score = 12.0 - index * 4.0
             gallery_score = 16.0 - index * 4.0
@@ -68,6 +75,8 @@ class CaseCatalog:
         preferred_scenes = {scene.lower() for template in templates for scene in template.scenes}
         ranked: list[tuple[float, float, str, CreativeCase]] = []
         for case in self.cases:
+            if gallery_category_locked and case.gallery_category not in locked_gallery_ids:
+                continue
             title = case.title.lower()
             category = f"{case.category} {case.gallery_category}".lower()
             tags = " ".join((*case.styles, *case.scenes)).lower()

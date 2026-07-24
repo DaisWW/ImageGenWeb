@@ -9,7 +9,7 @@ from ..extensions import db
 from ..models import WalletLedger, WorkerState
 from ..serializers import ledger_dict, user_dict
 from ..services import AuthService
-from ..services.creative import GALLERY_URL, creative_direction_dicts
+from ..services.creative import GALLERY_URL, creative_direction_dicts, gallery_category_dicts
 from ..version import __version__
 from ..worker_health import worker_heartbeat_is_fresh
 from . import web
@@ -163,6 +163,7 @@ def studio():
         ],
         chat_models=_public_chat_models(),
         creative_directions=creative_direction_dicts(),
+        gallery_categories=gallery_category_dicts(),
         prompt_gallery_url=GALLERY_URL,
     )
 

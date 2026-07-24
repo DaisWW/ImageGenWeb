@@ -75,6 +75,7 @@ class TemplateRoute:
 class CreativeRetrieval:
     templates: tuple[PromptTemplate, ...]
     cases: tuple[CreativeCase, ...]
+    gallery_categories: tuple[str, ...]
     confidence: str
     reason: str
 

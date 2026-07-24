@@ -31,6 +31,27 @@ def creative_direction_dicts() -> list[dict[str, object]]:
     ]
 
 
+def gallery_category_dicts() -> list[dict[str, object]]:
+    return [
+        {
+            "id": "auto",
+            "label": "AI 自动匹配",
+            "description": "按当前需求自动选择最接近的 Gallery 图谱类别",
+            "direction_ids": [],
+        },
+        *(
+            {
+                "id": category.identifier,
+                "label": category.label,
+                "description": category.prompt_schema,
+                "direction_ids": list(category.direction_ids),
+                "case_range": f"Case {category.case_start}-{category.case_end}",
+            }
+            for category in GALLERY_ATLAS.categories
+        ),
+    ]
+
+
 def get_creative_direction(identifier: str) -> CreativeDirection | None:
     normalized = str(identifier or "auto").strip().lower()
     if normalized == "auto":
@@ -78,6 +99,8 @@ def creative_direction_prompt(
     *,
     include_templates: bool = True,
     template_candidates: tuple[PromptTemplate, ...] = (),
+    gallery_category_id: str = "auto",
+    gallery_candidates: tuple[str, ...] = (),
 ) -> str:
     direction = get_creative_direction(identifier)
     directions = CREATIVE_DIRECTIONS if direction is None else (direction,)
@@ -87,8 +110,16 @@ def creative_direction_prompt(
         if direction is None
         else f"用户已锁定 `{direction.identifier}`（{direction.label}），不得改选其他方向。"
     )
+    gallery_category = GALLERY_ATLAS.get(gallery_category_id)
+    gallery_lock_rule = (
+        f"用户已锁定 Gallery 类别 `{gallery_category.identifier}`（{gallery_category.label}），"
+        "必须使用该类别且不得改选。"
+        if gallery_category is not None
+        else "Gallery 类别由 AI 自动匹配。"
+    )
     if not include_templates:
         return f"""{lock_rule}
+{gallery_lock_rule}
 当前是需求访谈，只按交付物识别方向并澄清会明显改变结果的关键分支；模板、风格、场景和 Case 将在系统自动整理最终提示词时统一筛选。
 可选方向：
 {options}
@@ -123,26 +154,37 @@ def creative_direction_prompt(
         )
         for item in rule_directions
     )
-    candidate_gallery_ids = tuple(
+    template_gallery_ids = tuple(
         dict.fromkeys(
             gallery_id
             for template in candidates
             for gallery_id in GALLERY_ATLAS.for_template(template)
         )
     )
+    candidate_gallery_ids = (
+        (gallery_category.identifier,)
+        if gallery_category is not None
+        else tuple(gallery_candidates) or template_gallery_ids
+    )
     gallery_categories = GALLERY_ATLAS.prompt(
         direction.identifier if direction else None,
-        identifiers=candidate_gallery_ids if candidates and candidate_gallery_ids else None,
+        identifiers=candidate_gallery_ids or None,
     )
     template_heading = (
         "系统按交付物、风格和场景预选的 Top 3 Prompt 模板候选"
         if candidates
         else "本地 Prompt 模板目录"
     )
-    gallery_heading = (
-        "与模板候选对应的 Gallery Atlas 路由" if candidates else "Gallery Atlas 路由索引"
-    )
+    if gallery_category is not None:
+        gallery_heading = "用户锁定的 Gallery Atlas 类别"
+    elif gallery_candidates:
+        gallery_heading = "系统按当前需求预选的 Gallery Atlas 类别"
+    else:
+        gallery_heading = (
+            "与模板候选对应的 Gallery Atlas 路由" if candidates else "Gallery Atlas 路由索引"
+        )
     return f"""{lock_rule}
+{gallery_lock_rule}
 必须按“交付物分类 → Gallery Atlas 类别 → 视觉风格 → 使用场景 → 最近模板 → 相近 Case”完成筛选。若一个模板明显最匹配，直接采用；若 2～3 个模板会导致明显不同的交付结果，只提出一个包含这些模板及简短理由的选择题。没有近似模板时使用 `custom` 并遵循通用 Craft，禁止硬套模板。
 
 可选方向：

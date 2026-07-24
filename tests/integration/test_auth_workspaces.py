@@ -449,6 +449,7 @@ class TestAuthAndWorkspaces(PlatformTestCase):
                     "size": "1280x720",
                     "mode": "img2img",
                     "reference_ids": reference_ids,
+                    "gallery_category_id": "watercolor",
                 }
             },
         )
@@ -456,7 +457,23 @@ class TestAuthAndWorkspaces(PlatformTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["workspace"]["settings"]["size"], "1280x720")
         self.assertEqual(response.json["workspace"]["settings"]["reference_ids"], reference_ids)
+        self.assertEqual(
+            response.json["workspace"]["settings"]["gallery_category_id"], "watercolor"
+        )
         workspaces = client.get("/api/workspaces").json["workspaces"]
         restored = next(item for item in workspaces if item["id"] == workspace.id)
         self.assertEqual(restored["settings"]["size"], "1280x720")
         self.assertEqual(restored["settings"]["reference_ids"], reference_ids)
+        self.assertEqual(restored["settings"]["gallery_category_id"], "watercolor")
+
+        conflict = client.patch(
+            f"/api/workspaces/{workspace.id}",
+            json={
+                "settings": {
+                    "creative_direction_id": "product",
+                    "gallery_category_id": "watercolor",
+                }
+            },
+        )
+        self.assertEqual(conflict.status_code, 200)
+        self.assertEqual(conflict.json["workspace"]["settings"]["gallery_category_id"], "auto")
