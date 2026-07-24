@@ -32,20 +32,19 @@
 
     renderGalleryCategoryOptions(selectedId = "auto") {
       const directionId = this.el.creativeDirectionSelect.value || "auto";
-      const options = this.galleryCategories.map((category) => {
+      const categories = this.galleryCategories.filter((category) => (
+        this.galleryCategoryCompatible(category, directionId)
+      ));
+      const options = categories.map((category) => {
         const option = document.createElement("option");
         option.value = category.id;
         option.textContent = category.label;
         option.title = [category.case_range, category.description].filter(Boolean).join(" · ");
-        option.disabled = !this.galleryCategoryCompatible(category, directionId);
         return option;
       });
       this.el.galleryCategorySelect.replaceChildren(...options);
-      const selected = this.galleryCategories.find((category) => category.id === selectedId);
-      this.el.galleryCategorySelect.value = selected
-        && this.galleryCategoryCompatible(selected, directionId)
-        ? selectedId
-        : "auto";
+      const selected = categories.some((category) => category.id === selectedId);
+      this.el.galleryCategorySelect.value = selected ? selectedId : "auto";
     },
 
     referenceSelectionLimit(target, workspace = this.activeWorkspace) {

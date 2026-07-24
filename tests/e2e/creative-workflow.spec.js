@@ -105,9 +105,14 @@ test("AI automatically prepares a gallery template before generation", {
   await expect(page.locator("#creativeDirectionSelect")).toHaveValue("auto");
   await expect(page.locator("#galleryCategorySelect option")).toHaveCount(32);
   await page.locator("#galleryCategorySelect").selectOption("watercolor");
-  await page.locator("#creativeDirectionSelect").selectOption("product");
+  await page.locator("#creativeDirectionSelect").selectOption("game_ui");
   await expect(page.locator("#galleryCategorySelect")).toHaveValue("auto");
+  await expect(page.locator("#galleryCategorySelect option")).toHaveCount(5);
+  await expect(page.locator("#galleryCategorySelect option:disabled")).toHaveCount(0);
+  await expect(page.locator('#galleryCategorySelect option[value="watercolor"]')).toHaveCount(0);
+  await expect(page.locator('#galleryCategorySelect option[value="gaming"]')).toHaveCount(1);
   await page.locator("#creativeDirectionSelect").selectOption("auto");
+  await expect(page.locator("#galleryCategorySelect option")).toHaveCount(32);
   await page.locator("#galleryCategorySelect").selectOption("typography-and-posters");
   await expect(page.locator("#galleryCategorySelect")).toHaveValue("typography-and-posters");
   await page.locator("#chatInput").fill("竖版运动鞋新品发布海报，标题 AIR ZERO");
