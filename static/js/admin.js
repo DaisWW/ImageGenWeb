@@ -742,7 +742,8 @@
       form.elements.enabled.checked = channel ? channel.enabled : true;
       form.elements.base_url.value = channel?.base_url || "";
       form.elements.api_key.value = "";
-      form.elements.api_key.placeholder = channel?.has_api_key ? "已配置，留空保持" : "";
+      const keyHint = channel?.api_key_hint || (channel?.has_api_key ? "已配置" : "");
+      form.elements.api_key.placeholder = keyHint ? `${keyHint}，留空保持` : "";
       form.elements.price_rmb.value = UI.amount(channel?.price_rmb);
       form.elements.clear_api_key.checked = false;
       form.querySelector("[data-clear-key-row]").hidden = !channel?.has_api_key;
@@ -932,7 +933,8 @@
       form.elements.enabled.checked = model ? model.enabled : true;
       form.elements.base_url.value = model?.base_url || "";
       form.elements.api_key.value = "";
-      form.elements.api_key.placeholder = model?.has_api_key ? "已配置，留空保持" : "";
+      const keyHint = model?.api_key_hint || (model?.has_api_key ? "已配置" : "");
+      form.elements.api_key.placeholder = keyHint ? `${keyHint}，留空保持` : "";
       form.elements.clear_api_key.checked = false;
       form.querySelector("[data-clear-chat-key-row]").hidden = !model?.has_api_key;
       form.elements.model.value = model?.model || "";

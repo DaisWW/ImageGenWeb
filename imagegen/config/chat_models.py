@@ -7,6 +7,7 @@ from typing import Any
 
 from ..validation import as_bool, bounded_int, required_string
 from .base import ReloadableConfigRegistry
+from .secrets import api_key_hint
 
 SYSTEM_PROMPT_MAX_LENGTH = 20000
 WORKSPACE_PROMPT_MAX_LENGTH = 12000
@@ -83,6 +84,7 @@ class ChatModelConfig:
             "configured": self.configured,
             "base_url": self.base_url,
             "has_api_key": bool(self.api_key),
+            "api_key_hint": api_key_hint(self.api_key),
             "model": self.model,
             "reasoning_effort": self.reasoning_effort,
             "review_reasoning_effort": self.review_reasoning_effort,

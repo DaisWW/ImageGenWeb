@@ -292,6 +292,7 @@ class TestAdminAndMaintenance(PlatformTestCase):
         initial = client.get("/api/admin/channels").json["config"]
         self.assertFalse(initial["managed"])
         self.assertEqual(initial["source"], "file")
+        self.assertEqual(initial["channels"][0]["api_key_hint"], "test****cret")
         self.assertNotIn("test-key-not-secret", json.dumps(initial))
 
         initial["channels"][0]["price_rmb"] = "2.5000"
@@ -326,6 +327,7 @@ class TestAdminAndMaintenance(PlatformTestCase):
     def test_admin_chat_config_replaces_key_without_exposing_it(self):
         client = self.admin_client()
         config = client.get("/api/admin/chat-models").json["config"]
+        self.assertEqual(config["models"][0]["api_key_hint"], "test****cret")
         self.assertNotIn("test-chat-key-not-secret", json.dumps(config))
         config["models"][0]["api_key"] = "replacement-chat-key"
         config["models"][0]["reasoning_effort"] = "high"
@@ -335,6 +337,7 @@ class TestAdminAndMaintenance(PlatformTestCase):
         self.assertEqual(response.status_code, 200)
         saved = response.json["config"]
         self.assertTrue(saved["managed"])
+        self.assertEqual(saved["models"][0]["api_key_hint"], "repl****-key")
         self.assertNotIn("replacement-chat-key", json.dumps(saved))
         model = self.app.extensions["chat_model_registry"].get("test-chat")
         self.assertEqual(model.api_key, "replacement-chat-key")

@@ -11,6 +11,7 @@ import yaml
 
 from ..validation import as_bool, bounded_int, required_string
 from .base import ReloadableConfigRegistry
+from .secrets import api_key_hint
 
 SUPPORTED_ADAPTERS = {"openai_images"}
 SUPPORTED_MODES = {"text2img", "img2img"}
@@ -104,6 +105,7 @@ class Channel:
             "adapter": self.adapter,
             "base_url": self.base_url,
             "has_api_key": bool(self.api_key),
+            "api_key_hint": api_key_hint(self.api_key),
             "models": [
                 {
                     "id": model.identifier,
