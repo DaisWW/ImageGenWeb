@@ -272,13 +272,19 @@ try {
     function Test-LocallyUsableLucidaImage {
         param([string]$Image)
 
-        docker image inspect $Image *> $null
-        if ($LASTEXITCODE -ne 0) {
-            return $false
-        }
+        $previousPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "SilentlyContinue"
+            docker image inspect $Image *> $null
+            if ($LASTEXITCODE -ne 0) {
+                return $false
+            }
 
-        docker run --rm --gpus all --entrypoint python $Image -c "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)" *> $null
-        return $LASTEXITCODE -eq 0
+            docker run --rm --gpus all --entrypoint python $Image -c "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)" *> $null
+            return $LASTEXITCODE -eq 0
+        } finally {
+            $ErrorActionPreference = $previousPreference
+        }
     }
 
     if (-not $NoBuild) {
