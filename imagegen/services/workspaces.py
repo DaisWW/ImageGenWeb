@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta, timezone
+from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterable
@@ -42,8 +42,6 @@ from .workspace_settings import (
     default_workspace_settings,
     sanitize_workspace_settings,
 )
-
-WORKSPACE_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
 
 
 class WorkspaceService:
@@ -550,10 +548,7 @@ class WorkspaceService:
     @staticmethod
     def _next_workspace_name(user_id: int) -> str:
         names = set(db.session.scalars(select(Workspace.name).where(Workspace.user_id == user_id)))
-        base = f"工作站-{utcnow().astimezone(WORKSPACE_TIMEZONE):%Y-%m-%d}"
-        if base not in names:
-            return base
-        index = 2
-        while f"{base} {index}" in names:
+        index = 1
+        while f"工作站 {index}" in names:
             index += 1
-        return f"{base} {index}"
+        return f"工作站 {index}"

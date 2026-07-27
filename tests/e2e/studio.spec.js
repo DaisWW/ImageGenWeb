@@ -52,6 +52,16 @@ test("generation strategy policy owns availability and count limits", async ({
   });
 });
 
+test("new workspace names use the next available number", async ({ studioPage: page }) => {
+  await createWorkspace(page, "工作站 1");
+
+  await page.locator("#newWorkspaceButton").click();
+  await expect(page.locator("#workspaceNameInput")).toHaveValue("工作站 2");
+  await page.getByRole("button", { name: "取消" }).click();
+
+  await deleteWorkspace(page, "工作站 1");
+});
+
 test("deleting the last workspace leaves the workspace list empty", {
   tag: "@responsive",
 }, async ({ page }) => {

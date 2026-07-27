@@ -330,12 +330,12 @@ class TestAuthAndWorkspaces(PlatformTestCase):
         db.session.refresh(second)
         self.assertEqual(second.name, "待重命名工作站")
 
-    def test_blank_workspace_names_use_dated_defaults(self):
+    def test_blank_workspace_names_use_numbered_defaults(self):
         first = self.create_workspace("")
         second = self.create_workspace("")
 
-        self.assertRegex(first.name, r"^工作站-\d{4}-\d{2}-\d{2}$")
-        self.assertEqual(second.name, f"{first.name} 2")
+        self.assertEqual(first.name, "工作站 1")
+        self.assertEqual(second.name, "工作站 2")
         self.assertNotIn("auto_title", first.settings)
 
     def test_admin_created_user_receives_starter_workspaces(self):

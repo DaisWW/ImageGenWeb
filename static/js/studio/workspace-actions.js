@@ -19,14 +19,10 @@
     },
 
     nextWorkspaceName() {
-      const now = new Date();
-      const pad = (value) => String(value).padStart(2, "0");
-      const base = `工作站-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
       const names = new Set(this.workspaces.map((workspace) => workspace.name));
-      if (!names.has(base)) return base;
-      let index = 2;
-      while (names.has(`${base} ${index}`)) index += 1;
-      return `${base} ${index}`;
+      let index = 1;
+      while (names.has(`工作站 ${index}`)) index += 1;
+      return `工作站 ${index}`;
     },
 
     async saveWorkspaceName(event) {
