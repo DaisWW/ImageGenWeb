@@ -345,7 +345,7 @@
       );
       const stageByQuality = { low: "draft", medium: "refine", high: "final" };
       this.activeWorkspace.settings.generation_stage = (
-        stageByQuality[message.payload.quality_hint] || "draft"
+        stageByQuality[message.payload.quality_hint] || "final"
       );
       const omitted = this.showGenerationComposer(prompt, message.payload.reference_ids || []);
       this.updatePromptReviewState();

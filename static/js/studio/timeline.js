@@ -483,7 +483,7 @@
         Array.isArray(payload.exploration_plan) && payload.exploration_plan.length
           ? `${payload.exploration_plan.length} 个探索方案`
           : "",
-        `${{ low: "草稿", medium: "精修", high: "成品" }[payload.quality_hint] || "草稿"}建议`,
+        `${{ low: "草稿", medium: "精修", high: "成品" }[payload.quality_hint] || "成品"}建议`,
       ].filter(Boolean);
       metadata.forEach((label) => {
         const chip = document.createElement("span");

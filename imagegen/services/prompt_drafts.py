@@ -111,10 +111,10 @@ ready 时还必须完成一次交付前审查：
 - hard_checks 只列能从最终图片判断的 2～6 个硬门槛，例如精确文字、主体数量、必要元素、参考图身份、非目标区域保持和禁止额外内容。
 - exploration_plan 必须给出 4 个仍然满足同一交付物的受控方案。每个方案只允许变化 1～2 个维度，delta 使用 1～4 条具体变化；不得改变主体身份、产品外形、精确文字、参考图职责、画幅、模板或硬门槛。四个方案不能只是同义改写。
 - series_contract 用于后续系列图片保持一致，只提炼可复用的身份锚点、视觉语言、色板材质、构图规则、排版规则和保持项；不要把本张图片专属文案或场景写成永久锁定项。当前工作站已有 series_contract 时必须原样沿用，不得重新定义。
-- quality_hint 只能是 low、medium 或 high；它表示当前提示词首次试生成的建议，生成时沿用工作站保存的阶段。
+- quality_hint 只能是 low、medium 或 high，默认使用 high；只有用户明确要求草稿探索时使用 low，明确要求方向精修时使用 medium。生成时沿用工作站保存的阶段。
 只输出一个 JSON 对象，不要 Markdown，不要额外说明。字段名称只能出现一次，字段类型必须与示例一致，不得用 null 代替字符串、数组或对象。严格使用以下两种格式之一：
 {{"status":"needs_clarification","questions":["问题 1","问题 2"],"creative_direction":"poster"}}
-{{"status":"ready","summary_zh":"中文需求确认","prompt":"最终生图提示词","canvas_request":{{"aspect_ratio":"16:9","width":1920,"height":1080}},"reference_usage":"generation","reference_reason":"用户要求保持参考图主体并修改背景。","creative_direction":"poster","template_id":"poster-layout-system","edit_recipe_id":"","gallery_categories":["typography-and-posters"],"style_tags":["Poster"],"scene_tags":["Commerce"],"selection_reason":"交付物是商业海报，匹配排版与海报图谱及海报排版模板。","brief":{{"deliverable":"交付物","intended_use":"用途与受众","subject":"主体","composition":"构图与画幅","style":"媒介、材质、光线与配色","exact_text":["必须逐字出现的文字"],"reference_plan":[{{"image_number":1,"role":"职责","preserve":["保持项"],"change":["改变项"]}}],"preserve":["全局保持项"],"change":["改变项"],"avoid":["禁止项"]}},"production_spec":{{"platform":"平台","canvas":"画布","screen_type":"界面或交付物状态","safe_area":"安全区","hud_zones":["区域职责"],"panel_count":0,"panel_roles":["面板职责"],"identity_anchors":["身份锚点"],"camera_and_action":"镜头与动作","materials":["材质"],"palette_and_lighting":"色板与光线","exact_text":["必须逐字出现的文字"],"ui_constraints":["界面约束"],"consistency_rules":["一致性规则"]}},"exploration_plan":[{{"label":"中心层级","delta":["主体采用中心英雄构图","使用冷蓝银色色板"]}},{{"label":"非对称留白","delta":["主体采用三分法构图","右侧保留呼吸空间"]}},{{"label":"材质近景","delta":["镜头更接近主体","强化材质与侧光"]}},{{"label":"环境叙事","delta":["使用更宽的环境构图","增加前中后景层次"]}}],"series_contract":{{"identity_anchors":["系列主体身份"],"visual_language":["统一视觉语言"],"palette_materials":["统一色板和材质"],"composition_rules":["统一构图语法"],"typography_rules":["统一字体层级"],"must_preserve":["跨图保持项"],"allowed_changes":["文案、动作和场景内容"]}},"hard_checks":["可从成品判断的硬门槛"],"quality_hint":"low"}}"""
+{{"status":"ready","summary_zh":"中文需求确认","prompt":"最终生图提示词","canvas_request":{{"aspect_ratio":"16:9","width":1920,"height":1080}},"reference_usage":"generation","reference_reason":"用户要求保持参考图主体并修改背景。","creative_direction":"poster","template_id":"poster-layout-system","edit_recipe_id":"","gallery_categories":["typography-and-posters"],"style_tags":["Poster"],"scene_tags":["Commerce"],"selection_reason":"交付物是商业海报，匹配排版与海报图谱及海报排版模板。","brief":{{"deliverable":"交付物","intended_use":"用途与受众","subject":"主体","composition":"构图与画幅","style":"媒介、材质、光线与配色","exact_text":["必须逐字出现的文字"],"reference_plan":[{{"image_number":1,"role":"职责","preserve":["保持项"],"change":["改变项"]}}],"preserve":["全局保持项"],"change":["改变项"],"avoid":["禁止项"]}},"production_spec":{{"platform":"平台","canvas":"画布","screen_type":"界面或交付物状态","safe_area":"安全区","hud_zones":["区域职责"],"panel_count":0,"panel_roles":["面板职责"],"identity_anchors":["身份锚点"],"camera_and_action":"镜头与动作","materials":["材质"],"palette_and_lighting":"色板与光线","exact_text":["必须逐字出现的文字"],"ui_constraints":["界面约束"],"consistency_rules":["一致性规则"]}},"exploration_plan":[{{"label":"中心层级","delta":["主体采用中心英雄构图","使用冷蓝银色色板"]}},{{"label":"非对称留白","delta":["主体采用三分法构图","右侧保留呼吸空间"]}},{{"label":"材质近景","delta":["镜头更接近主体","强化材质与侧光"]}},{{"label":"环境叙事","delta":["使用更宽的环境构图","增加前中后景层次"]}}],"series_contract":{{"identity_anchors":["系列主体身份"],"visual_language":["统一视觉语言"],"palette_materials":["统一色板和材质"],"composition_rules":["统一构图语法"],"typography_rules":["统一字体层级"],"must_preserve":["跨图保持项"],"allowed_changes":["文案、动作和场景内容"]}},"hard_checks":["可从成品判断的硬门槛"],"quality_hint":"high"}}"""
 
     def parse(self, content: str) -> dict[str, Any]:
         payload = parse_json_object(content)
@@ -340,8 +340,8 @@ def _catalog_selection(
 
 
 def _quality_hint(value: Any) -> str:
-    normalized = str(value or "low").strip().lower()
-    return normalized if normalized in {"low", "medium", "high"} else "low"
+    normalized = str(value or "high").strip().lower()
+    return normalized if normalized in {"low", "medium", "high"} else "high"
 
 
 def _reference_usage(value: Any) -> str:

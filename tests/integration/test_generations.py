@@ -35,6 +35,25 @@ class TestGenerations(PlatformTestCase):
         self.assertEqual(user.reserved_rmb, Decimal("3.7500"))
         self.assertEqual(len(job.items), 3)
 
+    def test_generation_api_defaults_to_final_high_quality(self):
+        workspace = self.create_workspace("默认成品质量")
+        self.assertEqual(workspace.settings["generation_stage"], "final")
+
+        response = self.user_client().post(
+            "/api/generations",
+            json={
+                "workspace_id": workspace.id,
+                "channel_id": "test",
+                "model": "model-b",
+                "mode": "text2img",
+                "prompt": "默认使用成品质量",
+            },
+        )
+
+        self.assertEqual(response.status_code, 202, response.get_data(as_text=True))
+        self.assertEqual(response.json["job"]["quality"], "high")
+        self.assertEqual(response.json["job"]["workflow"]["generation_stage"], "final")
+
     def test_generation_api_maps_reviewed_stages_to_quality_and_workflow(self):
         client = self.user_client()
         for stage, expected_quality in (

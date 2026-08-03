@@ -223,6 +223,30 @@ class TestPromptDrafts(PlatformTestCase):
         self.assertEqual(locked.payload["template_id"], "custom")
         self.assertEqual(locked.payload["gallery_categories"], ["product-and-food"])
 
+    def test_prompt_draft_defaults_missing_quality_hint_to_high(self):
+        workspace = self.create_workspace("默认成品建议")
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="生成一张电影感人物肖像。",
+        )
+        self.chat_client.prompt_draft_content = json.dumps(
+            {
+                "status": "ready",
+                "summary_zh": "电影感人物肖像。",
+                "prompt": "cinematic portrait",
+            },
+            ensure_ascii=False,
+        )
+
+        draft = self.services.conversations.create_prompt_draft(
+            workspace,
+            model_id="test-chat",
+            translate_to_english=False,
+        )
+
+        self.assertEqual(draft.payload["quality_hint"], "high")
+
     def test_prompt_draft_preserves_locked_gallery_category_before_template(self):
         workspace = self.create_workspace("锁定水彩图谱")
         self.services.conversations.send(

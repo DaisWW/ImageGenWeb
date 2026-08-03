@@ -115,7 +115,7 @@ def submit_generation():
         max_prompt_characters=runtime.max_prompt_characters,
     )
     workflow = GenerationWorkflow.build(
-        stage=str(data.get("generation_stage", "draft")),
+        stage=str(data.get("generation_stage", "final")),
         prompt_draft_id=draft_id,
         draft=draft,
         creative_direction_id=str(data.get("creative_direction_id", "auto")),

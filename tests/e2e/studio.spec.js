@@ -379,6 +379,7 @@ test("direct generation bypasses AI conversation", { tag: "@responsive" }, async
   const body = (await generationRequest).postDataJSON();
   expect(body.prompt).toBe("一张雨夜霓虹街道的电影感照片");
   expect(body.prompt_draft_id).toBe("");
+  expect(body.generation_stage).toBe("final");
   expect(aiRequests).toBe(0);
 });
 

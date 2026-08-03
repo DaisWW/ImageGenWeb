@@ -38,7 +38,7 @@ def default_workspace_settings() -> dict[str, Any]:
         "creative_direction_id": "auto",
         "gallery_category_id": "auto",
         "prompt_draft_id": "",
-        "generation_stage": "draft",
+        "generation_stage": "final",
         "mode": "text2img",
         "prompt": "",
         "channel_id": "",
@@ -79,7 +79,7 @@ def sanitize_workspace_settings(raw: Any, runtime: RuntimeSettings | None = None
     settings["prompt_draft_id"] = str(settings["prompt_draft_id"])[:32]
     settings["generation_stage"] = str(settings["generation_stage"]).lower()
     if settings["generation_stage"] not in {"draft", "refine", "final"}:
-        settings["generation_stage"] = "draft"
+        settings["generation_stage"] = "final"
     settings["generation_strategy"] = str(settings["generation_strategy"]).lower()
     if settings["generation_strategy"] not in {"sample", "explore", "series"}:
         settings["generation_strategy"] = "sample"

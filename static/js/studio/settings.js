@@ -583,7 +583,7 @@
         creative_direction_id: this.el.creativeDirectionSelect.value || "auto",
         gallery_category_id: this.el.galleryCategorySelect.value || "auto",
         prompt_draft_id: this.activeWorkspace?.settings?.prompt_draft_id || "",
-        generation_stage: this.activeWorkspace?.settings?.generation_stage || "draft",
+        generation_stage: this.activeWorkspace?.settings?.generation_stage || "final",
         reference_ids: [...this.currentSelection()],
       };
     },
