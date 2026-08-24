@@ -199,3 +199,89 @@ test("image library confirms multiple padding images up to the channel limit", {
   await expect(page.locator("#referenceLimit")).toHaveText("2 / 2");
   expect(imported).toEqual(["library-generation-a", "library-generation-b"]);
 });
+
+test("many padding images stay inside the generation drawer", {
+  tag: "@responsive",
+}, async ({ studioPage: page }) => {
+  const images = Array.from({ length: 12 }, (_value, index) => libraryImage(
+    `library-generation-overflow-${index}`,
+    `generation-overflow-${index}.png`,
+    "/static/assets/brand-mark-v2.png",
+  ));
+  await page.route("**/api/channels", (route) => route.fulfill({
+    json: {
+      version: "e2e-many-reference-channel",
+      channels: [{
+        id: "e2e-many-reference-channel",
+        label: "E2E 多垫图渠道",
+        enabled: true,
+        configured: true,
+        models: [{ id: "e2e-many-reference-model", label: "GPT Image 2" }],
+        default_model: "e2e-many-reference-model",
+        price_rmb: "0.0300",
+        capabilities: {
+          modes: ["text2img", "img2img"],
+          max_reference_images: images.length,
+          max_reference_image_mb: 10,
+          max_reference_total_mb: 40,
+          sizes: ["1024x1024"],
+          formats: ["png"],
+        },
+        limits: { max_concurrency: 2 },
+      }],
+    },
+  }));
+  await page.route("**/api/library-images?*", (route) => route.fulfill({
+    json: { images, total: images.length, has_more: false },
+  }));
+  await page.route("**/api/workspaces/*/assets/from-library/*", async (route) => {
+    const imageId = new URL(route.request().url()).pathname.split("/").at(-1);
+    const image = images.find((entry) => entry.id === imageId);
+    await route.fulfill({
+      json: {
+        asset: {
+          ...image,
+          id: `asset-${imageId}`,
+          mime_type: "image/png",
+          bytes: 1024,
+        },
+      },
+    });
+  });
+
+  await page.reload();
+  await page.locator("#directGenerationButton").evaluate((button) => {
+    button.hidden = false;
+    button.click();
+  });
+  await expect(page.locator("#generationForm")).toBeVisible();
+  await page.locator('#modeSwitch [data-mode="img2img"]').click();
+  await page.locator("#referenceLibrary").click();
+  await page.locator("#librarySelectAllButton").click();
+  await page.locator("#libraryConfirmButton").click();
+  await expect(page.locator("#libraryDialog")).toBeHidden();
+  await expect(page.locator("#referenceList .reference-card.selected"))
+    .toHaveCount(images.length);
+
+  const layout = await page.evaluate(() => {
+    const form = document.getElementById("generationForm");
+    const strip = document.getElementById("referenceStrip");
+    const lastCard = document.querySelector("#referenceList .reference-card:last-child");
+    const stripBox = strip.getBoundingClientRect();
+    const lastCardBox = lastCard.getBoundingClientRect();
+    strip.scrollLeft = strip.scrollWidth;
+    const scrolledLastCardBox = lastCard.getBoundingClientRect();
+    return {
+      drawerHasNoHorizontalOverflow: form.scrollWidth <= form.clientWidth + 1,
+      stripFitsDrawer: stripBox.right <= form.getBoundingClientRect().right + 1,
+      stripScrollsHorizontally: strip.scrollWidth > strip.clientWidth,
+      lastCardVisibleAfterScroll: scrolledLastCardBox.right <= stripBox.right + 1,
+    };
+  });
+  expect(layout).toEqual({
+    drawerHasNoHorizontalOverflow: true,
+    stripFitsDrawer: true,
+    stripScrollsHorizontally: true,
+    lastCardVisibleAfterScroll: true,
+  });
+});

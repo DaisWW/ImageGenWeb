@@ -330,6 +330,8 @@
 
 .reference-strip {
   display: flex;
+  width: 100%;
+  min-width: 0;
   max-width: 1380px;
   min-height: 76px;
   align-items: stretch;
@@ -376,6 +378,7 @@
 
 .reference-list {
   display: flex;
+  flex: 0 0 auto;
   gap: 7px;
 }
 
