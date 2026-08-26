@@ -30,7 +30,6 @@ class ChatProgress:
     request_body_bytes: int | None = None
     first_output_seconds: float | None = None
     output_characters: int | None = None
-    upstream_status: int | None = None
 
 
 class OpenAIChatError(RuntimeError):
@@ -69,7 +68,6 @@ class _ProgressReporter:
         *,
         first_output_seconds: float | None = None,
         output_characters: int | None = None,
-        upstream_status: int | None = None,
     ) -> None:
         if self.callback is None:
             return
@@ -81,7 +79,6 @@ class _ProgressReporter:
                     request_body_bytes=self.request_body_bytes,
                     first_output_seconds=first_output_seconds,
                     output_characters=output_characters,
-                    upstream_status=upstream_status,
                 )
             )
         except Exception:
@@ -171,7 +168,6 @@ class OpenAIChatClient:
             reporter.emit(
                 stage,
                 first_output_seconds=exc.details.get("first_output_seconds"),
-                upstream_status=exc.upstream_status,
             )
             raise
         except requests.Timeout as exc:

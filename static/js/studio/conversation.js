@@ -506,11 +506,11 @@
     syncServerChatOperation(workspaceId, operation) {
       const previous = this.chatOperations.get(workspaceId);
       if (previous?.local && operation?.busy) {
-        const sameOperation = ["operation_id", "message_id"].some((key) => (
-          previous[key]
-          && operation[key]
-          && String(previous[key]).toLowerCase() === String(operation[key]).toLowerCase()
-        ));
+        const sameOperation = previous.operation_id && operation.operation_id
+          ? String(previous.operation_id).toLowerCase() === String(operation.operation_id).toLowerCase()
+          : previous.message_id && operation.message_id
+            ? String(previous.message_id).toLowerCase() === String(operation.message_id).toLowerCase()
+            : false;
         if (!sameOperation) return false;
         const next = {
           ...previous,

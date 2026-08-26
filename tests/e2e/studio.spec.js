@@ -52,6 +52,42 @@ test("generation strategy policy owns availability and count limits", async ({
   });
 });
 
+test("stale chat progress cannot replace the active operation", async ({
+  studioPage: page,
+}) => {
+  const result = await page.evaluate(() => {
+    const operation = {
+      local: true,
+      operation_id: "new-operation",
+      message_id: "same-message",
+      stage: "output",
+      controller: new AbortController(),
+    };
+    const state = { chatOperations: new Map([["workspace", operation]]) };
+    const changed = window.ImageGenStudio.StudioApp.prototype.syncServerChatOperation.call(
+      state,
+      "workspace",
+      {
+        busy: true,
+        operation_id: "old-operation",
+        message_id: "same-message",
+        stage: "reasoning",
+      },
+    );
+    return {
+      changed,
+      stage: state.chatOperations.get("workspace").stage,
+      operationId: state.chatOperations.get("workspace").operation_id,
+    };
+  });
+
+  expect(result).toEqual({
+    changed: false,
+    stage: "output",
+    operationId: "new-operation",
+  });
+});
+
 test("new workspace names use the next available number", async ({ studioPage: page }) => {
   await createWorkspace(page, "工作站 1");
 
