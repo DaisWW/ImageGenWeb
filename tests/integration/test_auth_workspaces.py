@@ -135,6 +135,8 @@ class TestAuthAndWorkspaces(PlatformTestCase):
         self.assertIn("在同一条回复中一次性问完", CHAT_SYSTEM_PROMPT)
         self.assertIn("问题宁少勿多，最多四个", CHAT_SYSTEM_PROMPT)
         self.assertIn("不得把已经能识别的问题留到后续轮次", CHAT_SYSTEM_PROMPT)
+        self.assertIn("可预见的条件分支", CHAT_SYSTEM_PROMPT)
+        self.assertIn("不要先问 A、收到答案后再反问 A1", CHAT_SYSTEM_PROMPT)
         self.assertIn("1A 2C 3B", CHAT_SYSTEM_PROMPT)
         self.assertIn("其他（请自定义）", CHAT_SYSTEM_PROMPT)
         self.assertIn("确认后在同一次回复中直接整理最终提示词", CHAT_SYSTEM_PROMPT)
@@ -152,6 +154,7 @@ class TestAuthAndWorkspaces(PlatformTestCase):
         system = self.chat_client.calls[-1]["system"]
         self.assertIn("当前是静态图片工作站", system)
         self.assertIn("以下情况必须先澄清", system)
+        self.assertIn("若选 A，再回答 A1", system)
         self.assertIn("一张完整画面", system)
 
     def test_unsupported_workspace_kind_is_rejected(self):

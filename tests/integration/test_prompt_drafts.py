@@ -744,6 +744,8 @@ class TestPromptDrafts(PlatformTestCase):
         self.assertNotIn("5. 背景环境是什么？", clarification.content)
         self.assertIn("问题宁少勿多，最多四个", self.chat_client.calls[-1]["system"])
         self.assertIn("不得把已经能识别的问题拆到后续轮次", self.chat_client.calls[-1]["system"])
+        self.assertIn("可预见的条件分支", self.chat_client.calls[-1]["system"])
+        self.assertIn("不要先问 A 再在下一轮反问 A1", self.chat_client.calls[-1]["system"])
         self.assertIn("禁止输出半成品提示词", self.chat_client.calls[-1]["system"])
         self.assertIn('"status":"ready"', self.chat_client.calls[-1]["system"])
 
