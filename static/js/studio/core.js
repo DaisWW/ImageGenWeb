@@ -529,7 +529,10 @@
         this.updateTransparentBackgroundState();
         this.settingChanged();
       });
-      this.el.transparentBackground.addEventListener("change", () => this.settingChanged());
+      this.el.transparentBackground.addEventListener("change", () => {
+        this.updateTransparentBackgroundState();
+        this.settingChanged();
+      });
       this.el.sizeInput.addEventListener("input", () => this.el.sizeInput.setCustomValidity(""));
       this.el.sizeInput.addEventListener("change", () => {
         if (this.validateSizeInput(true)) {

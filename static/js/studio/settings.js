@@ -357,13 +357,17 @@
     },
 
     updateTransparentBackgroundState() {
-      const available = ["png", "webp"].includes(this.el.formatSelect.value);
+      const hasPng = [...this.el.formatSelect.options].some((option) => option.value === "png");
+      if (this.el.transparentBackground.checked && hasPng && this.el.formatSelect.value !== "png") {
+        this.el.formatSelect.value = "png";
+      }
+      const available = hasPng;
       this.el.transparentBackground.disabled = !available;
       if (!available) this.el.transparentBackground.checked = false;
       this.el.transparentBackgroundControl.classList.toggle("is-disabled", !available);
       this.el.transparentBackgroundControl.title = available
-        ? "生成后由 Lucida 自动抠成透明背景 PNG/WebP（不请求上游原生透明）"
-        : "透明背景仅支持 PNG 或 WebP";
+        ? "生成后由 Lucida 自动抠成真实透明 PNG（不请求上游原生透明）"
+        : "当前渠道不支持透明 PNG";
     },
 
     setMode(mode, shouldSave) {

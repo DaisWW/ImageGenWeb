@@ -411,8 +411,8 @@
             });
           if (squareSize) this.el.sizeInput.value = squareSize;
           this.el.formatSelect.value = "png";
-          this.updateTransparentBackgroundState();
           this.el.transparentBackground.checked = true;
+          this.updateTransparentBackgroundState();
           this.el.batchCount.value = "1";
           this.updatePrice();
         },
