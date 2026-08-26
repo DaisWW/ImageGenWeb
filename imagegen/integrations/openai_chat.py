@@ -19,6 +19,8 @@ class ChatCompletion:
     input_tokens: int | None = None
     output_tokens: int | None = None
     elapsed_seconds: float | None = None
+    request_body_bytes: int | None = None
+    first_output_seconds: float | None = None
 
 
 class OpenAIChatError(RuntimeError):
@@ -69,56 +71,73 @@ class OpenAIChatClient:
         effort = model.reasoning_effort if reasoning_effort is None else reasoning_effort
         if effort:
             payload["reasoning"] = {"effort": effort}
+        request_body = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        request_body_bytes = len(request_body)
 
-        for attempt in range(2):
-            response = None
-            try:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise _timeout_error(started)
-                response = self.session.post(
-                    _endpoint(model.base_url),
-                    headers={
-                        "Accept": "text/event-stream",
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {model.api_key}",
-                    },
-                    json=payload,
-                    timeout=remaining,
-                    stream=True,
+        response = None
+        try:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _timeout_error(started, request_body_bytes=request_body_bytes)
+            response = self.session.post(
+                _endpoint(model.base_url),
+                headers={
+                    "Accept": "text/event-stream",
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {model.api_key}",
+                },
+                data=request_body,
+                timeout=remaining,
+                stream=True,
+            )
+            if time.monotonic() >= deadline:
+                raise _timeout_error(
+                    started,
+                    response=response,
+                    request_body_bytes=request_body_bytes,
                 )
-                if time.monotonic() >= deadline:
-                    raise _timeout_error(started, response=response)
-                if response.status_code == 502 and attempt == 0:
-                    response.close()
-                    response = None
-                    time.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
-                    continue
-                if not response.ok:
-                    self._raise_upstream(response, elapsed_seconds=_elapsed(started))
-                return self._stream_completion(response, started=started, deadline=deadline)
-            except requests.Timeout as exc:
+            if not response.ok:
+                self._raise_upstream(
+                    response,
+                    elapsed_seconds=_elapsed(started),
+                    request_body_bytes=request_body_bytes,
+                )
+            return self._stream_completion(
+                response,
+                started=started,
+                deadline=deadline,
+                request_body_bytes=request_body_bytes,
+            )
+        except requests.Timeout as exc:
+            raise _timeout_error(
+                started,
+                exception_type=exc.__class__.__name__,
+                request_body_bytes=request_body_bytes,
+            ) from exc
+        except requests.RequestException as exc:
+            if time.monotonic() >= deadline:
                 raise _timeout_error(
                     started,
                     exception_type=exc.__class__.__name__,
+                    request_body_bytes=request_body_bytes,
                 ) from exc
-            except requests.RequestException as exc:
-                if time.monotonic() >= deadline:
-                    raise _timeout_error(
-                        started,
-                        exception_type=exc.__class__.__name__,
-                    ) from exc
-                raise OpenAIChatError(
-                    "无法连接聊天模型",
-                    code="chat_connection_error",
-                    elapsed_seconds=_elapsed(started),
-                    details={"exception_type": exc.__class__.__name__},
-                ) from exc
-            finally:
-                if response is not None:
-                    response.close()
-
-        raise AssertionError("unreachable")
+            raise OpenAIChatError(
+                "无法连接聊天模型",
+                code="chat_connection_error",
+                elapsed_seconds=_elapsed(started),
+                details={
+                    "exception_type": exc.__class__.__name__,
+                    "request_body_bytes": request_body_bytes,
+                },
+            ) from exc
+        finally:
+            if response is not None:
+                response.close()
 
     @staticmethod
     def _stream_completion(
@@ -126,14 +145,20 @@ class OpenAIChatClient:
         *,
         started: float,
         deadline: float,
+        request_body_bytes: int,
     ) -> ChatCompletion:
         text_parts: list[str] = []
         terminal: dict[str, Any] | None = None
         completed: dict[str, Any] | None = None
         invalid_event_count = 0
+        first_output_seconds: float | None = None
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise _timeout_error(started, response=response)
+            raise _timeout_error(
+                started,
+                response=response,
+                request_body_bytes=request_body_bytes,
+            )
         timer = threading.Timer(remaining, _close_response, args=(response,))
         timer.daemon = True
         timer.start()
@@ -153,6 +178,8 @@ class OpenAIChatClient:
                 if event_type == "response.output_text.delta":
                     delta = event.get("delta")
                     if isinstance(delta, str):
+                        if first_output_seconds is None:
+                            first_output_seconds = _elapsed(started)
                         text_parts.append(delta)
                     continue
                 if event_type not in {
@@ -178,7 +205,11 @@ class OpenAIChatClient:
                         request_id=_request_id(response, completed),
                         upstream_status=response.status_code,
                         elapsed_seconds=_elapsed(started),
-                        details=response_summary(response, completed),
+                        details={
+                            **response_summary(response, completed),
+                            "request_body_bytes": request_body_bytes,
+                            "first_output_seconds": first_output_seconds,
+                        },
                     )
                 break
         except (requests.RequestException, OSError, ValueError, AttributeError) as exc:
@@ -187,6 +218,8 @@ class OpenAIChatClient:
                     started,
                     response=response,
                     exception_type=exc.__class__.__name__,
+                    request_body_bytes=request_body_bytes,
+                    first_output_seconds=first_output_seconds,
                 ) from exc
             raise OpenAIChatError(
                 "聊天模型连接中断，请重试",
@@ -194,14 +227,23 @@ class OpenAIChatClient:
                 request_id=_request_id(response),
                 upstream_status=response.status_code,
                 elapsed_seconds=_elapsed(started),
-                details={"exception_type": exc.__class__.__name__},
+                details={
+                    "exception_type": exc.__class__.__name__,
+                    "request_body_bytes": request_body_bytes,
+                    "first_output_seconds": first_output_seconds,
+                },
             ) from exc
         finally:
             timer.cancel()
 
         if completed is None:
             if time.monotonic() >= deadline:
-                raise _timeout_error(started, response=response)
+                raise _timeout_error(
+                    started,
+                    response=response,
+                    request_body_bytes=request_body_bytes,
+                    first_output_seconds=first_output_seconds,
+                )
             raise OpenAIChatError(
                 "聊天服务流式响应未正常结束",
                 request_id=_request_id(response),
@@ -211,11 +253,18 @@ class OpenAIChatClient:
                     "status_code": response.status_code,
                     "content_type": str(response.headers.get("content-type", ""))[:120],
                     "invalid_event_count": invalid_event_count,
+                    "request_body_bytes": request_body_bytes,
+                    "first_output_seconds": first_output_seconds,
                 },
             )
 
         if time.monotonic() >= deadline:
-            raise _timeout_error(started, response=response)
+            raise _timeout_error(
+                started,
+                response=response,
+                request_body_bytes=request_body_bytes,
+                first_output_seconds=first_output_seconds,
+            )
         content = "".join(text_parts).strip() or _response_output_text(completed).strip()
         if not content:
             raise OpenAIChatError(
@@ -223,7 +272,11 @@ class OpenAIChatClient:
                 request_id=_request_id(response, completed),
                 upstream_status=response.status_code,
                 elapsed_seconds=_elapsed(started),
-                details=response_summary(response, completed),
+                details={
+                    **response_summary(response, completed),
+                    "request_body_bytes": request_body_bytes,
+                    "first_output_seconds": first_output_seconds,
+                },
             )
         usage = completed.get("usage") or (terminal or {}).get("usage") or {}
         return ChatCompletion(
@@ -232,10 +285,17 @@ class OpenAIChatClient:
             input_tokens=_optional_int(usage.get("input_tokens")),
             output_tokens=_optional_int(usage.get("output_tokens")),
             elapsed_seconds=_elapsed(started),
+            request_body_bytes=request_body_bytes,
+            first_output_seconds=first_output_seconds,
         )
 
     @staticmethod
-    def _raise_upstream(response: requests.Response, *, elapsed_seconds: float) -> None:
+    def _raise_upstream(
+        response: requests.Response,
+        *,
+        elapsed_seconds: float,
+        request_body_bytes: int,
+    ) -> None:
         try:
             payload = response.json()
         except ValueError:
@@ -256,7 +316,10 @@ class OpenAIChatClient:
             request_id=_request_id(response, payload),
             upstream_status=response.status_code,
             elapsed_seconds=elapsed_seconds,
-            details=response_summary(response, payload),
+            details={
+                **response_summary(response, payload),
+                "request_body_bytes": request_body_bytes,
+            },
         )
 
 
@@ -363,7 +426,14 @@ def _timeout_error(
     *,
     response: requests.Response | None = None,
     exception_type: str = "ChatDeadlineExceeded",
+    request_body_bytes: int | None = None,
+    first_output_seconds: float | None = None,
 ) -> OpenAIChatError:
+    details: dict[str, Any] = {"exception_type": exception_type}
+    if request_body_bytes is not None:
+        details["request_body_bytes"] = request_body_bytes
+    if first_output_seconds is not None:
+        details["first_output_seconds"] = first_output_seconds
     return OpenAIChatError(
         "聊天模型响应超时",
         code="chat_timeout",
@@ -371,5 +441,5 @@ def _timeout_error(
         request_id=_request_id(response) if response is not None else "",
         upstream_status=response.status_code if response is not None else None,
         elapsed_seconds=_elapsed(started),
-        details={"exception_type": exception_type},
+        details=details,
     )

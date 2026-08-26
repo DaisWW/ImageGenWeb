@@ -260,7 +260,8 @@ class TestConversations(PlatformTestCase):
                 f"/api/workspaces/{workspace.id}/operations/{'b' * 32}/cancel"
             )
             self.assertEqual(response.status_code, 200)
-            self.assertFalse(conversations.operation_state(workspace.id)["busy"])
+            self.assertTrue(conversations.operation_state(workspace.id)["busy"])
+            self.assertTrue(conversations.operation_state(workspace.id)["cancel_requested"])
         finally:
             client.release.set()
             thread.join(10)
@@ -268,6 +269,7 @@ class TestConversations(PlatformTestCase):
         self.assertFalse(thread.is_alive())
         self.assertEqual(len(errors), 1)
         self.assertEqual(getattr(errors[0], "code", ""), "conversation_canceled")
+        self.assertFalse(conversations.operation_state(workspace.id)["busy"])
         messages = (
             self.user_client().get(f"/api/workspaces/{workspace.id}/messages").json["messages"]
         )
@@ -297,7 +299,7 @@ class TestConversations(PlatformTestCase):
                     )
                 )
                 self.assertTrue(conversations.cancel_operation(workspace.id, operation_id))
-                self.assertFalse(conversations.operation_state(workspace.id)["busy"])
+                self.assertTrue(conversations.operation_state(workspace.id)["busy"])
 
             with self.assertRaises(ServiceError) as raised:
                 with conversations.operations.workspace_operation(

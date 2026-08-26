@@ -293,18 +293,20 @@ class ConversationReplyService(ConversationSupport):
             retrieval_reason=retrieval.reason,
             active_series_contract=series_anchor.anchor.contract if series_anchor else {},
         )
+        system_prompt = review.system_prompt()
         try:
             context = self.context.build(
                 workspace,
                 pending_message=pending,
                 pending_stored_message_id=user_message.id,
                 pending_image_keys=(f"asset:{asset.id}" for asset in context_attachments),
+                system_prompt=system_prompt,
             )
             db.session.commit()
             operation.ensure_active()
             result = self.client.complete(
                 model,
-                system=review.system_prompt(),
+                system=system_prompt,
                 messages=context,
                 max_output_tokens=min(model.max_output_tokens, 2400),
                 reasoning_effort=model.effective_review_reasoning_effort,

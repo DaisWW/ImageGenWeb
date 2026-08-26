@@ -36,6 +36,7 @@ class ConversationOperation:
             "busy": True,
             "kind": self.kind,
             "label": self.label,
+            "cancel_requested": self.cancel_event.is_set(),
             "started_at": self.started_at.isoformat(),
             "operation_id": self.operation_id,
             "message_id": self.message_id,
@@ -54,11 +55,17 @@ class ConversationOperationRegistry:
         with self._operation_lock:
             operation = self._operations.get(workspace_id)
         if operation is None:
-            return {"busy": False, "kind": "", "label": "", "started_at": None}
+            return {
+                "busy": False,
+                "kind": "",
+                "label": "",
+                "cancel_requested": False,
+                "started_at": None,
+            }
         return operation.public_dict()
 
     def cancel(self, workspace_id: str, operation_id: str) -> bool:
-        """Mark one operation canceled and release the workspace immediately.
+        """Mark one operation canceled; release the workspace when it returns.
 
         A short-lived tombstone covers the race where the cancel request arrives
         just before the original request registers its operation.
@@ -74,7 +81,6 @@ class ConversationOperationRegistry:
                 operation.message_id,
             }:
                 operation.cancel_event.set()
-                self._operations.pop(workspace_id, None)
                 return True
             self._canceled_operations[(workspace_id, operation_id)] = monotonic()
         return False

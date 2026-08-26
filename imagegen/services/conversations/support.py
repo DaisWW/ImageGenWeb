@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 from dataclasses import dataclass
 from typing import Any
 
@@ -110,7 +109,7 @@ class ConversationSupport:
             gallery_categories=gallery_categories,
             gallery_category_locked=gallery_category_locked,
         )
-        case_limit = {"high": 3, "medium": 4, "low": 5}[route.confidence]
+        case_limit = {"high": 3, "medium": 3, "low": 3}[route.confidence]
         cases = CASE_CATALOG.search(
             query,
             direction_id=direction_id,
@@ -206,11 +205,13 @@ class ConversationSupport:
             return {"role": "user", "content": content}
         parts: list[dict[str, Any]] = [{"type": "text", "text": content}]
         for asset in attachments:
-            encoded = base64.b64encode(self.storage.read_bytes(asset.storage_path)).decode("ascii")
             parts.append(
                 {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{asset.mime_type};base64,{encoded}"},
+                    # The context builder reads and prepares this internal reference once.
+                    "type": "image_asset",
+                    "asset_id": asset.id,
+                    "storage_path": asset.storage_path,
+                    "mime_type": asset.mime_type or "image/png",
                 }
             )
         return {"role": "user", "content": parts}
@@ -324,6 +325,8 @@ class ConversationSupport:
                 **details,
                 "input_tokens": result.input_tokens,
                 "output_tokens": result.output_tokens,
+                "request_body_bytes": result.request_body_bytes,
+                "first_output_seconds": result.first_output_seconds,
             },
         )
 
@@ -337,7 +340,13 @@ class ConversationSupport:
             code="chat_invalid_response",
             request_id=result.request_id,
             elapsed_seconds=result.elapsed_seconds,
-            details={"validation": "structured_output_contract"},
+            details={
+                "validation": "structured_output_contract",
+                "input_tokens": result.input_tokens,
+                "output_tokens": result.output_tokens,
+                "request_body_bytes": result.request_body_bytes,
+                "first_output_seconds": result.first_output_seconds,
+            },
         )
 
     def _raise_chat_error(
@@ -363,6 +372,16 @@ class ConversationSupport:
         error: OpenAIChatError,
     ) -> str:
         db.session.rollback()
+        metrics = {
+            key: error.details[key]
+            for key in (
+                "input_tokens",
+                "output_tokens",
+                "request_body_bytes",
+                "first_output_seconds",
+            )
+            if error.details.get(key) is not None
+        }
         entry = self.runtime_logs.commit_best_effort(
             category="chat",
             event=event,
@@ -380,6 +399,6 @@ class ConversationSupport:
             http_status=error.upstream_status,
             upstream_request_id=error.request_id,
             elapsed_seconds=error.elapsed_seconds,
-            details={"diagnostics": error.details},
+            details={"diagnostics": error.details, **metrics},
         )
         return entry.id if entry is not None else ""

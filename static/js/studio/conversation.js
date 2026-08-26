@@ -357,7 +357,10 @@
     },
 
     workspaceChatBusy(workspaceId = this.activeWorkspace?.id) {
-      return Boolean(workspaceId && this.chatOperations.has(workspaceId));
+      return Boolean(workspaceId && (
+        this.chatOperations.has(workspaceId)
+        || this.canceledChatOperationIds.get(workspaceId)?.size
+      ));
     },
 
     chatOperationAwaitingMessageAcceptance(
@@ -545,6 +548,9 @@
       const generationBusy = this.workspaceHasActiveJob();
       const operation = this.chatOperations.get(this.activeWorkspace?.id);
       const chatBusy = Boolean(operation);
+      const cancelPending = !operation && Boolean(
+        this.canceledChatOperationIds.get(this.activeWorkspace?.id)?.size,
+      );
       const messageSending = this.chatOperationAwaitingMessageAcceptance(operation);
       const generationSubmission = this.generationSubmissions.get(this.activeWorkspace?.id);
       const submissionBusy = Boolean(generationSubmission);
@@ -559,7 +565,7 @@
       setDisabled(
         this.el.chatSendButton,
         noWorkspace || generationBusy || submissionBusy
-          || referenceUploading || (!chatCanCancel && !hasModel),
+          || referenceUploading || cancelPending || (!chatCanCancel && !hasModel),
       );
       this.el.chatSendButton.type = chatCanCancel ? "button" : "submit";
       this.setActionIcon(
@@ -652,6 +658,7 @@
         : generationBusy
         ? "当前生成完成前不能继续对话，可在生成记录中取消任务"
         : submissionBusy ? "正在提交生成，可立即取消"
+        : cancelPending ? "正在结束上一条请求，请稍候"
         : chatBusy ? messageSending
           ? "正在发送消息，等待服务端确认"
           : `${operation.label}，可切换到其他工作站继续`

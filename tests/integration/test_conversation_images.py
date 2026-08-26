@@ -5,11 +5,13 @@ import io
 import json
 from datetime import datetime, timedelta, timezone
 
+from PIL import Image
 from sqlalchemy import select
 
 from imagegen.extensions import db
 from imagegen.models import ConversationMessage, ConversationState
 from imagegen.services import ServiceError
+from imagegen.services.conversations.context import MAX_GENERATION_WORKFLOW_CHARS
 from imagegen.storage import InvalidImageError
 from tests.support.platform import (
     FakeProviderFactory,
@@ -20,6 +22,169 @@ from tests.support.platform import (
 
 
 class TestConversationImages(PlatformTestCase):
+    def test_context_loads_only_the_most_recent_message_window(self):
+        workspace = self.create_workspace("历史消息窗口")
+        db.session.add_all(
+            ConversationMessage(
+                workspace_id=workspace.id,
+                role="user" if index % 2 == 0 else "assistant",
+                kind="message",
+                content=f"窗口消息-{index}",
+                created_at=datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=index),
+            )
+            for index in range(90)
+        )
+        db.session.commit()
+
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="继续最近的方案",
+        )
+
+        serialized = json.dumps(self.chat_client.calls[-1]["messages"], ensure_ascii=False)
+        self.assertNotIn("窗口消息-10", serialized)
+        self.assertIn("窗口消息-11", serialized)
+        self.assertIn("窗口消息-89", serialized)
+
+    def test_generation_history_limits_outputs_and_compacts_workflow(self):
+        workspace = self.create_workspace("生成历史窗口")
+        worker = self.create_worker()
+        worker.providers = FakeProviderFactory(vary=True)
+        channel = self.app.extensions["channel_registry"].get("test")
+        jobs = []
+        for index in range(5):
+            job = self.submit(workspace, prompt=f"历史海报-{index}")
+            self.assertTrue(worker._claim(job.items[0].id, channel))
+            worker._process_item(job.items[0].id)
+            jobs.append(job)
+
+        latest = jobs[-1]
+        latest.workflow = {
+            "generation_stage": "final",
+            "generation_strategy": "sample",
+            "brief": {f"field_{index}": "很长的制作说明" * 100 for index in range(20)},
+            "production_spec": {"details": "制作参数" * 1000},
+            "hard_checks": ["必须满足的验收条件" * 100] * 10,
+            "retrieved_cases": [{"prompt": "不应重放的案例" * 1000}],
+        }
+        db.session.commit()
+
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="基于最近生成的海报继续调整",
+        )
+
+        context = self.chat_client.calls[-1]["messages"]
+        serialized = json.dumps(context, ensure_ascii=False)
+        images = [
+            part
+            for message in context
+            for part in (message.get("content") if isinstance(message.get("content"), list) else [])
+            if part.get("type") == "image_url"
+        ]
+        self.assertEqual(len(images), 4)
+        self.assertEqual(serialized.count("历史生成结果"), 4)
+        self.assertNotIn("不应重放的案例", serialized)
+        job_text = next(
+            message["content"]
+            for message in context
+            if isinstance(message.get("content"), str)
+            and "历史生成任务" in message["content"]
+            and "历史海报-4" in message["content"]
+        )
+        workflow_text = job_text.split("结构化生成参数：", 1)[1]
+        self.assertLessEqual(len(workflow_text), MAX_GENERATION_WORKFLOW_CHARS)
+
+    def test_large_chat_images_are_compressed_for_the_model_request(self):
+        workspace = self.create_workspace("聊天大图压缩")
+        stream = io.BytesIO()
+        Image.effect_noise((2048, 1536), 100).convert("RGB").save(
+            stream,
+            format="JPEG",
+            quality=95,
+        )
+        original = stream.getvalue()
+        self.assertGreater(len(original), 256 * 1024)
+        asset = self.services.workspaces.add_assets(workspace, [("large.jpg", original)])[0]
+
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="压缩这张参考图",
+            attachment_ids=(asset.id,),
+        )
+
+        model_parts = self.chat_client.calls[-1]["messages"][-1]["content"]
+        image_part = next(part for part in model_parts if part["type"] == "image_url")
+        url = image_part["image_url"]["url"]
+        self.assertTrue(url.startswith("data:image/webp;base64,"))
+        compressed = base64.b64decode(url.split(",", 1)[1])
+        self.assertLess(len(compressed), len(original))
+        with Image.open(io.BytesIO(compressed)) as image:
+            self.assertLessEqual(max(image.size), 1280)
+
+    def test_low_confidence_context_keeps_room_for_seven_current_images(self):
+        workspace = self.create_workspace("低置信度七图上下文")
+        assets = self.services.workspaces.add_assets(
+            workspace,
+            [
+                (f"reference-{index}.png", png_bytes((20 + index * 25, 80, 140)))
+                for index in range(7)
+            ],
+        )
+
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="请结合这些图片继续整理需求",
+            attachment_ids=tuple(asset.id for asset in assets),
+        )
+
+        call = self.chat_client.calls[-1]
+        estimated = self.services.conversations.context._estimate_tokens(call["system"])
+        estimated += self.services.conversations.context._message_tokens(call["messages"])
+        self.assertLessEqual(
+            estimated,
+            self.services.conversations.chat_models.context.max_context_tokens,
+        )
+        image_parts = [
+            part
+            for message in call["messages"]
+            for part in (message.get("content") if isinstance(message.get("content"), list) else [])
+            if part.get("type") == "image_url"
+        ]
+        self.assertEqual(len(image_parts), 7)
+
+    def test_identical_current_and_historical_images_are_sent_once(self):
+        workspace = self.create_workspace("重复图片去重")
+        content = png_bytes((90, 120, 210))
+        first, second = self.services.workspaces.add_assets(
+            workspace,
+            [("first.png", content), ("second.png", content)],
+        )
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="先看第一张",
+            attachment_ids=(first.id,),
+        )
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="现在用第二张继续",
+            attachment_ids=(second.id,),
+        )
+
+        image_parts = [
+            part
+            for message in self.chat_client.calls[-1]["messages"]
+            for part in (message.get("content") if isinstance(message.get("content"), list) else [])
+            if part.get("type") == "image_url"
+        ]
+        self.assertEqual(len(image_parts), 1)
+
     def test_analysis_only_attachment_does_not_enable_edit_recipe(self):
         workspace = self.create_workspace("图片仅分析")
         asset = self.services.workspaces.add_assets(
@@ -205,7 +370,7 @@ class TestConversationImages(PlatformTestCase):
         state = db.session.get(ConversationState, workspace.id)
         self.assertEqual(state.summary, "")
         self.assertEqual(state.summary_through_message_id, "")
-        self.assertLessEqual(state.estimated_context_tokens, 6000)
+        self.assertGreater(state.estimated_context_tokens, 6000)
 
     def test_chat_multiple_attachments_are_sent_persisted_and_cannot_cross_workspaces(self):
         workspace = self.create_workspace()

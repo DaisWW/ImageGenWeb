@@ -119,8 +119,17 @@ class GalleryAtlas:
         direction_id: str | None = None,
         *,
         identifiers: Iterable[str] | None = None,
+        compact: bool = False,
     ) -> str:
         selected = set(identifiers) if identifiers is not None else None
+        if compact:
+            return "\n".join(
+                f"- {category.identifier}｜{category.label}｜"
+                f"方向 {','.join(category.direction_ids)}｜语法 {category.prompt_schema}"
+                for category in self.categories
+                if self._compatible(category, direction_id)
+                and (selected is None or category.identifier in selected)
+            )
         return "\n".join(
             f"- {category.identifier}｜{category.label}｜"
             f"Case {category.case_start}-{category.case_end}｜"

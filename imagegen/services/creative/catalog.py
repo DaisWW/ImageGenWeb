@@ -101,6 +101,7 @@ def creative_direction_prompt(
     template_candidates: tuple[PromptTemplate, ...] = (),
     gallery_category_id: str = "auto",
     gallery_candidates: tuple[str, ...] = (),
+    compact_catalog: bool = False,
 ) -> str:
     direction = get_creative_direction(identifier)
     directions = CREATIVE_DIRECTIONS if direction is None else (direction,)
@@ -142,18 +143,35 @@ def creative_direction_prompt(
         for template in PROMPT_TEMPLATES
         if direction is None or template.direction_id == direction.identifier
     )
-    template_rows = "\n".join(_template_prompt_line(template) for template in selected_templates)
+    template_rows = "\n".join(
+        (
+            _compact_template_prompt_line(template)
+            if compact_catalog and not candidates
+            else _template_prompt_line(template)
+        )
+        for template in selected_templates
+    )
     styles = "、".join(STYLE_TAG_LABELS)
     scenes = "、".join(SCENE_TAG_LABELS)
-    direction_rules = "\n".join(
-        (
-            f"- {item.identifier} 的执行规则：{' '.join(item.guidance)}；"
-            f"常见失误：{' '.join(item.pitfalls)}；"
-            f"必填制作字段：{'、'.join(item.required_fields) or '按交付物补齐'}；"
-            f"验收门槛：{'；'.join(item.hard_checks) or '按最终图片可判断项定义'}"
+    if compact_catalog and not candidates:
+        direction_rules = "\n".join(
+            (
+                f"- {item.identifier}｜{item.label}；"
+                f"必填制作字段：{'、'.join(item.required_fields) or '按交付物补齐'}；"
+                f"验收门槛：{'；'.join(item.hard_checks) or '按最终图片可判断项定义'}"
+            )
+            for item in rule_directions
         )
-        for item in rule_directions
-    )
+    else:
+        direction_rules = "\n".join(
+            (
+                f"- {item.identifier} 的执行规则：{' '.join(item.guidance)}；"
+                f"常见失误：{' '.join(item.pitfalls)}；"
+                f"必填制作字段：{'、'.join(item.required_fields) or '按交付物补齐'}；"
+                f"验收门槛：{'；'.join(item.hard_checks) or '按最终图片可判断项定义'}"
+            )
+            for item in rule_directions
+        )
     template_gallery_ids = tuple(
         dict.fromkeys(
             gallery_id
@@ -169,12 +187,14 @@ def creative_direction_prompt(
     gallery_categories = GALLERY_ATLAS.prompt(
         direction.identifier if direction else None,
         identifiers=candidate_gallery_ids or None,
+        compact=compact_catalog,
     )
-    template_heading = (
-        "系统按交付物、风格和场景预选的 Top 3 Prompt 模板候选"
-        if candidates
-        else "本地 Prompt 模板目录"
-    )
+    if candidates:
+        template_heading = "系统按交付物、风格和场景预选的 Top 3 Prompt 模板候选"
+    elif compact_catalog:
+        template_heading = "本地 Prompt 模板索引（详细执行规则由通用 Craft 约束）"
+    else:
+        template_heading = "本地 Prompt 模板目录"
     if gallery_category is not None:
         gallery_heading = "用户锁定的 Gallery Atlas 类别"
     elif gallery_candidates:
@@ -222,6 +242,14 @@ def _template_prompt_line(template: PromptTemplate) -> str:
         f"适用 {template.use_when}；重点 {' '.join(template.guidance)}；"
         f"避免 {' '.join(template.pitfalls)}；必填字段 {required}；"
         f"验收 {checks}；结构参考 {cases or '无'}"
+    )
+
+
+def _compact_template_prompt_line(template: PromptTemplate) -> str:
+    required = "、".join(template.required_fields) or "按交付物定义字段"
+    return (
+        f"- {template.identifier}｜{template.label}｜方向 {template.direction_id}｜"
+        f"必填字段 {required}"
     )
 
 

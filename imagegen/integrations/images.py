@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import ipaddress
 import socket
 import threading
@@ -13,6 +14,7 @@ import requests
 from requests.adapters import HTTPAdapter
 
 from ..config.channels import Channel
+from ..image_payloads import prepare_image_bytes, prepared_filename
 from .diagnostics import response_summary
 
 MAX_OUTPUT_BYTES = 50 * 1024 * 1024
@@ -97,6 +99,24 @@ class OpenAIImagesAdapter:
         headers = {"Authorization": f"Bearer {channel.api_key}"}
         request_data: dict[str, Any]
         if request.references:
+            references: list[ReferencePayload] = []
+            seen_hashes: set[str] = set()
+            for reference in request.references:
+                source_hash = hashlib.sha256(reference.content).hexdigest()
+                if source_hash in seen_hashes:
+                    continue
+                content, mime_type = prepare_image_bytes(reference.content, reference.mime_type)
+                prepared_hash = hashlib.sha256(content).hexdigest()
+                if prepared_hash in seen_hashes:
+                    continue
+                seen_hashes.update((source_hash, prepared_hash))
+                references.append(
+                    ReferencePayload(
+                        filename=prepared_filename(reference.filename, mime_type),
+                        content=content,
+                        mime_type=mime_type,
+                    )
+                )
             request_data = {
                 "data": {key: str(value) for key, value in payload.items()},
                 "files": [
@@ -104,7 +124,7 @@ class OpenAIImagesAdapter:
                         "image[]",
                         (reference.filename, reference.content, reference.mime_type),
                     )
-                    for reference in request.references
+                    for reference in references
                 ],
             }
         else:

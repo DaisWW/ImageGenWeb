@@ -78,6 +78,25 @@ class TestCreativeCatalog(unittest.TestCase):
         self.assertIn("gallery", routed_prompt.lower())
         self.assertNotIn("document-publishing", routed_prompt)
 
+    def test_low_confidence_catalog_uses_compact_template_index(self):
+        full_prompt = creative_direction_prompt("auto")
+        compact_prompt = creative_direction_prompt("auto", compact_catalog=True)
+
+        self.assertLess(len(compact_prompt), len(full_prompt) * 0.7)
+        self.assertIn("game-ui-gameplay-hud", compact_prompt)
+        self.assertIn("必填字段", compact_prompt)
+        self.assertIn("验收", compact_prompt)
+
+    def test_low_confidence_case_context_keeps_only_structure_metadata(self):
+        cases = CASE_CATALOG.search("做一张图片", limit=3)
+
+        compact = CASE_CATALOG.prompt(cases, compact=True)
+        full = CASE_CATALOG.prompt(cases)
+
+        self.assertLess(len(compact), len(full) * 0.5)
+        self.assertIn("仅参考交付物结构", compact)
+        self.assertNotIn("第三方案例摘录", compact)
+
     def test_gallery_category_match_precedes_template_routing(self):
         gallery_categories = GALLERY_ATLAS.match(
             "像素艺术角色精灵图，使用有限色板且不要抗锯齿",

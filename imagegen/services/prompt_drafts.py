@@ -55,13 +55,15 @@ class PromptDraftReview:
             if self.conversation_prompt.strip()
             else ""
         )
+        compact_catalog = self.retrieval_confidence == "low" and not self.template_candidates
         direction_section = creative_direction_prompt(
             self.creative_direction_id,
             template_candidates=self.template_candidates,
             gallery_category_id=self.gallery_category_id,
             gallery_candidates=self.gallery_candidates,
+            compact_catalog=compact_catalog,
         )
-        case_section = CASE_CATALOG.prompt(self.retrieved_cases)
+        case_section = CASE_CATALOG.prompt(self.retrieved_cases, compact=compact_catalog)
         confidence_labels = {"high": "高", "medium": "中", "low": "低"}
         retrieval_section = (
             "\n案例检索状态："

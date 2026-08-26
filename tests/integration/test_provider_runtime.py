@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import io
 import json
 from dataclasses import replace
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
+from PIL import Image
 from sqlalchemy import func, select
 
 from imagegen.extensions import db
+from imagegen.image_payloads import prepare_image_bytes, prepared_filename
 from imagegen.integrations.diagnostics import response_summary
 from imagegen.integrations.images import (
     GenerationRequest,
@@ -33,6 +36,22 @@ from tests.support.platform import (
 
 
 class TestProviderAndRuntime(PlatformTestCase):
+    def test_model_image_payload_is_bounded_and_preserves_transparency(self):
+        source = Image.effect_noise((2048, 1536), 100).convert("RGBA")
+        source.putalpha(Image.new("L", source.size, 128))
+        stream = io.BytesIO()
+        source.save(stream, format="PNG")
+        original = stream.getvalue()
+
+        prepared, mime_type = prepare_image_bytes(original, "image/png")
+
+        self.assertEqual(mime_type, "image/webp")
+        self.assertLess(len(prepared), len(original))
+        self.assertEqual(prepared_filename("reference.png", mime_type), "reference.webp")
+        with Image.open(io.BytesIO(prepared)) as image:
+            self.assertLessEqual(max(image.size), 1280)
+            self.assertEqual(image.mode, "RGBA")
+
     def test_channel_exposes_configured_models_and_price_without_key(self):
         channel = self.app.extensions["channel_registry"].get("test")
         public = channel.public_dict()
@@ -97,6 +116,40 @@ class TestProviderAndRuntime(PlatformTestCase):
         )
         self.assertNotIn("Content-Type", session.request["headers"])
         self.assertEqual(edit_result.content, png_bytes())
+
+    def test_image_edit_compresses_and_deduplicates_reference_payloads(self):
+        channel = self.app.extensions["channel_registry"].get("test")
+        adapter = OpenAIImagesAdapter()
+        session = RecordingImageSession()
+        adapter._local.session = session
+        stream = io.BytesIO()
+        Image.effect_noise((2048, 1536), 100).convert("RGB").save(
+            stream,
+            format="JPEG",
+            quality=95,
+        )
+        original = stream.getvalue()
+
+        adapter.generate(
+            channel,
+            GenerationRequest(
+                prompt="压缩重复垫图",
+                model="model-a",
+                size="1024x1024",
+                quality="high",
+                output_format="png",
+                compression=90,
+                references=(
+                    ReferencePayload("one.jpg", original, "image/jpeg"),
+                    ReferencePayload("copy.jpg", original, "image/jpeg"),
+                ),
+            ),
+        )
+
+        files = session.request["files"]
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0][1][0], "one.webp")
+        self.assertLess(len(files[0][1][1]), len(original))
 
     def test_transparent_background_does_not_send_native_provider_flags(self):
         channel = self.app.extensions["channel_registry"].get("test")
@@ -163,16 +216,23 @@ class TestProviderAndRuntime(PlatformTestCase):
         self.assertEqual(session.request["url"], "https://chat.example/v1/responses")
         self.assertEqual(session.request["headers"]["Accept"], "text/event-stream")
         self.assertTrue(session.request["stream"])
-        self.assertTrue(session.request["json"]["stream"])
-        self.assertEqual(session.request["json"]["instructions"], "系统提示")
-        self.assertEqual(session.request["json"]["reasoning"], {"effort": "max"})
+        request_body = session.request["data"]
+        request_payload = json.loads(request_body)
+        self.assertIsInstance(request_body, bytes)
+        self.assertNotIn(b"\\u7cfb", request_body)
+        self.assertNotIn(b": ", request_body)
+        self.assertTrue(request_payload["stream"])
+        self.assertEqual(request_payload["instructions"], "系统提示")
+        self.assertEqual(request_payload["reasoning"], {"effort": "max"})
         self.assertEqual(
-            session.request["json"]["input"],
+            request_payload["input"],
             [{"role": "user", "content": [{"type": "input_text", "text": "你好"}]}],
         )
         self.assertEqual(result.content, "测试回复")
         self.assertEqual(result.input_tokens, 4)
         self.assertEqual(result.output_tokens, 2)
+        self.assertEqual(result.request_body_bytes, len(request_body))
+        self.assertEqual(result.first_output_seconds, 0.0)
         self.assertTrue(session.responses == [])
 
         override_session = RecordingChatSession()
@@ -182,7 +242,10 @@ class TestProviderAndRuntime(PlatformTestCase):
             messages=[{"role": "user", "content": "你好"}],
             reasoning_effort="low",
         )
-        self.assertEqual(override_session.request["json"]["reasoning"], {"effort": "low"})
+        self.assertEqual(
+            json.loads(override_session.request["data"])["reasoning"],
+            {"effort": "low"},
+        )
 
     def test_chat_request_converts_image_parts_for_responses_api(self):
         model = self.app.extensions["chat_model_registry"].get("test-chat")
@@ -207,70 +270,39 @@ class TestProviderAndRuntime(PlatformTestCase):
         )
 
         self.assertEqual(
-            session.request["json"]["input"][0]["content"],
+            json.loads(session.request["data"])["input"][0]["content"],
             [
                 {"type": "input_text", "text": "分析图片"},
                 {"type": "input_image", "image_url": "data:image/png;base64,AAAA"},
             ],
         )
         self.assertEqual(
-            session.request["json"]["input"][1],
+            json.loads(session.request["data"])["input"][1],
             {
                 "role": "assistant",
                 "content": [{"type": "output_text", "text": "已查看"}],
             },
         )
 
-    def test_chat_retries_one_explicit_http_502(self):
+    def test_chat_does_not_retry_an_explicit_http_502(self):
         model = self.app.extensions["chat_model_registry"].get("test-chat")
-        first = FakeChatResponse(
+        response = FakeChatResponse(
             status_code=502,
             payload={"error": {"message": "temporarily unavailable", "type": "upstream_error"}},
             headers={"x-request-id": "first-502", "content-type": "application/json"},
         )
-        second = FakeChatResponse()
-        session = RecordingChatSession([first, second])
+        session = RecordingChatSession([response])
 
-        with patch("imagegen.integrations.openai_chat.time.sleep") as sleep:
-            result = OpenAIChatClient(session).complete(
+        with self.assertRaises(OpenAIChatError) as raised:
+            OpenAIChatClient(session).complete(
                 model,
                 system="系统提示",
                 messages=[{"role": "user", "content": "你好"}],
             )
 
-        self.assertEqual(result.content, "测试回复")
-        self.assertEqual(len(session.requests), 2)
-        sleep.assert_called_once_with(0.5)
-        self.assertTrue(first.closed)
-        self.assertTrue(second.closed)
-
-    def test_chat_timeout_is_a_total_budget_across_retries(self):
-        model = replace(
-            self.app.extensions["chat_model_registry"].get("test-chat"),
-            timeout_seconds=10,
-        )
-        first = FakeChatResponse(status_code=502)
-        session = RecordingChatSession([first])
-        clock = [0.0]
-
-        def monotonic():
-            return clock[0]
-
-        def sleep(seconds):
-            clock[0] += seconds + 10
-
-        with patch("imagegen.integrations.openai_chat.time.monotonic", side_effect=monotonic):
-            with patch("imagegen.integrations.openai_chat.time.sleep", side_effect=sleep):
-                with self.assertRaises(OpenAIChatError) as raised:
-                    OpenAIChatClient(session).complete(
-                        model,
-                        system="系统提示",
-                        messages=[{"role": "user", "content": "你好"}],
-                    )
-
-        self.assertEqual(raised.exception.code, "chat_timeout")
+        self.assertEqual(raised.exception.upstream_status, 502)
         self.assertEqual(len(session.requests), 1)
-        self.assertTrue(first.closed)
+        self.assertTrue(response.closed)
 
     def test_chat_timeout_stops_a_stream_that_keeps_sending_data(self):
         model = replace(
@@ -300,6 +332,8 @@ class TestProviderAndRuntime(PlatformTestCase):
 
         self.assertEqual(raised.exception.code, "chat_timeout")
         self.assertGreaterEqual(raised.exception.elapsed_seconds, 10)
+        self.assertGreater(raised.exception.details["request_body_bytes"], 0)
+        self.assertNotIn("first_output_seconds", raised.exception.details)
         self.assertTrue(response.closed)
 
     def test_chat_stream_read_failure_becomes_retryable_provider_error(self):
@@ -322,6 +356,7 @@ class TestProviderAndRuntime(PlatformTestCase):
         self.assertEqual(raised.exception.code, "chat_connection_error")
         self.assertEqual(raised.exception.request_id, "chat-http-test")
         self.assertEqual(raised.exception.details["exception_type"], "AttributeError")
+        self.assertGreater(raised.exception.details["request_body_bytes"], 0)
         self.assertTrue(response.closed)
 
     def test_chat_does_not_retry_non_502_errors(self):
@@ -429,6 +464,11 @@ class TestProviderAndRuntime(PlatformTestCase):
         self.assertEqual(entry.http_status, 200)
         self.assertEqual(entry.upstream_request_id, "chat-shape-test")
         self.assertIn("output", entry.details["diagnostics"]["top_level_keys"])
+        self.assertGreater(entry.details["request_body_bytes"], 0)
+        self.assertEqual(
+            entry.details["request_body_bytes"],
+            entry.details["diagnostics"]["request_body_bytes"],
+        )
         serialized = json.dumps(entry.details, ensure_ascii=False)
         self.assertNotIn("must-not-be-logged", serialized)
 

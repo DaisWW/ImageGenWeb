@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 from typing import Any
 
 from ...errors import ServiceError
 from ...extensions import db
+from ...image_payloads import prepare_image_bytes
 from ...integrations.openai_chat import OpenAIChatError
 from ...models import GenerationItem, Workspace, utcnow
 from ..image_reviews import ImageReviewEvaluation
@@ -60,11 +62,25 @@ class ImageReviewWorkflow(ConversationSupport):
                 for reference in references
             ),
         ]
+        prepared_media: list[tuple[bytes, str, str]] = []
+        seen_hashes: set[str] = set()
+        for content, mime_type, label in media:
+            source_hash = hashlib.sha256(content).hexdigest()
+            if source_hash in seen_hashes:
+                continue
+            prepared_content, prepared_mime = prepare_image_bytes(content, mime_type)
+            prepared_hash = hashlib.sha256(prepared_content).hexdigest()
+            if prepared_hash in seen_hashes:
+                continue
+            seen_hashes.add(source_hash)
+            seen_hashes.add(prepared_hash)
+            prepared_media.append((prepared_content, prepared_mime, label))
         if (
-            sum(len(content) for content, _mime, _label in media)
+            sum(len(content) for content, _mime, _label in prepared_media)
             > runtime.max_attachment_total_bytes
         ):
             raise ServiceError(f"验收图片合计不能超过 {runtime.max_attachment_total_mb} MiB")
+        references_sent = max(0, len(prepared_media) - 1)
         workflow = item.job.workflow or {}
         raw_checks = workflow.get("hard_checks", [])
         expected_checks = (
@@ -72,7 +88,7 @@ class ImageReviewWorkflow(ConversationSupport):
         )
         evaluation = ImageReviewEvaluation(
             generation_mode=item.job.mode,
-            reference_count=len(references),
+            reference_count=references_sent,
             expected_checks=expected_checks,
             expected_text=_workflow_exact_text(workflow),
         )
@@ -87,7 +103,7 @@ class ImageReviewWorkflow(ConversationSupport):
                 ),
             }
         ]
-        for content, mime_type, label in media:
+        for content, mime_type, label in prepared_media:
             parts.append({"type": "text", "text": label})
             encoded = base64.b64encode(content).decode("ascii")
             parts.append(
@@ -127,7 +143,7 @@ class ImageReviewWorkflow(ConversationSupport):
                 "job_id": item.job_id,
                 "item_id": item.id,
                 "outcome": review["verdict"],
-                "reference_count": len(references),
+                "reference_count": references_sent,
             },
         )
         db.session.commit()
