@@ -334,7 +334,7 @@
 
 body:has(#generationForm:not([hidden])):has(#toastRegion .toast) #generationForm {
   top: 110px;
-  height: calc(100dvh - 110px);
+  height: calc(100% - 110px);
   padding-top: 18px;
 }
 

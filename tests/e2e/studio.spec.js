@@ -499,6 +499,60 @@ test("composer close fallback keeps workspace switching interactive", {
   await deleteWorkspace(page, workspaceName);
 });
 
+test("open generation composer does not block workspace switching", {
+  tag: "@responsive",
+}, async ({ studioPage: page }, testInfo) => {
+  const workspaceName = `E2E-Open-${testInfo.project.name}-${Date.now()}`;
+  await createWorkspace(page, workspaceName);
+  const target = page.locator("#workspaceList .workspace-item:not(.active)").first();
+  const targetName = await target.locator(".workspace-copy strong").textContent();
+
+  await page.locator("#directGenerationButton").click();
+  await expect(page.locator("#generationForm")).toBeVisible();
+  await target.locator("[data-select-workspace]").click();
+
+  await expect(page.locator("#workspaceTitle")).toHaveText(targetName);
+  await expect(page.locator("#generationForm")).toBeHidden();
+
+  await page.locator("#workspaceList .workspace-item", { hasText: workspaceName })
+    .locator("[data-select-workspace]").click();
+  await deleteWorkspace(page, workspaceName);
+});
+
+test("workspace switching cancels a stalled generation submission", {
+  tag: "@responsive",
+}, async ({ studioPage: page }, testInfo) => {
+  await mockConfiguredImageChannel(page);
+  await page.reload();
+  const workspaceName = `E2E-Stalled-${testInfo.project.name}-${Date.now()}`;
+  await createWorkspace(page, workspaceName);
+  const target = page.locator("#workspaceList .workspace-item:not(.active)").first();
+  const targetName = await target.locator(".workspace-copy strong").textContent();
+  const runtimeSettings = deferred();
+
+  await page.route("**/api/runtime-settings", async (route) => {
+    await runtimeSettings.promise;
+    await route.abort();
+  });
+
+  try {
+    await page.locator("#directGenerationButton").click();
+    await expect(page.locator("#generationForm")).toBeVisible();
+    await page.locator("#promptInput").fill("卡住请求时仍可切换工作站");
+    await page.locator("#generateButton").click();
+    await expect(page.locator("#generateButtonLabel")).toHaveText("取消生成");
+    await target.locator("[data-select-workspace]").click();
+    await expect(page.locator("#workspaceTitle")).toHaveText(targetName);
+    await expect(page.locator("#generationForm")).toBeHidden();
+  } finally {
+    runtimeSettings.resolve();
+  }
+
+  await page.locator("#workspaceList .workspace-item", { hasText: workspaceName })
+    .locator("[data-select-workspace]").click();
+  await deleteWorkspace(page, workspaceName);
+});
+
 test("active generation locks prompt reuse and cancellation unlocks immediately", {
   tag: "@responsive",
 }, async ({ studioPage: page }) => {

@@ -334,6 +334,7 @@
       this.conversationContext = null;
       this.chatReferencePickerOpen = false;
       this.el.chatInput.value = this.chatDrafts.get(workspace.id) || "";
+      this.setComposerMode("chat");
       this.renderWorkspaceList();
       this.el.workspaceTitle.textContent = workspace.name;
       this.applyWorkspaceSettings();
@@ -341,7 +342,6 @@
       this.renderChatReferences();
       this.renderJobs();
       this.renderMessages();
-      this.setComposerMode("chat");
       this.animateWorkspaceIn();
       if (knownEmpty) return;
       void Promise.all([
