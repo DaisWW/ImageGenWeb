@@ -23,7 +23,7 @@
             workspace.name,
             workspace.kind,
             operation?.kind || "",
-            operation?.label || "",
+            operation?.stage_label || operation?.label || "",
           ];
         }),
       ]);
@@ -120,6 +120,7 @@
           this.updateWorkspaceJobDisplay(item, workspace, this.chatOperations.get(workspace.id));
         }
       });
+      this.updateChatOperationDisplays();
     },
 
     updateWorkspaceJobDisplay(item, workspace, operation) {
@@ -133,7 +134,7 @@
       if (operation) {
         const operationLabel = this.chatOperationAwaitingMessageAcceptance(operation, workspace.id)
           ? "正在发送消息"
-          : operation.label;
+          : operation.stage_label || operation.label;
         setHidden(progress, true);
         setHidden(timing, true);
         setText(meta, operationLabel);

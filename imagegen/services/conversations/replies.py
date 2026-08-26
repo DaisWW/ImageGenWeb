@@ -294,6 +294,7 @@ class ConversationReplyService(ConversationSupport):
             active_series_contract=series_anchor.anchor.contract if series_anchor else {},
         )
         system_prompt = review.system_prompt()
+        operation.update_progress("context", "正在整理会话上下文")
         try:
             context = self.context.build(
                 workspace,
@@ -310,6 +311,7 @@ class ConversationReplyService(ConversationSupport):
                 messages=context,
                 max_output_tokens=min(model.max_output_tokens, 2400),
                 reasoning_effort=model.effective_review_reasoning_effort,
+                progress=operation.client_progress,
             )
         except OpenAIChatError as exc:
             return self._error_reply(
@@ -321,6 +323,7 @@ class ConversationReplyService(ConversationSupport):
             )
 
         operation.ensure_active()
+        operation.update_progress("parsing", "正在解析模型结果")
         try:
             draft = review.finalize(
                 review.parse(result.content),
@@ -357,6 +360,7 @@ class ConversationReplyService(ConversationSupport):
         ):
             self._attach(assistant_message, generation_references)
         operation.ensure_active()
+        operation.update_progress("saving", "正在保存回复")
         db.session.add(assistant_message)
         user_message.payload["reply_message_id"] = assistant_message.id
         self._record_chat_success(

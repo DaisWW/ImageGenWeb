@@ -10,7 +10,7 @@ from ...image_payloads import prepare_image_bytes
 from ...integrations.openai_chat import OpenAIChatError
 from ...models import GenerationItem, Workspace, utcnow
 from ..image_reviews import ImageReviewEvaluation
-from .operations import ConversationOperationRegistry
+from .operations import ConversationOperation, ConversationOperationRegistry
 from .support import ConversationDependencies, ConversationSupport
 
 
@@ -34,8 +34,12 @@ class ImageReviewWorkflow(ConversationSupport):
         workspace = db.session.get(Workspace, item.job.workspace_id)
         if workspace is None:
             raise ServiceError("工作站不存在", status_code=404)
-        with self.operations.workspace_operation(workspace, "image_review", "正在进行 AI 图片验收"):
-            return self._review(workspace, item, model_id=model_id)
+        with self.operations.workspace_operation(
+            workspace,
+            "image_review",
+            "正在进行 AI 图片验收",
+        ) as operation:
+            return self._review(workspace, item, model_id=model_id, operation=operation)
 
     def _review(
         self,
@@ -43,6 +47,7 @@ class ImageReviewWorkflow(ConversationSupport):
         item: GenerationItem,
         *,
         model_id: str,
+        operation: ConversationOperation,
     ) -> dict[str, Any]:
         model = self._model(model_id)
         runtime = self.settings.runtime()
@@ -112,6 +117,7 @@ class ImageReviewWorkflow(ConversationSupport):
                     "image_url": {"url": f"data:{mime_type};base64,{encoded}"},
                 }
             )
+        operation.update_progress("context", "正在准备验收上下文")
         try:
             result = self.client.complete(
                 model,
@@ -119,9 +125,11 @@ class ImageReviewWorkflow(ConversationSupport):
                 messages=[{"role": "user", "content": parts}],
                 max_output_tokens=min(model.max_output_tokens, 1800),
                 reasoning_effort=model.effective_review_reasoning_effort,
+                progress=operation.client_progress,
             )
         except OpenAIChatError as exc:
             self._raise_chat_error(workspace, model, "chat.image_review", exc)
+        operation.update_progress("parsing", "正在解析验收结果")
         review = evaluation.parse(result.content)
         review.update(
             {
@@ -133,6 +141,7 @@ class ImageReviewWorkflow(ConversationSupport):
                 "elapsed_seconds": result.elapsed_seconds,
             }
         )
+        operation.update_progress("saving", "正在保存验收结果")
         item.review = review
         self._record_chat_success(
             workspace,

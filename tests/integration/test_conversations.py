@@ -205,6 +205,9 @@ class TestConversations(PlatformTestCase):
             operation = conversations.operation_state(workspace.id)
             self.assertTrue(operation["busy"])
             self.assertEqual(operation["kind"], "reply")
+            self.assertEqual(operation["stage"], "upstream_connected")
+            self.assertEqual(operation["stage_label"], "已连接上游，等待模型首个输出")
+            self.assertEqual(operation["request_body_bytes"], 1024)
 
             with self.assertRaises(ServiceError) as raised:
                 conversations.send(
@@ -338,6 +341,18 @@ class TestConversations(PlatformTestCase):
                 pass
 
         self.assertEqual(raised.exception.code, "conversation_canceled")
+
+    def test_chat_progress_stage_does_not_regress(self):
+        workspace = self.create_workspace("进度阶段单调")
+        conversations = self.services.conversations
+
+        with conversations.operations.workspace_operation(workspace, "reply", "等待回复") as operation:
+            operation.update_progress("output", "模型正在输出", output_characters=12)
+            operation.update_progress("reasoning", "模型正在分析需求", output_characters=4)
+            state = conversations.operation_state(workspace.id)
+
+        self.assertEqual(state["stage"], "output")
+        self.assertEqual(state["output_characters"], 12)
 
     def test_generation_api_holds_workspace_operation_while_submitting(self):
         workspace = self.create_workspace("生成互斥工作站")

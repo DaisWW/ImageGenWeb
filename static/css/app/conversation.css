@@ -204,6 +204,22 @@
   font-size: 12px;
 }
 
+.message-pending-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.message-pending-label {
+  color: var(--text-soft);
+}
+
+.message-pending-meta {
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
 .message-cancel-button svg {
   width: 13px;
   height: 13px;

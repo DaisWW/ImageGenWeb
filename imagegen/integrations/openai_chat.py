@@ -4,7 +4,7 @@ import json
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 import requests
 
@@ -21,6 +21,16 @@ class ChatCompletion:
     elapsed_seconds: float | None = None
     request_body_bytes: int | None = None
     first_output_seconds: float | None = None
+
+
+@dataclass(frozen=True)
+class ChatProgress:
+    stage: str
+    elapsed_seconds: float
+    request_body_bytes: int | None = None
+    first_output_seconds: float | None = None
+    output_characters: int | None = None
+    upstream_status: int | None = None
 
 
 class OpenAIChatError(RuntimeError):
@@ -44,6 +54,41 @@ class OpenAIChatError(RuntimeError):
         self.details = details or {}
 
 
+ProgressCallback = Callable[[ChatProgress], None]
+
+
+@dataclass(frozen=True)
+class _ProgressReporter:
+    callback: ProgressCallback | None
+    started: float
+    request_body_bytes: int
+
+    def emit(
+        self,
+        stage: str,
+        *,
+        first_output_seconds: float | None = None,
+        output_characters: int | None = None,
+        upstream_status: int | None = None,
+    ) -> None:
+        if self.callback is None:
+            return
+        try:
+            self.callback(
+                ChatProgress(
+                    stage=stage,
+                    elapsed_seconds=_elapsed(self.started),
+                    request_body_bytes=self.request_body_bytes,
+                    first_output_seconds=first_output_seconds,
+                    output_characters=output_characters,
+                    upstream_status=upstream_status,
+                )
+            )
+        except Exception:
+            # Progress is observational and must never change the chat result.
+            pass
+
+
 class OpenAIChatClient:
     """面向兼容 OpenAI 的 Responses 流式接口的轻量客户端。"""
 
@@ -58,6 +103,7 @@ class OpenAIChatClient:
         messages: list[dict[str, Any]],
         max_output_tokens: int | None = None,
         reasoning_effort: str | None = None,
+        progress: ProgressCallback | None = None,
     ) -> ChatCompletion:
         started = time.monotonic()
         deadline = started + float(model.timeout_seconds)
@@ -78,12 +124,15 @@ class OpenAIChatClient:
             allow_nan=False,
         ).encode("utf-8")
         request_body_bytes = len(request_body)
+        reporter = _ProgressReporter(progress, started, request_body_bytes)
+        reporter.emit("request_prepared")
 
         response = None
         try:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise _timeout_error(started, request_body_bytes=request_body_bytes)
+            reporter.emit("connecting")
             response = self.session.post(
                 _endpoint(model.base_url),
                 headers={
@@ -112,8 +161,21 @@ class OpenAIChatClient:
                 started=started,
                 deadline=deadline,
                 request_body_bytes=request_body_bytes,
+                reporter=reporter,
             )
+        except OpenAIChatError as exc:
+            stage = {
+                "chat_timeout": "timeout",
+                "chat_connection_error": "connection_error",
+            }.get(exc.code, "upstream_error")
+            reporter.emit(
+                stage,
+                first_output_seconds=exc.details.get("first_output_seconds"),
+                upstream_status=exc.upstream_status,
+            )
+            raise
         except requests.Timeout as exc:
+            reporter.emit("timeout")
             raise _timeout_error(
                 started,
                 exception_type=exc.__class__.__name__,
@@ -121,11 +183,13 @@ class OpenAIChatClient:
             ) from exc
         except requests.RequestException as exc:
             if time.monotonic() >= deadline:
+                reporter.emit("timeout")
                 raise _timeout_error(
                     started,
                     exception_type=exc.__class__.__name__,
                     request_body_bytes=request_body_bytes,
                 ) from exc
+            reporter.emit("connection_error")
             raise OpenAIChatError(
                 "无法连接聊天模型",
                 code="chat_connection_error",
@@ -146,12 +210,14 @@ class OpenAIChatClient:
         started: float,
         deadline: float,
         request_body_bytes: int,
+        reporter: _ProgressReporter,
     ) -> ChatCompletion:
         text_parts: list[str] = []
         terminal: dict[str, Any] | None = None
         completed: dict[str, Any] | None = None
         invalid_event_count = 0
         first_output_seconds: float | None = None
+        output_characters = 0
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise _timeout_error(
@@ -164,6 +230,7 @@ class OpenAIChatClient:
         timer.start()
 
         try:
+            reporter.emit("upstream_connected")
             for data in _sse_payloads(response, deadline=deadline):
                 if time.monotonic() >= deadline:
                     raise requests.Timeout("聊天模型响应超过总超时限制")
@@ -175,12 +242,30 @@ class OpenAIChatClient:
                 if not isinstance(event, dict):
                     continue
                 event_type = str(event.get("type", "")).strip()
+                if event_type.startswith("response.reasoning_summary"):
+                    reporter.emit(
+                        "reasoning",
+                        first_output_seconds=first_output_seconds,
+                        output_characters=output_characters,
+                    )
+                    continue
                 if event_type == "response.output_text.delta":
                     delta = event.get("delta")
                     if isinstance(delta, str):
                         if first_output_seconds is None:
                             first_output_seconds = _elapsed(started)
+                            reporter.emit(
+                                "output_started",
+                                first_output_seconds=first_output_seconds,
+                                output_characters=0,
+                            )
                         text_parts.append(delta)
+                        output_characters += len(delta)
+                        reporter.emit(
+                            "output",
+                            first_output_seconds=first_output_seconds,
+                            output_characters=output_characters,
+                        )
                     continue
                 if event_type not in {
                     "response.completed",
@@ -211,9 +296,19 @@ class OpenAIChatClient:
                             "first_output_seconds": first_output_seconds,
                         },
                     )
+                reporter.emit(
+                    "completed",
+                    first_output_seconds=first_output_seconds,
+                    output_characters=output_characters,
+                )
                 break
         except (requests.RequestException, OSError, ValueError, AttributeError) as exc:
             if time.monotonic() >= deadline:
+                reporter.emit(
+                    "timeout",
+                    first_output_seconds=first_output_seconds,
+                    output_characters=output_characters,
+                )
                 raise _timeout_error(
                     started,
                     response=response,
@@ -221,6 +316,11 @@ class OpenAIChatClient:
                     request_body_bytes=request_body_bytes,
                     first_output_seconds=first_output_seconds,
                 ) from exc
+            reporter.emit(
+                "connection_error",
+                first_output_seconds=first_output_seconds,
+                output_characters=output_characters,
+            )
             raise OpenAIChatError(
                 "聊天模型连接中断，请重试",
                 code="chat_connection_error",
@@ -238,6 +338,11 @@ class OpenAIChatClient:
 
         if completed is None:
             if time.monotonic() >= deadline:
+                reporter.emit(
+                    "timeout",
+                    first_output_seconds=first_output_seconds,
+                    output_characters=output_characters,
+                )
                 raise _timeout_error(
                     started,
                     response=response,
@@ -259,6 +364,11 @@ class OpenAIChatClient:
             )
 
         if time.monotonic() >= deadline:
+            reporter.emit(
+                "timeout",
+                first_output_seconds=first_output_seconds,
+                output_characters=output_characters,
+            )
             raise _timeout_error(
                 started,
                 response=response,

@@ -217,6 +217,12 @@ test("switching workspaces stays interactive and pending chat remains cancelable
             busy: true,
             kind: "reply",
             label: "正在确认需求并整理最终提示词",
+            stage: "output",
+            stage_label: "模型正在输出",
+            elapsed_seconds: 12.4,
+            first_output_seconds: 4.2,
+            output_characters: 128,
+            request_body_bytes: 3 * 1024 * 1024,
             operation_id: operationId,
             started_at: new Date().toISOString(),
           },
@@ -240,8 +246,12 @@ test("switching workspaces stays interactive and pending chat remains cancelable
   }
 
   await expect(page.locator(".message-row.assistant.pending")).toContainText(
-    "正在确认需求并整理最终提示词",
+    "模型正在输出",
   );
+  await expect(page.locator(".message-row.assistant.pending")).toContainText("已耗时 12 秒");
+  await expect(page.locator(".message-row.assistant.pending")).toContainText("首输出 4.2 秒");
+  await expect(page.locator(".message-row.assistant.pending")).toContainText("已输出 128 字");
+  await expect(page.locator(".message-row.assistant.pending")).toContainText("请求 3.0 MiB");
   const cancelRequest = page.waitForResponse((response) => (
     response.request().method() === "POST"
       && new URL(response.url()).pathname

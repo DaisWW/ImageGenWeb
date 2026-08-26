@@ -131,7 +131,13 @@
           value: {
             role: "assistant",
             kind: "pending",
-            content: operation.label,
+            content: operation.stage_label || operation.label,
+            stage: operation.stage || "preparing",
+            stage_label: operation.stage_label || operation.label,
+            elapsed_seconds: operation.elapsed_seconds,
+            first_output_seconds: operation.first_output_seconds,
+            output_characters: operation.output_characters,
+            request_body_bytes: operation.request_body_bytes,
             created_at: operation.started_at || null,
             provider_label: this.el.chatModelSelect.selectedOptions[0]?.textContent || "",
             workspace_id: workspaceId,
@@ -152,6 +158,12 @@
         message.kind || "message",
         message.delivery_state || "stored",
         message.operation_id || "",
+        message.stage || "",
+        message.stage_label || "",
+        message.first_output_seconds !== null
+          && message.first_output_seconds !== undefined
+          ? "first-output"
+          : "waiting-output",
         message.delivery_error || message.retry_error || "",
       ].join(":");
     },
@@ -278,6 +290,7 @@
       ].filter(Boolean).join(" ");
       row.dataset.messageState = this.messageRenderState(message);
       if (message.id) row.dataset.messageId = message.id;
+      if (message.workspace_id) row.dataset.workspaceId = message.workspace_id;
 
       const avatar = document.createElement("span");
       avatar.className = "message-avatar";
@@ -316,8 +329,9 @@
       if (message.kind === "pending") {
         const pending = document.createElement("div");
         pending.className = "message-pending";
-        pending.innerHTML = '<span class="message-pending-dots" aria-hidden="true"><i></i><i></i><i></i></span><span></span>';
-        pending.lastElementChild.textContent = message.content || "正在等待 AI 回复";
+        pending.dataset.pendingProgress = "";
+        pending.innerHTML = '<span class="message-pending-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="message-pending-copy"><span class="message-pending-label"></span><small class="message-pending-meta"></small></span>';
+        this.updatePendingOperation(pending, message);
         card.append(pending);
         cancelAction = this.chatCancelButton(message, "取消等待");
       } else if (message.kind === "prompt_draft") {
@@ -510,6 +524,44 @@
       if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)} 秒`;
       const minutes = Math.floor(seconds / 60);
       return `${minutes} 分 ${Math.round(seconds % 60)} 秒`;
+    },
+
+    pendingOperationDetails(message) {
+      const details = [];
+      const startedAt = Date.parse(message.started_at || message.created_at || "");
+      const liveElapsed = Number.isFinite(startedAt)
+        ? Math.max(0, (Date.now() - startedAt) / 1000)
+        : NaN;
+      const elapsed = Math.max(Number(message.elapsed_seconds) || 0, liveElapsed);
+      if (Number.isFinite(elapsed)) details.push(`已耗时 ${this.formatElapsed(elapsed)}`);
+      if (message.first_output_seconds !== null && message.first_output_seconds !== undefined) {
+        const first = Number(message.first_output_seconds);
+        if (Number.isFinite(first)) details.push(`首输出 ${this.formatElapsed(first)}`);
+      }
+      const characters = Number(message.output_characters);
+      if (Number.isFinite(characters) && characters > 0) details.push(`已输出 ${characters} 字`);
+      const requestBytes = Number(message.request_body_bytes);
+      if (Number.isFinite(requestBytes) && requestBytes > 0) {
+        details.push(`请求 ${UI.formatBytes(requestBytes)}`);
+      }
+      return details.join(" · ");
+    },
+
+    updatePendingOperation(node, operation) {
+      if (!node || !operation) return;
+      const label = node.querySelector(".message-pending-label");
+      const meta = node.querySelector(".message-pending-meta");
+      if (label) label.textContent = operation.stage_label || operation.content || "正在等待 AI 回复";
+      if (meta) meta.textContent = this.pendingOperationDetails(operation);
+    },
+
+    updateChatOperationDisplays() {
+      const operations = this.chatOperations;
+      this.el.messageList.querySelectorAll("[data-pending-progress]").forEach((node) => {
+        const workspaceId = node.closest(".message-row")?.dataset.workspaceId;
+        const operation = workspaceId ? operations.get(workspaceId) : null;
+        if (operation) this.updatePendingOperation(node, operation);
+      });
     },
 
     newMessageId() {

@@ -428,6 +428,12 @@
         busy: true,
         kind: "reply",
         label,
+        stage: "preparing",
+        stage_label: label,
+        elapsed_seconds: 0,
+        first_output_seconds: null,
+        output_characters: 0,
+        request_body_bytes: null,
         started_at: new Date().toISOString(),
         operation_id: this.newMessageId(),
         message_id: messageId,
@@ -445,7 +451,9 @@
     },
 
     finishLocalChatOperation(workspaceId, operation) {
-      if (this.chatOperations.get(workspaceId) === operation) {
+      const current = this.chatOperations.get(workspaceId);
+      if (current === operation
+        || (current?.local && current.operation_id === operation.operation_id)) {
         this.chatOperations.delete(workspaceId);
       }
       this.renderWorkspaceList();
@@ -497,6 +505,28 @@
 
     syncServerChatOperation(workspaceId, operation) {
       const previous = this.chatOperations.get(workspaceId);
+      if (previous?.local && operation?.busy) {
+        const sameOperation = ["operation_id", "message_id"].some((key) => (
+          previous[key]
+          && operation[key]
+          && String(previous[key]).toLowerCase() === String(operation[key]).toLowerCase()
+        ));
+        if (!sameOperation) return false;
+        const next = {
+          ...previous,
+          ...operation,
+          local: true,
+          controller: previous.controller,
+          canceled: previous.canceled,
+        };
+        const changed = previous.stage !== next.stage
+          || previous.stage_label !== next.stage_label
+          || previous.first_output_seconds !== next.first_output_seconds
+          || previous.output_characters !== next.output_characters
+          || previous.request_body_bytes !== next.request_body_bytes;
+        this.chatOperations.set(workspaceId, next);
+        return changed;
+      }
       if (previous?.local) return false;
       const canceled = this.canceledChatOperationIds.get(workspaceId);
       if (operation?.busy && canceled?.size) {
@@ -513,6 +543,11 @@
           && previous.started_at === next.started_at
           && previous.operation_id === next.operation_id
           && previous.message_id === next.message_id
+          && previous.stage === next.stage
+          && previous.stage_label === next.stage_label
+          && previous.first_output_seconds === next.first_output_seconds
+          && previous.output_characters === next.output_characters
+          && previous.request_body_bytes === next.request_body_bytes
         ));
       if (unchanged) return false;
       if (operation?.busy) {

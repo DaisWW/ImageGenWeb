@@ -19,7 +19,7 @@ from imagegen.extensions import db
 from imagegen.integrations.images import (
     ProviderResult,
 )
-from imagegen.integrations.openai_chat import ChatCompletion, OpenAIChatError
+from imagegen.integrations.openai_chat import ChatCompletion, ChatProgress, OpenAIChatError
 from imagegen.models import (
     RuntimeLog,
 )
@@ -237,6 +237,7 @@ class FakeChatClient:
         messages,
         max_output_tokens=None,
         reasoning_effort=None,
+        progress=None,
     ):
         self.calls.append(
             {
@@ -248,6 +249,16 @@ class FakeChatClient:
                 "reasoning_effort": reasoning_effort,
             }
         )
+        if progress:
+            progress(ChatProgress(stage="upstream_connected", elapsed_seconds=0.1))
+            progress(
+                ChatProgress(
+                    stage="output",
+                    elapsed_seconds=0.2,
+                    first_output_seconds=0.1,
+                    output_characters=1,
+                )
+            )
         if "工作站生成一个简短、具体的标题" in system:
             content = "红发蓝眼中年男性角色"
         elif "对话行为规则如下" in system:
@@ -307,6 +318,7 @@ class FailingOnceChatClient(FakeChatClient):
         messages,
         max_output_tokens=None,
         reasoning_effort=None,
+        progress=None,
     ):
         result = super().complete(
             model,
@@ -314,6 +326,7 @@ class FailingOnceChatClient(FakeChatClient):
             messages=messages,
             max_output_tokens=max_output_tokens,
             reasoning_effort=reasoning_effort,
+            progress=progress,
         )
         if len(self.calls) == 1:
             raise OpenAIChatError(
@@ -341,6 +354,7 @@ class BlockingFirstChatClient:
         messages,
         max_output_tokens=None,
         reasoning_effort=None,
+        progress=None,
     ):
         with self._lock:
             self.calls.append(
@@ -353,6 +367,14 @@ class BlockingFirstChatClient:
             )
             call_number = len(self.calls)
         if call_number == 1:
+            if progress:
+                progress(
+                    ChatProgress(
+                        stage="upstream_connected",
+                        elapsed_seconds=0.1,
+                        request_body_bytes=1024,
+                    )
+                )
             self.started.set()
             if not self.release.wait(10):
                 raise RuntimeError("blocking chat client timed out")

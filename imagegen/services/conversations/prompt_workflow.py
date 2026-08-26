@@ -10,7 +10,7 @@ from ...integrations.openai_chat import ChatCompletion, OpenAIChatError
 from ...models import Asset, ConversationMessage, Workspace, utcnow
 from ..creative import get_creative_direction
 from ..prompt_drafts import PromptDraftReview
-from .operations import ConversationOperationRegistry
+from .operations import ConversationOperation, ConversationOperationRegistry
 from .prompts import generation_mode_prompt
 from .support import ConversationDependencies, ConversationSupport
 
@@ -37,7 +37,7 @@ class PromptDraftWorkflow(ConversationSupport):
     ) -> ConversationMessage:
         with self.operations.workspace_operation(
             workspace, "prompt_draft", "正在检查并总结生图需求"
-        ):
+        ) as operation:
             return self._create_prompt_draft(
                 workspace,
                 model_id=model_id,
@@ -46,6 +46,7 @@ class PromptDraftWorkflow(ConversationSupport):
                 reference_ids=reference_ids,
                 creative_direction_id=creative_direction_id,
                 gallery_category_id=gallery_category_id,
+                operation=operation,
             )
 
     def _create_prompt_draft(
@@ -58,6 +59,7 @@ class PromptDraftWorkflow(ConversationSupport):
         reference_ids: tuple[str, ...],
         creative_direction_id: str,
         gallery_category_id: str,
+        operation: ConversationOperation,
     ) -> ConversationMessage:
         gallery_category_id = str(gallery_category_id or "auto").strip().lower()
         self._ensure_workspace_unlocked(workspace)
@@ -109,6 +111,7 @@ class PromptDraftWorkflow(ConversationSupport):
             active_series_contract=series_anchor.anchor.contract if series_anchor else {},
         )
         system_prompt = review.system_prompt()
+        operation.update_progress("context", "正在整理会话上下文")
         try:
             context = self.context.build(
                 workspace,
@@ -123,9 +126,11 @@ class PromptDraftWorkflow(ConversationSupport):
                 messages=context,
                 max_output_tokens=min(model.max_output_tokens, 2400),
                 reasoning_effort=model.effective_review_reasoning_effort,
+                progress=operation.client_progress,
             )
         except OpenAIChatError as exc:
             self._raise_chat_error(workspace, model, "chat.prompt_draft", exc)
+        operation.update_progress("parsing", "正在解析模型结果")
         try:
             draft = review.finalize(
                 review.parse(result.content),
@@ -156,6 +161,7 @@ class PromptDraftWorkflow(ConversationSupport):
         )
         self._attach(message, generation_references)
         db.session.add(message)
+        operation.update_progress("saving", "正在保存提示词草稿")
         self._record_chat_success(
             workspace,
             model,

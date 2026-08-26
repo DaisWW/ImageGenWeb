@@ -247,6 +247,52 @@ class TestProviderAndRuntime(PlatformTestCase):
             {"effort": "low"},
         )
 
+    def test_chat_stream_reports_safe_progress_without_delta_text(self):
+        model = self.app.extensions["chat_model_registry"].get("test-chat")
+        response = FakeChatResponse(
+            lines=[
+                'data: {"type":"response.reasoning_summary_text.delta","delta":"内部内容不应透传"}',
+                "",
+                'data: {"type":"response.output_text.delta","delta":"测试"}',
+                "",
+                'data: {"type":"response.completed","response":{"id":"progress-test","status":"completed"}}',
+                "",
+            ]
+        )
+        events = []
+        result = OpenAIChatClient(RecordingChatSession([response])).complete(
+            model,
+            system="系统提示",
+            messages=[{"role": "user", "content": "你好"}],
+            progress=events.append,
+        )
+
+        names = [event.stage for event in events]
+        self.assertIn("upstream_connected", names)
+        self.assertIn("reasoning", names)
+        self.assertIn("output_started", names)
+        self.assertIn("output", names)
+        self.assertIn("completed", names)
+        self.assertEqual(result.content, "测试")
+        self.assertEqual(events[-1].stage, "completed")
+        self.assertEqual(events[-1].output_characters, 2)
+        self.assertNotIn("内部内容不应透传", repr(events))
+
+    def test_chat_progress_callback_cannot_change_chat_result(self):
+        model = self.app.extensions["chat_model_registry"].get("test-chat")
+
+        def broken_progress(_event):
+            raise RuntimeError("progress consumer failed")
+
+        result = OpenAIChatClient(RecordingChatSession()).complete(
+            model,
+            system="系统提示",
+            messages=[{"role": "user", "content": "你好"}],
+            progress=broken_progress,
+        )
+
+        self.assertEqual(result.content, "测试回复")
+
     def test_chat_request_converts_image_parts_for_responses_api(self):
         model = self.app.extensions["chat_model_registry"].get("test-chat")
         session = RecordingChatSession()
