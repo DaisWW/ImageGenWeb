@@ -44,13 +44,13 @@ def _robust_duration_estimate(
 
 class GenerationDurationEstimator:
     def estimate_seconds(self, job: GenerationJob, channel: Channel) -> Decimal:
-        samples = self._duration_samples(job, exact=True)
+        samples = self._duration_samples(job, channel, exact=True)
         if len(samples) < _DURATION_SAMPLE_TARGET:
-            related = self._duration_samples(job, exact=False)
+            related = self._duration_samples(job, channel, exact=False)
             samples = (
                 related
                 if len(related) >= _DURATION_SAMPLE_TARGET
-                else max(related, self._runtime_duration_samples(job), key=len)
+                else max(related, self._runtime_duration_samples(job, channel), key=len)
             )
 
         estimate = _robust_duration_estimate(
@@ -60,14 +60,16 @@ class GenerationDurationEstimator:
         estimate = min(max(estimate, 10.0), float(channel.limits.timeout_seconds))
         return Decimal(str(round(estimate, 3)))
 
-    def _duration_samples(self, job: GenerationJob, *, exact: bool) -> list[float]:
+    def _duration_samples(
+        self, job: GenerationJob, channel: Channel, *, exact: bool
+    ) -> list[float]:
         query = (
             select(GenerationItem.elapsed_seconds)
             .join(GenerationJob)
             .where(
                 GenerationItem.status == "succeeded",
                 GenerationItem.elapsed_seconds.is_not(None),
-                GenerationJob.channel_id == job.channel_id,
+                GenerationItem.channel_id == channel.identifier,
                 GenerationJob.model == job.model,
                 GenerationJob.kind == job.kind,
                 GenerationJob.mode == job.mode,
@@ -83,7 +85,7 @@ class GenerationDurationEstimator:
         return _duration_values(db.session.scalars(query))
 
     @staticmethod
-    def _runtime_duration_samples(job: GenerationJob) -> list[float]:
+    def _runtime_duration_samples(job: GenerationJob, channel: Channel) -> list[float]:
         query = (
             select(RuntimeLog.elapsed_seconds)
             .where(
@@ -91,7 +93,7 @@ class GenerationDurationEstimator:
                 RuntimeLog.event == "generation.provider",
                 RuntimeLog.status == "success",
                 RuntimeLog.elapsed_seconds.is_not(None),
-                RuntimeLog.provider_id == job.channel_id,
+                RuntimeLog.provider_id == channel.identifier,
                 RuntimeLog.model == job.model,
             )
             .order_by(RuntimeLog.created_at.desc())

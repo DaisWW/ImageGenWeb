@@ -17,6 +17,14 @@ SUPPORTED_ADAPTERS = {"openai_images"}
 SUPPORTED_MODES = {"text2img", "img2img"}
 SUPPORTED_FORMATS = {"png", "jpeg", "webp"}
 
+# A queued item uses these sentinel values until the Worker assigns a concrete
+# provider.  They are intentionally outside the normal administrator channel
+# naming convention so historical, explicitly-routed jobs remain readable.
+AUTO_CHANNEL_ID = "__auto__"
+AUTO_CHANNEL_LABEL = "系统自动调度"
+MIXED_CHANNEL_ID = "__mixed__"
+MIXED_CHANNEL_LABEL = "多渠道自动调度"
+
 
 @dataclass(frozen=True)
 class ChannelCapabilities:
@@ -64,6 +72,7 @@ class Channel:
     capabilities: ChannelCapabilities
     limits: ChannelLimits
     api_key: str = field(repr=False)
+    priority: int = 100
 
     @property
     def configured(self) -> bool:
@@ -83,6 +92,7 @@ class Channel:
         return {
             "id": self.identifier,
             "label": self.label,
+            "priority": self.priority,
             "enabled": self.enabled,
             "configured": self.configured,
             "models": [
@@ -100,6 +110,7 @@ class Channel:
         return {
             "id": self.identifier,
             "label": self.label,
+            "priority": self.priority,
             "enabled": self.enabled,
             "configured": self.configured,
             "adapter": self.adapter,
@@ -166,9 +177,11 @@ class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
         self.reload_if_changed()
         with self._lock:
             channels = list(self._require_snapshot().channels.values())
-        return (
-            channels if include_disabled else [channel for channel in channels if channel.enabled]
-        )
+        if not include_disabled:
+            channels = [channel for channel in channels if channel.enabled]
+        # Python's sort is stable, so equal priorities retain the
+        # administrator's configured order.
+        return sorted(channels, key=lambda channel: channel.priority)
 
     def get(self, identifier: str, *, require_available: bool = True) -> Channel:
         self.reload_if_changed()
@@ -189,7 +202,12 @@ class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
                 "source": self._source,
                 "last_error": self._last_error,
                 "queue": snapshot.queue.as_dict(),
-                "channels": [channel.editable_dict() for channel in snapshot.channels.values()],
+                "channels": [
+                    channel.editable_dict()
+                    for channel in sorted(
+                        snapshot.channels.values(), key=lambda item: item.priority
+                    )
+                ],
             }
 
     def _parse(self, raw: Any, raw_bytes: bytes) -> ChannelSnapshot:
@@ -235,7 +253,10 @@ class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
         identifier = required_string(raw, "id", 64, section="渠道")
         if not identifier.replace("-", "").replace("_", "").isalnum():
             raise ValueError(f"渠道 ID 无效：{identifier}")
+        if identifier in {AUTO_CHANNEL_ID, MIXED_CHANNEL_ID}:
+            raise ValueError(f"渠道 ID 为系统保留值：{identifier}")
         label = required_string(raw, "label", 100, section="渠道")
+        priority = bounded_int(raw, "priority", 100, 1, 10000)
         adapter = raw.get("adapter", "openai_images")
         if adapter not in SUPPORTED_ADAPTERS:
             raise ValueError(f"{label} 使用了不支持的适配器：{adapter}")
@@ -290,6 +311,7 @@ class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
         return Channel(
             identifier=identifier,
             label=label,
+            priority=priority,
             enabled=as_bool(raw.get("enabled", True)),
             adapter=adapter,
             base_url=base_url,

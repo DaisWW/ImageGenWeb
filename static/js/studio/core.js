@@ -284,7 +284,6 @@
         canvasConflictApply: byId("canvasConflictApply"),
         canvasConflictKeep: byId("canvasConflictKeep"),
         modeSwitch: byId("modeSwitch"),
-        channelSelect: byId("channelSelect"),
         modelSelect: byId("modelSelect"),
         sizeInput: byId("sizeInput"),
         sizeOptions: byId("sizeOptions"),
@@ -521,10 +520,10 @@
         const button = event.target.closest("[data-mode]");
         if (button && !button.disabled) this.setMode(button.dataset.mode, true);
       });
-      this.el.channelSelect.addEventListener("change", () => {
-        this.applyChannel(null, true);
+      this.el.modelSelect.addEventListener("change", () => {
+        this.applyChannel(null, false);
+        this.settingChanged();
       });
-      this.el.modelSelect.addEventListener("change", () => this.settingChanged());
       this.el.formatSelect.addEventListener("change", () => {
         this.updateTransparentBackgroundState();
         this.settingChanged();

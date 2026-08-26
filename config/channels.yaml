@@ -11,6 +11,8 @@ queue:
 channels:
   - id: current
     label: 刀哥的
+    # 数值越小越优先；系统会在该渠道达到并发上限后自动使用下一渠道。
+    priority: 1
     enabled: true
     adapter: openai_images
     base_url: https://fuck.codexapis.com
@@ -40,6 +42,7 @@ channels:
 
   - id: lucen
     label: Lucen
+    priority: 10
     enabled: true
     adapter: openai_images
     base_url: https://lucen.plus

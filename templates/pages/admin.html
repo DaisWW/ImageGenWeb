@@ -53,7 +53,7 @@
         </div>
       </div>
       <div class="inline-alert" id="configError" hidden></div>
-      <div class="table-wrap"><table><thead><tr><th>渠道</th><th>状态</th><th>单价</th><th>模型</th><th>并发</th><th>能力</th><th class="actions-cell">操作</th></tr></thead><tbody id="channelTableBody"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>渠道</th><th>状态</th><th>优先级</th><th>单价</th><th>模型</th><th>并发</th><th>能力</th><th class="actions-cell">操作</th></tr></thead><tbody id="channelTableBody"></tbody></table></div>
     </div>
     <div class="admin-config-section">
       <div class="view-toolbar">
@@ -174,6 +174,7 @@
     <div class="form-grid two-columns">
       <label class="field"><span>渠道 ID</span><input name="id" maxlength="64" pattern="[A-Za-z0-9_-]+" required></label>
       <label class="field"><span>显示名称</span><input name="label" maxlength="100" required></label>
+      <label class="field"><span>调度优先级（越小越优先）</span><input name="priority" type="number" min="1" max="10000" required></label>
     </div>
     <label class="check-line"><input type="checkbox" name="enabled" checked><span>启用渠道</span></label>
     <label class="field"><span>API 地址</span><input type="url" name="base_url" maxlength="500" required></label>

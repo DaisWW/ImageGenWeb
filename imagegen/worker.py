@@ -14,7 +14,12 @@ from flask import Flask
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import selectinload
 
-from .config.channels import ChannelRegistry
+from .config.channels import (
+    AUTO_CHANNEL_ID,
+    AUTO_CHANNEL_LABEL,
+    Channel,
+    ChannelRegistry,
+)
 from .errors import ServiceError
 from .extensions import db
 from .integrations.images import (
@@ -203,9 +208,6 @@ class GenerationWorker:
 
     def _schedule_available(self) -> None:
         with self.app.app_context():
-            available = self.channels.queue.global_concurrency - len(self._futures)
-            if available <= 0:
-                return
             active_rows = db.session.execute(
                 select(
                     GenerationItem.user_id, GenerationItem.channel_id, func.count(GenerationItem.id)
@@ -215,49 +217,74 @@ class GenerationWorker:
             ).all()
             user_active: dict[int, int] = {}
             channel_active: dict[str, int] = {}
+            database_active = 0
             for user_id, channel_id, count in active_rows:
+                database_active += int(count)
                 user_active[user_id] = user_active.get(user_id, 0) + count
                 channel_active[channel_id] = channel_active.get(channel_id, 0) + count
+            # Futures normally mirror the database rows, but counting both
+            # sources protects the global cap while a crashed or restarted
+            # item is waiting for stale-claim recovery.
+            active = max(len(self._futures), database_active)
+            available = self.channels.queue.global_concurrency - active
+            if available <= 0:
+                db.session.remove()
+                return
 
             candidates = list(
                 db.session.scalars(
                     select(GenerationItem)
                     .options(
                         selectinload(GenerationItem.user),
-                        selectinload(GenerationItem.job),
+                        selectinload(GenerationItem.job).selectinload(GenerationJob.references),
                     )
                     .where(GenerationItem.status == "queued")
                     .order_by(GenerationItem.created_at, GenerationItem.position)
                     .limit(200)
                 )
             )
-            scheduled_users: set[int] = set()
             selected: list[str] = []
-            for item in candidates:
-                if len(selected) >= available:
-                    break
-                if item.user_id in scheduled_users and len(candidates) > available:
-                    continue
-                try:
-                    channel = self.channels.get(item.channel_id)
-                except ValueError:
-                    self._fail_unavailable_item(item.id)
-                    continue
-                if channel_active.get(item.channel_id, 0) >= channel.limits.max_concurrency:
-                    continue
-                if user_active.get(item.user_id, 0) >= item.user.generation_concurrency:
-                    continue
-                if self._claim(item.id, channel):
-                    selected.append(item.id)
-                    scheduled_users.add(item.user_id)
-                    user_active[item.user_id] = user_active.get(item.user_id, 0) + 1
-                    channel_active[item.channel_id] = channel_active.get(item.channel_id, 0) + 1
+            selected_ids: set[str] = set()
+            unavailable_ids: set[str] = set()
+            # Give each user an initial opportunity when several users are
+            # waiting, then use any remaining slots to fill their allowed
+            # per-user concurrency.  This preserves queue fairness without
+            # artificially limiting a single user's large batch to one item.
+            passes = (True, False) if len({item.user_id for item in candidates}) > 1 else (False,)
+            for first_for_user in passes:
+                scheduled_users: set[int] = set()
+                for item in candidates:
+                    if len(selected) >= available:
+                        break
+                    if item.id in selected_ids:
+                        continue
+                    if item.id in unavailable_ids:
+                        continue
+                    if first_for_user and item.user_id in scheduled_users:
+                        continue
+                    channel = self._select_channel_for_item(item, channel_active)
+                    if channel is None and not self._has_routable_channel(item):
+                        self._fail_unavailable_item(item.id)
+                        unavailable_ids.add(item.id)
+                        continue
+                    if channel is None:
+                        continue
+                    if user_active.get(item.user_id, 0) >= item.user.generation_concurrency:
+                        continue
+                    if self._claim(item.id, channel):
+                        selected.append(item.id)
+                        selected_ids.add(item.id)
+                        scheduled_users.add(item.user_id)
+                        user_active[item.user_id] = user_active.get(item.user_id, 0) + 1
+                        channel_active[channel.identifier] = (
+                            channel_active.get(channel.identifier, 0) + 1
+                        )
             db.session.remove()
 
         for item_id in selected:
             self._futures[item_id] = self._executor().submit(self._process_item, item_id)
 
-    def _claim(self, item_id: str, channel) -> bool:
+    def _claim(self, item_id: str, channel: Channel | None = None) -> bool:
         db.session.expire_all()
         job_id = db.session.scalar(
             select(GenerationItem.job_id).where(GenerationItem.id == item_id)
@@ -273,6 +300,28 @@ class GenerationWorker:
             db.session.rollback()
             return False
 
+        item_preview = db.session.get(GenerationItem, item_id, populate_existing=True)
+        if item_preview is None or item_preview.status != "queued":
+            db.session.rollback()
+            return False
+        if channel is None:
+            channel = self._select_channel_for_item(item_preview, {})
+        if channel is None:
+            db.session.rollback()
+            return False
+        if channel.price_rmb > job.price_per_image_rmb:
+            db.session.rollback()
+            return False
+        if not channel.configured or not self._channel_supports_item(channel, item_preview):
+            db.session.rollback()
+            return False
+        if (
+            item_preview.channel_id not in {"", AUTO_CHANNEL_ID}
+            and item_preview.channel_id != channel.identifier
+        ):
+            db.session.rollback()
+            return False
+
         now = utcnow()
         claimed = db.session.execute(
             update(GenerationItem)
@@ -283,6 +332,9 @@ class GenerationWorker:
             )
             .values(
                 status="running",
+                channel_id=channel.identifier,
+                channel_label=channel.label,
+                provider_price_rmb=money(channel.price_rmb),
                 claimed_by=self.worker_id,
                 started_at=now,
                 heartbeat_at=now,
@@ -297,8 +349,83 @@ class GenerationWorker:
         if job.started_at is None:
             job.started_at = now
         job.status = "running"
+        self.generations.refresh_job_channel_summary(job)
         db.session.commit()
         return True
+
+    def _select_channel_for_item(
+        self,
+        item: GenerationItem,
+        channel_active: dict[str, int],
+    ) -> Channel | None:
+        """Pick the first capable channel with an open slot.
+
+        The registry is priority ordered, so iterating it implements the
+        administrator's lower-number-first policy while still filling the
+        next provider when a higher-priority channel is saturated.
+        """
+
+        for channel in self._routable_channels(item):
+            if channel_active.get(channel.identifier, 0) >= channel.limits.max_concurrency:
+                continue
+            return channel
+        return None
+
+    def _has_routable_channel(self, item: GenerationItem) -> bool:
+        """Return whether the item has any capable configured provider.
+
+        This intentionally ignores capacity; callers use it to distinguish a
+        temporarily full queue from a permanently unavailable configuration.
+        """
+
+        return bool(self._routable_channels(item))
+
+    def _routable_channels(self, item: GenerationItem) -> tuple[Channel, ...]:
+        if item.channel_id not in {"", AUTO_CHANNEL_ID}:
+            try:
+                channels = (self.channels.get(item.channel_id, require_available=False),)
+            except ValueError:
+                return ()
+        else:
+            channels = tuple(self.channels.list(include_disabled=False))
+        return tuple(
+            channel
+            for channel in channels
+            if channel.configured
+            and channel.price_rmb <= item.job.price_per_image_rmb
+            and self._channel_supports_item(channel, item)
+        )
+
+    @staticmethod
+    def _channel_supports_item(channel: Channel, item: GenerationItem) -> bool:
+        if item.job.mode not in channel.capabilities.modes:
+            return False
+        if item.job.output_format not in channel.capabilities.formats:
+            return False
+        try:
+            channel.get_model(item.job.model)
+        except ValueError:
+            return False
+        references = getattr(item.job, "references", ())
+        if len(references) > channel.capabilities.max_reference_images:
+            return False
+        reference_bytes = []
+        for reference in references:
+            asset = getattr(reference, "asset", None)
+            byte_count = int(getattr(asset, "byte_count", 0) or 0)
+            reference_bytes.append(byte_count)
+            if byte_count > channel.capabilities.max_reference_image_mb * 1024 * 1024:
+                return False
+        if sum(reference_bytes) > channel.capabilities.max_reference_total_mb * 1024 * 1024:
+            return False
+        return True
+
+    @staticmethod
+    def _provider_fields(item: GenerationItem, job: GenerationJob) -> tuple[str, str]:
+        identifier = str(item.channel_id or "").strip()
+        if not identifier or identifier == AUTO_CHANNEL_ID:
+            return AUTO_CHANNEL_ID, AUTO_CHANNEL_LABEL
+        return identifier, str(item.channel_label or job.channel_label or identifier)
 
     def _process_item(self, item_id: str) -> None:
         started = time.monotonic()
@@ -485,6 +612,7 @@ class GenerationWorker:
             item.output_height = stored.image.height
             self.billing.capture(user, job, item)
             self.generations.refresh_job_status(job)
+            provider_id, provider_label = self._provider_fields(item, job)
             self.runtime_logs.record(
                 category="generation",
                 event="generation.provider",
@@ -497,8 +625,8 @@ class GenerationWorker:
                 workspace_label=job.workspace.name,
                 job_id=job.id,
                 item_id=item.id,
-                provider_id=job.channel_id,
-                provider_label=job.channel_label,
+                provider_id=provider_id,
+                provider_label=provider_label,
                 model=job.model,
                 upstream_request_id=request_id,
                 elapsed_seconds=float(item.elapsed_seconds),
@@ -561,6 +689,7 @@ class GenerationWorker:
             self.billing.release(user, job, money(job.price_per_image_rmb))
             self.generations.refresh_job_status(job)
         elapsed_seconds = round(time.monotonic() - started, 3)
+        provider_id, provider_label = self._provider_fields(item, job)
         self.runtime_logs.record(
             category="generation",
             event="generation.provider",
@@ -573,8 +702,8 @@ class GenerationWorker:
             workspace_label=job.workspace.name,
             job_id=job.id,
             item_id=item.id,
-            provider_id=job.channel_id,
-            provider_label=job.channel_label,
+            provider_id=provider_id,
+            provider_label=provider_label,
             model=job.model,
             error_code=code,
             http_status=upstream_status,
@@ -636,6 +765,7 @@ class GenerationWorker:
         item.completed_at = utcnow()
         self.billing.release(user, job, money(job.price_per_image_rmb))
         self.generations.refresh_job_status(job)
+        provider_id, provider_label = self._provider_fields(item, job)
         self.runtime_logs.record(
             category="generation",
             event="generation.channel_unavailable",
@@ -648,8 +778,8 @@ class GenerationWorker:
             workspace_label=job.workspace.name,
             job_id=job.id,
             item_id=item.id,
-            provider_id=job.channel_id,
-            provider_label=job.channel_label,
+            provider_id=provider_id,
+            provider_label=provider_label,
             model=job.model,
             error_code=item.error_code,
         )
@@ -775,6 +905,7 @@ class GenerationWorker:
         item.completed_at = utcnow()
         self.billing.release(user, job, money(job.price_per_image_rmb))
         self.generations.refresh_job_status(job)
+        provider_id, provider_label = self._provider_fields(item, job)
         self.runtime_logs.record(
             category="worker",
             event="worker.recovered_item",
@@ -788,8 +919,8 @@ class GenerationWorker:
             workspace_label=job.workspace.name,
             job_id=job.id,
             item_id=item.id,
-            provider_id=job.channel_id,
-            provider_label=job.channel_label,
+            provider_id=provider_id,
+            provider_label=provider_label,
             model=job.model,
             error_code=item.error_code,
             details={"worker_id": self.worker_id, "immediate": immediate},

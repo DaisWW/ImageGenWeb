@@ -13,7 +13,6 @@ CANVAS_RESOLUTIONS = {"panel", "conversation"}
 
 @dataclass(frozen=True)
 class SubmitGeneration:
-    channel_id: str
     model: str
     mode: str
     prompt: str
@@ -26,6 +25,9 @@ class SubmitGeneration:
     quality: str = "high"
     workflow: dict[str, object] = field(default_factory=dict)
     transparent_background: bool = False
+    # Kept as an optional compatibility field for older API clients.  New
+    # submissions are always routed by the Worker and ignore this value.
+    channel_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +149,7 @@ def sanitize_workflow(value: object) -> dict[str, object]:
         "exploration_plan",
         "canvas_request",
         "canvas_resolution",
+        "channel_routing",
     }
     result = {key: value[key] for key in allowed if key in value}
     result["prompt_draft_id"] = str(result.get("prompt_draft_id", "")).strip().lower()[:32]
@@ -253,6 +256,7 @@ def sanitize_workflow(value: object) -> dict[str, object]:
             result["canvas_resolution"] = canvas_resolution
     result["brief"] = _sanitize_workflow_mapping(result.get("brief"))
     result["production_spec"] = _sanitize_workflow_mapping(result.get("production_spec"))
+    result["channel_routing"] = _sanitize_workflow_mapping(result.get("channel_routing"))
     return result
 
 

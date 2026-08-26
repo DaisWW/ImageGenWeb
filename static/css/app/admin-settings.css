@@ -454,6 +454,22 @@ tbody tr:hover td {
   object-fit: contain;
 }
 
+.admin-output-channel {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  max-width: calc(100% - 10px);
+  overflow: hidden;
+  padding: 2px 5px;
+  border-radius: 3px;
+  color: var(--text);
+  background: rgb(9 11 15 / 78%);
+  font-size: 9px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .admin-media-tile:hover {
   border-color: var(--accent);
   background: var(--surface-3);

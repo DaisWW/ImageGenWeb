@@ -6,8 +6,104 @@
   } = window.ImageGenStudio;
 
   Object.assign(StudioApp.prototype, {
+    routingChannels() {
+      return [...(this.channels || [])]
+        .filter((channel) => channel.enabled !== false && channel.configured !== false)
+        .sort((left, right) => (
+          Number(left.priority ?? 100) - Number(right.priority ?? 100)
+        ));
+    },
+
+    generationRoutingCandidates(settings = {}, workspaceId = this.activeWorkspace?.id) {
+      const modelId = String(settings.model || "").trim();
+      const mode = String(settings.mode || "").trim();
+      const outputFormat = String(settings.output_format || "").trim();
+      const referenceCount = mode === "img2img"
+        ? this.currentSelection(workspaceId).size
+        : 0;
+      return this.routingChannels().filter((channel) => {
+        if (modelId && !(channel.models || []).some((model) => model.id === modelId)) {
+          return false;
+        }
+        if (mode && !(channel.capabilities?.modes || []).includes(mode)) return false;
+        if (
+          outputFormat
+          && !(channel.capabilities?.formats || []).includes(outputFormat)
+        ) return false;
+        if (
+          referenceCount > Number(channel.capabilities?.max_reference_images || 0)
+        ) return false;
+        return true;
+      });
+    },
+
+    routingProfile(modelId = "") {
+      const allChannels = this.routingChannels();
+      const normalizedModelId = String(modelId || "").trim();
+      const channels = normalizedModelId
+        ? allChannels.filter((channel) => (
+          (channel.models || []).some((model) => model.id === normalizedModelId)
+        ))
+        : allChannels;
+      if (!channels.length) return null;
+      if (channels.length === 1) return channels[0];
+      const models = [];
+      const modelIds = new Set();
+      const modes = new Set();
+      const formats = new Set();
+      const sizes = new Set();
+      let maxReferenceImages = 0;
+      let maxReferenceImageMb = 0;
+      let maxReferenceTotalMb = 0;
+      channels.forEach((channel) => {
+        (channel.models || []).forEach((model) => {
+          if (!modelIds.has(model.id)) {
+            modelIds.add(model.id);
+            models.push(model);
+          }
+        });
+        (channel.capabilities?.modes || []).forEach((mode) => modes.add(mode));
+        (channel.capabilities?.formats || []).forEach((format) => formats.add(format));
+        (channel.capabilities?.sizes || []).forEach((size) => sizes.add(size));
+        maxReferenceImages = Math.max(
+          maxReferenceImages,
+          Number(channel.capabilities?.max_reference_images || 0),
+        );
+        maxReferenceImageMb = Math.max(
+          maxReferenceImageMb,
+          Number(channel.capabilities?.max_reference_image_mb || 0),
+        );
+        maxReferenceTotalMb = Math.max(
+          maxReferenceTotalMb,
+          Number(channel.capabilities?.max_reference_total_mb || 0),
+        );
+      });
+      return {
+        id: "__auto__",
+        label: "系统自动调度",
+        configured: true,
+        price_rmb: Math.max(...channels.map((channel) => Number(channel.price_rmb || 0))),
+        models,
+        capabilities: {
+          modes: [...modes],
+          formats: [...formats],
+          sizes: [...sizes],
+          max_reference_images: maxReferenceImages,
+          max_reference_image_mb: maxReferenceImageMb,
+          max_reference_total_mb: maxReferenceTotalMb,
+        },
+        limits: {
+          max_concurrency: channels.reduce(
+            (total, channel) => total + Number(channel.limits?.max_concurrency || 0),
+            0,
+          ),
+        },
+      };
+    },
+
     currentChannel() {
-      return this.channels.find((channel) => channel.id === this.el.channelSelect.value) || null;
+      return this.routingProfile(this.el?.modelSelect?.value || "")
+        || this.routingProfile();
     },
 
     renderCreativeDirectionOptions(selectedId = "auto") {
@@ -49,12 +145,11 @@
 
     referenceSelectionLimit(target, workspace = this.activeWorkspace) {
       if (target === "chat") return this.limits.max_chat_attachments;
-      const channelId = workspace?.id === this.activeWorkspace?.id
-        ? this.el.channelSelect.value
-        : workspace?.settings?.channel_id;
-      const channel = this.channels.find((item) => item.id === channelId);
-      const limit = channel?.capabilities.max_reference_images || 0;
-      return limit;
+      const modelId = workspace?.id === this.activeWorkspace?.id
+        ? this.el?.modelSelect?.value
+        : workspace?.settings?.model;
+      const profile = this.routingProfile(modelId) || this.routingProfile();
+      return profile?.capabilities?.max_reference_images || 0;
     },
 
     trimReferenceSelection(selection, limit) {

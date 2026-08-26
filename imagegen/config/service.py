@@ -8,7 +8,7 @@ from ..errors import ServiceError
 from ..extensions import db
 from ..models import GenerationItem
 from ..validation import as_bool
-from .channels import ChannelRegistry, ChannelSnapshot
+from .channels import AUTO_CHANNEL_ID, MIXED_CHANNEL_ID, ChannelRegistry, ChannelSnapshot
 from .chat_models import DEFAULT_WORKSPACE_PROMPTS, ChatModelRegistry
 from .repository import RuntimeConfigRepository
 
@@ -92,6 +92,7 @@ class RuntimeConfigService:
                 {
                     "id": identifier,
                     "label": str(raw.get("label", "")).strip(),
+                    "priority": raw.get("priority", old.priority if old else 100),
                     "enabled": as_bool(raw.get("enabled", True)),
                     "adapter": "openai_images",
                     "base_url": str(raw.get("base_url", "")).strip(),
@@ -202,6 +203,7 @@ class RuntimeConfigService:
                 .distinct()
             )
         )
+        active_ids.difference_update({AUTO_CHANNEL_ID, MIXED_CHANNEL_ID})
         unavailable = [
             identifier
             for identifier in active_ids

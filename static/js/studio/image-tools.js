@@ -55,7 +55,7 @@
         panel: "保持面板尺寸",
       }[job.workflow?.canvas_resolution] || "";
       const details = [
-        ["渠道", `${job.channel} · ${job.model}`],
+        ["渠道", `${item.channel || job.channel} · ${job.model}`],
         ["请求参数", [
           job.size,
           job.quality,

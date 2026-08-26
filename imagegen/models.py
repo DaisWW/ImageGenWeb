@@ -287,6 +287,8 @@ class GenerationItem(TimestampMixin, db.Model):
     )
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     channel_id: Mapped[str] = mapped_column(db.String(64), index=True)
+    channel_label: Mapped[str] = mapped_column(db.String(100), default="", nullable=False)
+    provider_price_rmb: Mapped[Decimal] = mapped_column(MONEY_TYPE, default=Decimal("0"))
     position: Mapped[int]
     prompt: Mapped[str] = mapped_column(db.Text, default="", nullable=False)
     status: Mapped[str] = mapped_column(db.String(20), default="queued", index=True)

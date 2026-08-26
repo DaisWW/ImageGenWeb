@@ -641,7 +641,14 @@
         job.succeeded_count,
         job.charged_rmb,
         job.queue_position,
-        job.items.map((item) => [item.id, item.status, item.thumbnail_url, item.image_url]),
+        job.items.map((item) => [
+          item.id,
+          item.status,
+          item.channel_id,
+          item.channel,
+          item.thumbnail_url,
+          item.image_url,
+        ]),
       ]);
     }
 
@@ -664,16 +671,22 @@
             ? ` width="${width}" height="${height}"`
             : "";
         };
-        const outputs = job.items.map((item) => item.thumbnail_url
-          ? `<a class="admin-media-tile admin-output" href="${UI.escapeHtml(item.image_url)}" target="_blank" rel="noopener" title="查看第 ${item.position + 1} 张原图"><img src="${UI.escapeHtml(item.thumbnail_url)}" alt="生成结果 ${item.position + 1}" loading="lazy" decoding="async"${imageDimensions(item)}></a>`
-          : `<span class="admin-media-tile admin-output empty ${item.status}" aria-label="${UI.escapeHtml(STATUS[item.status] || item.status)}"><i data-lucide="${item.status === "failed" ? "circle-alert" : "loader-circle"}"></i></span>`).join("");
+        const outputs = job.items.map((item) => {
+          const provider = item.channel || job.channel || "系统自动调度";
+          return item.thumbnail_url
+            ? `<a class="admin-media-tile admin-output" href="${UI.escapeHtml(item.image_url)}" target="_blank" rel="noopener" title="查看第 ${item.position + 1} 张原图 · ${UI.escapeHtml(provider)}"><img src="${UI.escapeHtml(item.thumbnail_url)}" alt="生成结果 ${item.position + 1} · ${UI.escapeHtml(provider)}" loading="lazy" decoding="async"${imageDimensions(item)}><small class="admin-output-channel">${UI.escapeHtml(provider)}</small></a>`
+            : `<span class="admin-media-tile admin-output empty ${item.status}" aria-label="${UI.escapeHtml(STATUS[item.status] || item.status)} · ${UI.escapeHtml(provider)}"><i data-lucide="${item.status === "failed" ? "circle-alert" : "loader-circle"}"></i><small class="admin-output-channel">${UI.escapeHtml(provider)}</small></span>`;
+        }).join("");
         const references = job.references.length
           ? `<section class="admin-media-group admin-reference-group admin-references"><div class="admin-media-heading"><span>垫图</span><small>${job.references.length} 张</small></div><div class="admin-media-grid">${job.references.map((asset, index) => `<a class="admin-media-tile admin-reference" href="${UI.escapeHtml(asset.url)}" target="_blank" rel="noopener" title="查看垫图 ${index + 1}"><img src="${UI.escapeHtml(asset.url)}" alt="${UI.escapeHtml(asset.name || `垫图 ${index + 1}`)}" loading="lazy" decoding="async"${imageDimensions(asset)}></a>`).join("")}</div></section>`
           : "";
         const outputGroup = `<section class="admin-media-group admin-output-group"><div class="admin-media-heading"><span>生成结果</span><small>${job.succeeded_count}/${job.requested_count} 张</small></div><div class="admin-media-grid">${outputs}</div></section>`;
+        const channelSummary = job.channels?.length
+          ? job.channels.map((entry) => `${entry.label || entry.id || "未知渠道"} ×${entry.count || 0}`).join(" / ")
+          : (job.channel || "系统自动调度");
         return `<article class="admin-job-card ${job.status}${motionClass}" data-job-id="${UI.escapeHtml(identifier)}">
           <div class="admin-job-top">
-            <div class="admin-job-owner"><span class="user-avatar small">${UI.escapeHtml((job.user.display_name || job.user.username).slice(0, 1).toUpperCase())}</span><div><strong>${UI.escapeHtml(job.user.display_name || job.user.username)}</strong><small>${UI.dateTime(job.created_at)} · ${UI.escapeHtml(job.channel)} · ${UI.escapeHtml(job.model)}</small></div></div>
+            <div class="admin-job-owner"><span class="user-avatar small">${UI.escapeHtml((job.user.display_name || job.user.username).slice(0, 1).toUpperCase())}</span><div><strong>${UI.escapeHtml(job.user.display_name || job.user.username)}</strong><small>${UI.dateTime(job.created_at)} · ${UI.escapeHtml(channelSummary)} · ${UI.escapeHtml(job.model)}</small></div></div>
             <div class="admin-job-state"><span class="status-badge ${job.status}"><span></span>${STATUS[job.status] || job.status}</span>${job.can_cancel ? `<button class="button danger small" data-admin-cancel="${job.id}"><i data-lucide="square"></i>取消</button>` : ""}</div>
           </div>
           <p class="admin-job-prompt">${UI.escapeHtml(job.prompt)}</p>
@@ -719,6 +732,7 @@
         <tr>
           <td><strong>${UI.escapeHtml(channel.label)}</strong><small class="subline">${UI.escapeHtml(channel.id)}</small></td>
           <td><span class="status-badge ${channel.configured ? "succeeded" : "failed"}"><span></span>${channel.configured ? "可用" : channel.enabled ? "缺少 Key" : "停用"}</span></td>
+          <td>${Number(channel.priority ?? 100)}</td>
           <td class="money-cell">${UI.money(channel.price_rmb)}<small class="subline">每张</small></td>
           <td><div class="tag-list">${channel.models.filter((model) => model.enabled).map((model) => `<span>${UI.escapeHtml(model.label)}<small>${UI.escapeHtml(model.id)}</small></span>`).join("")}</div></td>
           <td>${channel.limits.max_concurrency}</td>
@@ -739,6 +753,7 @@
       form.elements.id.value = channel?.id || "";
       form.elements.id.readOnly = Boolean(channel);
       form.elements.label.value = channel?.label || "";
+      form.elements.priority.value = channel?.priority ?? 100;
       form.elements.enabled.checked = channel ? channel.enabled : true;
       form.elements.base_url.value = channel?.base_url || "";
       form.elements.api_key.value = "";
@@ -832,6 +847,7 @@
       return {
         id: form.elements.id.value.trim(),
         label: form.elements.label.value.trim(),
+        priority: Number(form.elements.priority.value),
         enabled: form.elements.enabled.checked,
         base_url: form.elements.base_url.value.trim(),
         api_key: form.elements.api_key.value.trim(),
