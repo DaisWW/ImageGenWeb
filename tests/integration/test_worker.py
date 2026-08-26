@@ -30,6 +30,7 @@ from tests.support.platform import (
     FakeProviderFactory,
     HoldingExecutor,
     PlatformTestCase,
+    checkerboard_png_bytes,
     png_bytes,
     transparent_icon_png_bytes,
 )
@@ -72,6 +73,56 @@ class TestWorker(PlatformTestCase):
         self.assertEqual(runtime_log.status, "success")
         self.assertEqual(runtime_log.provider_id, "test")
         self.assertNotIn(job.prompt, json.dumps(runtime_log.details, ensure_ascii=False))
+
+    def test_transparent_img2img_rejects_baked_checkerboard_reference_before_provider(self):
+        workspace = self.create_workspace()
+        reference = self.services.workspaces.add_assets(
+            workspace,
+            [("checkerboard.png", checkerboard_png_bytes())],
+        )[0]
+        job = self.submit(
+            workspace,
+            mode="img2img",
+            reference_ids=(reference.id,),
+            transparent_background=True,
+        )
+        worker = self.create_worker()
+        worker.providers = FakeProviderFactory()
+        channel = self.app.extensions["channel_registry"].get("test")
+        self.assertTrue(worker._claim(job.items[0].id, channel))
+
+        worker._process_item(job.items[0].id)
+
+        db.session.expire_all()
+        item = db.session.get(GenerationItem, job.items[0].id)
+        user = db.session.get(User, self.user.id)
+        self.assertEqual(item.status, "failed")
+        self.assertEqual(item.error_code, "checkerboard_reference")
+        self.assertEqual(user.balance_rmb, Decimal("20.0000"))
+        self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
+        self.assertEqual(worker.providers.adapter.requests, [])
+
+    def test_transparent_worker_rejects_checkerboard_left_in_matting_result(self):
+        workspace = self.create_workspace()
+        job = self.submit(workspace, transparent_background=True)
+        worker = self.create_worker()
+        worker.providers = FakeProviderFactory()
+        self.app.extensions["lucida_matting_client"] = LucidaMattingClient(
+            base_url="http://lucida.test",
+            session=_StaticMattingSession(checkerboard_png_bytes(transparent_center=True)),
+        )
+        channel = self.app.extensions["channel_registry"].get("test")
+        self.assertTrue(worker._claim(job.items[0].id, channel))
+
+        worker._process_item(job.items[0].id)
+
+        db.session.expire_all()
+        item = db.session.get(GenerationItem, job.items[0].id)
+        user = db.session.get(User, self.user.id)
+        self.assertEqual(item.status, "failed")
+        self.assertEqual(item.error_code, "matting_checkerboard_result")
+        self.assertEqual(user.balance_rmb, Decimal("20.0000"))
+        self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
 
     def test_worker_sends_each_item_effective_prompt(self):
         workspace = self.create_workspace("逐图提示词")

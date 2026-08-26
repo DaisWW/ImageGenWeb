@@ -87,7 +87,8 @@ class TestProviderAndRuntime(PlatformTestCase):
             replace(request, transparent_background=True),
         )
         self.assertNotIn("background", session.request["json"])
-        self.assertEqual(session.request["json"]["prompt"], request.prompt)
+        self.assertIn(request.prompt, session.request["json"]["prompt"])
+        self.assertIn("checkerboard", session.request["json"]["prompt"])
         self.assertEqual(transparent_result.content, png_bytes())
 
         subject = png_bytes((220, 35, 45))
@@ -104,7 +105,8 @@ class TestProviderAndRuntime(PlatformTestCase):
         self.assertEqual(session.request["url"], "https://relay.example/v1/images/edits")
         self.assertEqual(session.request["data"]["n"], "1")
         self.assertNotIn("background", session.request["data"])
-        self.assertEqual(session.request["data"]["prompt"], request.prompt)
+        self.assertIn(request.prompt, session.request["data"]["prompt"])
+        self.assertIn("checkerboard", session.request["data"]["prompt"])
         self.assertEqual([part[0] for part in session.request["files"]], ["image[]", "image[]"])
         self.assertEqual(
             [part[1][0] for part in session.request["files"]],
@@ -173,7 +175,8 @@ class TestProviderAndRuntime(PlatformTestCase):
 
         self.assertEqual(len(session.requests), 1)
         self.assertNotIn("background", session.requests[0]["json"])
-        self.assertEqual(session.requests[0]["json"]["prompt"], "极简上传图标")
+        self.assertIn("极简上传图标", session.requests[0]["json"]["prompt"])
+        self.assertIn("checkerboard", session.requests[0]["json"]["prompt"])
         self.assertEqual(result.content, png_bytes())
 
     def test_transparent_background_accepts_opaque_provider_image(self):

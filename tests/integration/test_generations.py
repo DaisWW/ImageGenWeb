@@ -492,7 +492,7 @@ class TestGenerations(PlatformTestCase):
 
     def test_transparent_background_is_validated_persisted_and_serialized(self):
         workspace = self.create_workspace()
-        with self.assertRaisesRegex(ServiceError, "透明背景仅支持 PNG 或 WebP"):
+        with self.assertRaisesRegex(ServiceError, "透明背景仅支持 PNG 格式"):
             self.submit(
                 workspace,
                 output_format="jpeg",
@@ -526,6 +526,13 @@ class TestGenerations(PlatformTestCase):
         self.assertTrue(workspace.settings["transparent_background"])
         saved_job = db.session.get(GenerationJob, response.json["job"]["id"])
         self.assertTrue(saved_job.transparent_background)
+
+        with self.assertRaisesRegex(ServiceError, "透明背景仅支持 PNG 格式"):
+            self.submit(
+                self.create_workspace("透明 WebP"),
+                output_format="webp",
+                transparent_background=True,
+            )
 
     def test_custom_size_is_accepted_and_normalized(self):
         workspace = self.create_workspace()

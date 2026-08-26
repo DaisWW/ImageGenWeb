@@ -23,7 +23,7 @@ from .integrations.images import (
     ProviderFactory,
     ReferencePayload,
 )
-from .integrations.matting import LucidaMattingClient
+from .integrations.matting import LucidaMattingClient, image_has_baked_checkerboard
 from .models import GenerationItem, GenerationJob, User, WorkerState, utcnow
 from .services import RetentionService, money
 from .storage import ImageStorage, StorageError
@@ -319,6 +319,8 @@ class GenerationWorker:
             try:
                 channel = self.channels.get(item.channel_id)
                 references = self._request_references(item)
+                if item.job.transparent_background and item.job.mode == "img2img":
+                    self._validate_transparent_references(references)
                 adapter = self.providers.for_channel(channel)
                 result = adapter.generate(
                     channel,
@@ -339,6 +341,12 @@ class GenerationWorker:
                         content,
                         filename=f"image_{item.id}.{item.job.output_format or 'png'}",
                     )
+                    if image_has_baked_checkerboard(content):
+                        raise ServiceError(
+                            "透明背景结果疑似仍包含棋盘格像素，请重试或更换垫图",
+                            code="matting_checkerboard_result",
+                            status_code=502,
+                        )
                 with self._settlement_lock:
                     self._settle_success(item_id, content, result.request_id, started)
             except ServiceError as exc:
@@ -350,7 +358,13 @@ class GenerationWorker:
                         upstream_status=exc.status_code,
                         upstream_request_id="",
                         started=started,
-                        details={"stage": "lucida_matting"},
+                        details={
+                            "stage": (
+                                "checkerboard_reference"
+                                if exc.code == "checkerboard_reference"
+                                else "lucida_matting"
+                            )
+                        },
                     )
             except ProviderError as exc:
                 with self._settlement_lock:
@@ -404,6 +418,15 @@ class GenerationWorker:
             )
             for reference in item.job.references
         )
+
+    @staticmethod
+    def _validate_transparent_references(references: tuple[ReferencePayload, ...]) -> None:
+        if any(image_has_baked_checkerboard(reference.content) for reference in references):
+            raise ServiceError(
+                "垫图疑似将棋盘格直接画入图片，请上传带真实透明通道的 PNG",
+                code="checkerboard_reference",
+                status_code=422,
+            )
 
     def _settle_success(
         self, item_id: str, content: bytes, request_id: str, started: float

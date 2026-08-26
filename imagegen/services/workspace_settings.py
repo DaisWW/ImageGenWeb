@@ -99,6 +99,8 @@ def sanitize_workspace_settings(raw: Any, runtime: RuntimeSettings | None = None
     settings["transparent_background"] = as_bool(settings["transparent_background"])
     if settings["output_format"] not in {"png", "webp"}:
         settings["transparent_background"] = False
+    elif settings["transparent_background"]:
+        settings["output_format"] = "png"
     try:
         settings["compression"] = min(100, max(0, int(settings["compression"])))
         settings["batch_count"] = min(

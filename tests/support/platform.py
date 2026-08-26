@@ -41,6 +41,30 @@ def transparent_icon_png_bytes() -> bytes:
     return stream.getvalue()
 
 
+def checkerboard_png_bytes(
+    *, transparent_hole: bool = False, transparent_center: bool = False
+) -> bytes:
+    image = Image.new("RGBA", (64, 64))
+    colors = ((212, 216, 214, 255), (242, 244, 243, 255))
+    for y in range(64):
+        for x in range(64):
+            image.putpixel((x, y), colors[(x // 8 + y // 8) % 2])
+    if transparent_hole:
+        for y in range(64):
+            for x in range(64):
+                image.putpixel((x, y), (*image.getpixel((x, y))[:3], 0))
+        for y in range(24, 40):
+            for x in range(24, 40):
+                image.putpixel((x, y), (35, 160, 110, 255))
+    elif transparent_center:
+        for y in range(20, 44):
+            for x in range(20, 44):
+                image.putpixel((x, y), (*image.getpixel((x, y))[:3], 0))
+    stream = io.BytesIO()
+    image.save(stream, format="PNG")
+    return stream.getvalue()
+
+
 def png_bytes_with_dimensions(width: int, height: int) -> bytes:
     content = bytearray(png_bytes())
     content[16:20] = width.to_bytes(4, "big")

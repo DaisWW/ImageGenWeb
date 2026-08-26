@@ -11,6 +11,13 @@ from ..errors import ServiceError
 
 MAX_MATTING_BYTES = 50 * 1024 * 1024
 MAX_MATTING_PIXELS = 40_000_000
+CHECKERBOARD_SAMPLE_SIDE = 256
+CHECKERBOARD_MIN_SIDE = 16
+CHECKERBOARD_BORDER_RATIO = 0.2
+CHECKERBOARD_MAX_SAME_DISTANCE = 0.07
+CHECKERBOARD_MIN_OPPOSITE_DISTANCE = 0.08
+CHECKERBOARD_MIN_MATCH_RATIO = 0.72
+CHECKERBOARD_MAX_SAMPLES = 1200
 
 
 @dataclass(frozen=True)
@@ -204,6 +211,123 @@ def image_has_real_alpha(content: bytes) -> bool:
     except (UnidentifiedImageError, OSError, ValueError):
         return False
     return alpha_extrema[0] < 255
+
+
+def image_has_baked_checkerboard(content: bytes) -> bool:
+    """True when visible pixels contain a high-confidence checkerboard pattern."""
+    if not content:
+        return False
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(content)) as source:
+                source.load()
+                rgba = source.convert("RGBA")
+                try:
+                    width, height = rgba.size
+                    scale = min(1.0, CHECKERBOARD_SAMPLE_SIDE / max(width, height))
+                    if scale < 1:
+                        sample = rgba.resize(
+                            (
+                                max(CHECKERBOARD_MIN_SIDE, round(width * scale)),
+                                max(CHECKERBOARD_MIN_SIDE, round(height * scale)),
+                            ),
+                            Image.Resampling.NEAREST,
+                        )
+                    else:
+                        sample = rgba
+                    try:
+                        return _sample_has_checkerboard(sample)
+                    finally:
+                        if sample is not rgba:
+                            sample.close()
+                finally:
+                    rgba.close()
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning):
+        return False
+    except (UnidentifiedImageError, OSError, ValueError):
+        return False
+
+
+def _sample_has_checkerboard(image: Image.Image) -> bool:
+    width, height = image.size
+    if min(width, height) < CHECKERBOARD_MIN_SIDE:
+        return False
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        pixels = list(image.getdata())
+    border = max(2, round(min(width, height) * CHECKERBOARD_BORDER_RATIO))
+    visible = [pixel[3] >= 245 for pixel in pixels]
+    border_coordinates = [
+        (x, y)
+        for y in range(height)
+        for x in range(width)
+        if _in_checkerboard_border(x, y, width, height, border)
+    ]
+    if len(border_coordinates) > CHECKERBOARD_MAX_SAMPLES:
+        stride = (
+            len(border_coordinates) + CHECKERBOARD_MAX_SAMPLES - 1
+        ) // CHECKERBOARD_MAX_SAMPLES
+        border_coordinates = border_coordinates[::stride]
+    max_period = min(width, height) // 3
+    for period in range(2, max_period + 1):
+        direction_matches = []
+        for dx, dy in ((period, 0), (0, period)):
+            same_distances: list[float] = []
+            opposite_distances: list[float] = []
+            for x, y in border_coordinates:
+                opposite_x = x + dx
+                opposite_y = y + dy
+                same_x = x + 2 * dx
+                same_y = y + 2 * dy
+                if (
+                    same_x >= width
+                    or same_y >= height
+                    or not _in_checkerboard_border(
+                        opposite_x, opposite_y, width, height, border
+                    )
+                    or not _in_checkerboard_border(same_x, same_y, width, height, border)
+                ):
+                    continue
+                source_index = y * width + x
+                opposite_index = opposite_y * width + opposite_x
+                same_index = same_y * width + same_x
+                if not (
+                    visible[source_index]
+                    and visible[opposite_index]
+                    and visible[same_index]
+                ):
+                    continue
+                same_distances.append(
+                    _pixel_distance(pixels[source_index], pixels[same_index])
+                )
+                opposite_distances.append(
+                    _pixel_distance(pixels[source_index], pixels[opposite_index])
+                )
+            if len(same_distances) < 40:
+                break
+            same_match = sum(
+                distance <= CHECKERBOARD_MAX_SAME_DISTANCE for distance in same_distances
+            ) / len(same_distances)
+            opposite_match = sum(
+                distance >= CHECKERBOARD_MIN_OPPOSITE_DISTANCE
+                for distance in opposite_distances
+            ) / len(opposite_distances)
+            direction_matches.append(
+                same_match >= CHECKERBOARD_MIN_MATCH_RATIO
+                and opposite_match >= CHECKERBOARD_MIN_MATCH_RATIO
+            )
+        if len(direction_matches) == 2 and all(direction_matches):
+            return True
+    return False
+
+
+def _in_checkerboard_border(x: int, y: int, width: int, height: int, border: int) -> bool:
+    return x < border or y < border or x >= width - border or y >= height - border
+
+
+def _pixel_distance(first: tuple[int, ...], second: tuple[int, ...]) -> float:
+    return sum((left - right) ** 2 for left, right in zip(first[:3], second[:3])) ** 0.5 / 441.673
 
 
 def _response_detail(response: requests.Response) -> str:

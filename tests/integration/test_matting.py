@@ -3,9 +3,14 @@ from __future__ import annotations
 import requests
 
 from imagegen.errors import ServiceError
-from imagegen.integrations.matting import LucidaMattingClient, image_has_real_alpha
+from imagegen.integrations.matting import (
+    LucidaMattingClient,
+    image_has_baked_checkerboard,
+    image_has_real_alpha,
+)
 from tests.support.platform import (
     PlatformTestCase,
+    checkerboard_png_bytes,
     png_bytes,
     transparent_icon_png_bytes,
 )
@@ -48,6 +53,11 @@ class RecordingMattingSession:
 
 
 class TestLucidaMattingClient(PlatformTestCase):
+    def test_checkerboard_detector_ignores_hidden_rgb_in_transparent_pixels(self):
+        self.assertTrue(image_has_baked_checkerboard(checkerboard_png_bytes()))
+        self.assertFalse(image_has_baked_checkerboard(checkerboard_png_bytes(transparent_hole=True)))
+        self.assertFalse(image_has_baked_checkerboard(transparent_icon_png_bytes()))
+
     def test_client_success_and_disabled(self):
         session = RecordingMattingSession(
             response=FakeMattingResponse(content=transparent_icon_png_bytes())
