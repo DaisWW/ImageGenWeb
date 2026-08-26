@@ -55,7 +55,9 @@ class RecordingMattingSession:
 class TestLucidaMattingClient(PlatformTestCase):
     def test_checkerboard_detector_ignores_hidden_rgb_in_transparent_pixels(self):
         self.assertTrue(image_has_baked_checkerboard(checkerboard_png_bytes()))
-        self.assertFalse(image_has_baked_checkerboard(checkerboard_png_bytes(transparent_hole=True)))
+        self.assertFalse(
+            image_has_baked_checkerboard(checkerboard_png_bytes(transparent_hole=True))
+        )
         self.assertFalse(image_has_baked_checkerboard(transparent_icon_png_bytes()))
 
     def test_client_success_and_disabled(self):

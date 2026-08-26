@@ -346,7 +346,9 @@ class TestConversations(PlatformTestCase):
         workspace = self.create_workspace("进度阶段单调")
         conversations = self.services.conversations
 
-        with conversations.operations.workspace_operation(workspace, "reply", "等待回复") as operation:
+        with conversations.operations.workspace_operation(
+            workspace, "reply", "等待回复"
+        ) as operation:
             operation.update_progress("output", "模型正在输出", output_characters=12)
             operation.update_progress("reasoning", "模型正在分析需求", output_characters=4)
             state = conversations.operation_state(workspace.id)

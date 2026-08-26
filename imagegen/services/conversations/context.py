@@ -150,9 +150,7 @@ class ConversationContextManager:
             decoded = self._pending_image_bytes(part)
             if decoded is None:
                 if part.get("type") == "image_asset":
-                    normalized.append(
-                        {"type": "text", "text": "（参考图暂时不可读取。）"}
-                    )
+                    normalized.append({"type": "text", "text": "（参考图暂时不可读取。）"})
                 else:
                     normalized.append(part)
                 continue
@@ -637,12 +635,16 @@ class ConversationContextManager:
                 if event.role == "assistant"
                 else text
             )
-            image_parts = self._image_parts(
-                image_text,
-                images,
-                image_cache,
-                seen_hashes=seen_image_hashes,
-            ) if images else []
+            image_parts = (
+                self._image_parts(
+                    image_text,
+                    images,
+                    image_cache,
+                    seen_hashes=seen_image_hashes,
+                )
+                if images
+                else []
+            )
             has_image_part = any(part.get("type") == "image_url" for part in image_parts)
             if event.role == "assistant" and has_image_part:
                 messages.append({"role": "assistant", "content": text})
@@ -655,8 +657,10 @@ class ConversationContextManager:
                     }
                 )
             else:
-                fallback_text = text if event.role == "assistant" else (
-                    image_parts[0].get("text", text) if image_parts else text
+                fallback_text = (
+                    text
+                    if event.role == "assistant"
+                    else (image_parts[0].get("text", text) if image_parts else text)
                 )
                 messages.append({"role": event.role, "content": fallback_text})
         return messages

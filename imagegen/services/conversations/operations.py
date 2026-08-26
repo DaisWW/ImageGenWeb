@@ -88,9 +88,7 @@ class ConversationOperation:
             can_advance = not (
                 self.stage in self._ERROR_STAGES and next_stage not in self._ERROR_STAGES
             ) and not (
-                current_rank is not None
-                and next_rank is not None
-                and next_rank < current_rank
+                current_rank is not None and next_rank is not None and next_rank < current_rank
             )
             if can_advance:
                 self.stage = next_stage

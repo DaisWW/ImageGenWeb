@@ -283,24 +283,16 @@ def _sample_has_checkerboard(image: Image.Image) -> bool:
                 if (
                     same_x >= width
                     or same_y >= height
-                    or not _in_checkerboard_border(
-                        opposite_x, opposite_y, width, height, border
-                    )
+                    or not _in_checkerboard_border(opposite_x, opposite_y, width, height, border)
                     or not _in_checkerboard_border(same_x, same_y, width, height, border)
                 ):
                     continue
                 source_index = y * width + x
                 opposite_index = opposite_y * width + opposite_x
                 same_index = same_y * width + same_x
-                if not (
-                    visible[source_index]
-                    and visible[opposite_index]
-                    and visible[same_index]
-                ):
+                if not (visible[source_index] and visible[opposite_index] and visible[same_index]):
                     continue
-                same_distances.append(
-                    _pixel_distance(pixels[source_index], pixels[same_index])
-                )
+                same_distances.append(_pixel_distance(pixels[source_index], pixels[same_index]))
                 opposite_distances.append(
                     _pixel_distance(pixels[source_index], pixels[opposite_index])
                 )
@@ -310,8 +302,7 @@ def _sample_has_checkerboard(image: Image.Image) -> bool:
                 distance <= CHECKERBOARD_MAX_SAME_DISTANCE for distance in same_distances
             ) / len(same_distances)
             opposite_match = sum(
-                distance >= CHECKERBOARD_MIN_OPPOSITE_DISTANCE
-                for distance in opposite_distances
+                distance >= CHECKERBOARD_MIN_OPPOSITE_DISTANCE for distance in opposite_distances
             ) / len(opposite_distances)
             direction_matches.append(
                 same_match >= CHECKERBOARD_MIN_MATCH_RATIO
