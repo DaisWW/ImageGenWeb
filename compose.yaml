@@ -107,7 +107,26 @@ services:
       retries: 4
       start_period: 20s
 
+  proxy:
+    image: ${CADDY_IMAGE:-caddy:2-alpine}
+    profiles: ["https"]
+    restart: unless-stopped
+    environment:
+      IMAGEGEN_HTTPS_HOST: ${IMAGEGEN_HTTPS_HOST:-localhost}
+      IMAGEGEN_CADDY_TLS: ${IMAGEGEN_CADDY_TLS-tls internal}
+    ports:
+      - "${IMAGEGEN_HTTPS_BIND_HOST:-127.0.0.1}:${IMAGEGEN_HTTPS_PORT:-18443}:443"
+    volumes:
+      - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+
 volumes:
   imagegen-data:
   postgres-data:
   lucida-hf-cache:
+  caddy-data:
+  caddy-config:

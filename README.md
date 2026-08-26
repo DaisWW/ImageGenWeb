@@ -67,6 +67,8 @@ tests/integration/ 业务与 HTTP 合同测试
 
 本地开发仍使用 `7860`，Docker 对外端口为 `18081`，二者不会冲突。如通过单个 HTTPS 反向代理部署，将 `.env` 中的 `COOKIE_SECURE` 和 `TRUST_PROXY_HEADERS` 都改为 `true`。
 
+项目也提供可选的 Caddy HTTPS profile。内网访问可按 [`docs/https-proxy.md`](docs/https-proxy.md) 设置 `IMAGEGEN_HTTPS_ENABLED=true` 并安装内网根证书；公网域名可留空 `IMAGEGEN_CADDY_TLS`，由 Caddy 自动申请 ACME 证书。启用该 profile 后请使用 HTTPS 地址下载 ZIP，避免 Chrome 的不安全下载拦截。
+
 Compose 默认通过 `deploy-docker` 启用四个服务：
 
 - `web`：Flask/Gunicorn Web 服务，启动前执行 Alembic 数据库迁移。

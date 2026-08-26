@@ -22,11 +22,14 @@ if ($LocalOnly) {
 $projectDir = $PSScriptRoot
 $envPath = Join-Path $projectDir ".env"
 $firewallRuleName = "Snow AI Studio LAN"
+$httpsFirewallRuleName = "Snow AI Studio HTTPS LAN"
 
 function Get-FirewallRule {
+    param([string]$RuleName = $firewallRuleName)
+
     try {
         $policy = New-Object -ComObject HNetCfg.FwPolicy2
-        return $policy.Rules.Item($firewallRuleName)
+        return $policy.Rules.Item($RuleName)
     } catch [IO.FileNotFoundException] {
         return $null
     }
@@ -79,7 +82,7 @@ function Set-EnvValue {
         $currentValue = $Lines[$index].Substring($prefix.Length)
         $shouldReplace = $ReplaceBlank -and [string]::IsNullOrWhiteSpace($currentValue)
         $shouldReplace = $shouldReplace -or ($ReplacePlaceholder -and $currentValue.StartsWith("CHANGE_ME", [StringComparison]::OrdinalIgnoreCase))
-        if ($shouldReplace -or $Name -in @("IMAGEGEN_PORT", "IMAGEGEN_BIND_HOST")) {
+        if ($shouldReplace -or $Name -in @("IMAGEGEN_PORT", "IMAGEGEN_BIND_HOST", "IMAGEGEN_HTTPS_BIND_HOST")) {
             $Lines[$index] = "$Name=$Value"
             return $true
         }
@@ -88,6 +91,21 @@ function Set-EnvValue {
 
     $Lines.Add("$Name=$Value") | Out-Null
     return $true
+}
+
+function Get-EnvFlag {
+    param(
+        [System.Collections.IEnumerable]$Lines,
+        [string]$Name
+    )
+
+    $prefix = "$Name="
+    foreach ($line in $Lines) {
+        if ($line.StartsWith($prefix, [StringComparison]::Ordinal)) {
+            return $line.Substring($prefix.Length).Trim().ToLowerInvariant() -in @("1", "true", "yes", "on")
+        }
+    }
+    return $false
 }
 
 function Initialize-EnvironmentFile {
@@ -124,10 +142,18 @@ function Initialize-EnvironmentFile {
     Set-EnvValue $lines "LUCIDA_TORCH_INDEX_URL" "https://download.pytorch.org/whl/cu124" -ReplaceBlank | Out-Null
     Set-EnvValue $lines "LUCIDA_MODEL_PATH" "./.tmp-lucida-src/lucida-main/.model/lucida" -ReplaceBlank | Out-Null
     Set-EnvValue $lines "IMAGEGEN_PORT" ([string]$Port) | Out-Null
-    $bindHost = if ($Lan) { "0.0.0.0" } else { "127.0.0.1" }
+    $httpsProxyEnabled = Get-EnvFlag -Lines $lines -Name "IMAGEGEN_HTTPS_ENABLED"
+    $bindHost = if ($httpsProxyEnabled -or -not $Lan) { "127.0.0.1" } else { "0.0.0.0" }
     Set-EnvValue $lines "IMAGEGEN_BIND_HOST" $bindHost | Out-Null
-    Set-EnvValue $lines "COOKIE_SECURE" "false" | Out-Null
-    Set-EnvValue $lines "TRUST_PROXY_HEADERS" "false" | Out-Null
+    $httpsBindHost = if ($httpsProxyEnabled -and $Lan) { "0.0.0.0" } else { "127.0.0.1" }
+    Set-EnvValue $lines "IMAGEGEN_HTTPS_BIND_HOST" $httpsBindHost | Out-Null
+    Set-EnvValue $lines "COOKIE_SECURE" "false" -ReplaceBlank | Out-Null
+    Set-EnvValue $lines "TRUST_PROXY_HEADERS" "false" -ReplaceBlank | Out-Null
+    Set-EnvValue $lines "IMAGEGEN_HTTPS_ENABLED" "false" -ReplaceBlank | Out-Null
+    Set-EnvValue $lines "IMAGEGEN_HTTPS_HOST" "localhost" -ReplaceBlank | Out-Null
+    Set-EnvValue $lines "IMAGEGEN_HTTPS_PORT" "18443" -ReplaceBlank | Out-Null
+    Set-EnvValue $lines "IMAGEGEN_CADDY_TLS" "tls internal" | Out-Null
+    Set-EnvValue $lines "CADDY_IMAGE" "caddy:2-alpine" -ReplaceBlank | Out-Null
 
     [IO.File]::WriteAllLines($envPath, $lines, (New-Object Text.UTF8Encoding($false)))
     if ($adminPasswordChanged) {
@@ -151,12 +177,21 @@ function Test-PortAvailable {
 }
 
 function Test-CurrentStackOwnsPort {
-    param([int]$ListenPort)
+    param(
+        [int]$ListenPort,
+        [string]$Service = "web",
+        [int]$ContainerPort = 7860,
+        [switch]$HttpsProfile
+    )
 
     $previousPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = "SilentlyContinue"
-        $publishedPort = docker compose --project-directory $projectDir port web 7860 2>$null
+        $composeArguments = @("--project-directory", $projectDir)
+        if ($HttpsProfile) {
+            $composeArguments += @("--profile", "https")
+        }
+        $publishedPort = docker compose @composeArguments port $Service $ContainerPort 2>$null
         $exitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previousPreference
@@ -192,9 +227,6 @@ function Get-LanAddresses {
 
 Push-Location $projectDir
 try {
-    if ($Lan) {
-        Write-Warning "局域网模式会通过明文 HTTP 暴露登录和会话流量。请仅在可信网络使用，或在服务前配置 TLS。"
-    }
     if (-not (Get-Command docker.exe -ErrorAction SilentlyContinue)) {
         throw "找不到 docker.exe，请先安装 Docker Desktop。"
     }
@@ -212,21 +244,43 @@ try {
     }
 
     $generatedAdminPassword = Initialize-EnvironmentFile
+    $envLines = [IO.File]::ReadAllLines($envPath)
+    $httpsProxyEnabled = Get-EnvFlag -Lines $envLines -Name "IMAGEGEN_HTTPS_ENABLED"
+    [int]$httpsPort = 18443
+    $httpsHost = "localhost"
+    foreach ($line in $envLines) {
+        if ($line.StartsWith("IMAGEGEN_HTTPS_PORT=", [StringComparison]::Ordinal)) {
+            $configuredHttpsPort = $line.Substring("IMAGEGEN_HTTPS_PORT=".Length).Trim()
+            if (-not [int]::TryParse($configuredHttpsPort, [ref]$httpsPort) -or $httpsPort -lt 1 -or $httpsPort -gt 65535) {
+                throw "IMAGEGEN_HTTPS_PORT 必须是 1 到 65535 之间的端口。"
+            }
+        } elseif ($line.StartsWith("IMAGEGEN_HTTPS_HOST=", [StringComparison]::Ordinal)) {
+            $httpsHost = $line.Substring("IMAGEGEN_HTTPS_HOST=".Length).Trim()
+        }
+    }
 
-    $firewallRule = Get-FirewallRule
-    if ($Lan -and -not $SkipFirewall -and -not (Test-FirewallRule -Rule $firewallRule -ListenPort $Port)) {
+    if ($Lan -and $httpsProxyEnabled) {
+        Write-Host "局域网模式将通过 HTTPS 反向代理提供访问。" -ForegroundColor Green
+    } elseif ($Lan) {
+        Write-Warning "局域网模式会通过明文 HTTP 暴露登录和会话流量。请仅在可信网络使用，或在服务前配置 TLS。"
+    }
+
+    $firewallPort = if ($httpsProxyEnabled) { $httpsPort } else { $Port }
+    $firewallRuleNameForMode = if ($httpsProxyEnabled) { $httpsFirewallRuleName } else { $firewallRuleName }
+    $firewallRule = Get-FirewallRule -RuleName $firewallRuleNameForMode
+    if ($Lan -and -not $SkipFirewall -and -not (Test-FirewallRule -Rule $firewallRule -ListenPort $firewallPort)) {
         Write-Host "正在配置 Windows 防火墙，需要确认一次管理员权限。" -ForegroundColor Yellow
         $operation = if ($null -eq $firewallRule) { "add" } else { "set" }
         $firewallArguments = @(
             "advfirewall", "firewall", $operation, "rule",
-            "name=`"$firewallRuleName`""
+            "name=`"$firewallRuleNameForMode`""
         )
         if ($operation -eq "set") {
             $firewallArguments += "new"
         }
         $firewallArguments += @(
             "dir=in", "action=allow", "enable=yes", "profile=any",
-            "protocol=TCP", "localport=$Port", "remoteip=LocalSubnet"
+            "protocol=TCP", "localport=$firewallPort", "remoteip=LocalSubnet"
         )
         $process = Start-Process `
             -FilePath (Join-Path $env:SystemRoot "System32\netsh.exe") `
@@ -235,14 +289,23 @@ try {
             -WindowStyle Hidden `
             -Wait `
             -PassThru
-        if ($process.ExitCode -ne 0 -or -not (Test-FirewallRule -Rule (Get-FirewallRule) -ListenPort $Port)) {
+        if ($process.ExitCode -ne 0 -or -not (Test-FirewallRule -Rule (Get-FirewallRule -RuleName $firewallRuleNameForMode) -ListenPort $firewallPort)) {
             throw "Windows 防火墙规则未正确生效。"
         }
-        Write-Host "Windows 防火墙已允许本地子网访问 TCP 端口 $Port。" -ForegroundColor Green
+        $firewallProtocol = if ($httpsProxyEnabled) { "HTTPS" } else { "HTTP" }
+        Write-Host "Windows 防火墙已允许本地子网访问 $firewallProtocol TCP 端口 $firewallPort。" -ForegroundColor Green
     }
 
     if (-not (Test-PortAvailable -ListenPort $Port) -and -not (Test-CurrentStackOwnsPort -ListenPort $Port)) {
         throw "端口 $Port 已被其他进程占用。请停止占用进程，或使用 -Port 选择其他端口。"
+    }
+    if ($httpsProxyEnabled) {
+        if ($httpsPort -eq $Port) {
+            throw "IMAGEGEN_HTTPS_PORT 不能与 IMAGEGEN_PORT 相同。"
+        }
+        if (-not (Test-PortAvailable -ListenPort $httpsPort) -and -not (Test-CurrentStackOwnsPort -ListenPort $httpsPort -Service "proxy" -ContainerPort 443 -HttpsProfile)) {
+            throw "HTTPS 端口 $httpsPort 已被其他进程占用。请停止占用进程，或修改 IMAGEGEN_HTTPS_PORT。"
+        }
     }
 
 
@@ -258,7 +321,6 @@ try {
 
     $lucidaImage = "snow-ai-studio-lucida:latest"
     $lucidaBaseImage = "snow-ai-studio-lucida-base:cu124"
-    $envLines = if (Test-Path -LiteralPath $envPath) { [IO.File]::ReadAllLines($envPath) } else { @() }
     foreach ($line in $envLines) {
         if ($line.StartsWith("LUCIDA_IMAGE=", [StringComparison]::Ordinal)) {
             $configuredImage = $line.Substring("LUCIDA_IMAGE=".Length).Trim()
@@ -334,7 +396,11 @@ try {
         Write-Host "GPU Lucida 镜像 CUDA 检查通过：$lucidaImage" -ForegroundColor Green
     }
 
-    & docker compose --project-directory $projectDir --profile lucida up -d --no-build --force-recreate --remove-orphans
+    $composeProfiles = @("--profile", "lucida")
+    if ($httpsProxyEnabled) {
+        $composeProfiles += @("--profile", "https")
+    }
+    & docker compose --project-directory $projectDir @composeProfiles up -d --no-build --force-recreate --remove-orphans
     if ($LASTEXITCODE -ne 0) {
         throw "docker compose 启动失败。"
     }
@@ -355,15 +421,41 @@ try {
     } while ((Get-Date) -lt $deadline)
     if (-not $healthy) {
         docker compose --project-directory $projectDir ps
-        throw "服务未能在 15 分钟内通过健康检查。请运行：docker compose --profile lucida logs web worker lucida"
+        $logProfiles = if ($httpsProxyEnabled) { "--profile lucida --profile https" } else { "--profile lucida" }
+        $logServices = if ($httpsProxyEnabled) { "web worker lucida proxy" } else { "web worker lucida" }
+        throw "服务未能在 15 分钟内通过健康检查。请运行：docker compose $logProfiles logs $logServices"
+    }
+
+    if ($httpsProxyEnabled) {
+        $proxyContainerId = docker compose --project-directory $projectDir --profile lucida --profile https ps -q proxy 2>$null
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($proxyContainerId)) {
+            docker compose --project-directory $projectDir --profile lucida --profile https ps
+            throw "HTTPS 反向代理容器未能启动。请运行：docker compose --profile lucida --profile https logs proxy"
+        }
+        $proxyRunning = docker inspect --format "{{.State.Running}}" $proxyContainerId 2>$null
+        if ($LASTEXITCODE -ne 0 -or $proxyRunning.Trim() -ne "true") {
+            docker compose --project-directory $projectDir --profile lucida --profile https ps
+            throw "HTTPS 反向代理容器未处于运行状态。请运行：docker compose --profile lucida --profile https logs proxy"
+        }
     }
 
     Write-Host ""
     Write-Host "Snow AI Studio 已启动（含 Docker Lucida GPU 抠图）。" -ForegroundColor Green
-    Write-Host "本机地址：http://127.0.0.1:$Port"
+    if ($httpsProxyEnabled) {
+        Write-Host "本机 HTTPS 地址：https://${httpsHost}:${httpsPort}" -ForegroundColor Green
+    } else {
+        Write-Host "本机地址：http://127.0.0.1:$Port"
+    }
     Write-Host "透明背景：勾选后自动经 Lucida 后处理（LUCIDA_MATTING_URL=http://lucida:8000）"
+    if ($httpsProxyEnabled) {
+        Write-Host "HTTPS 反向代理：https://${httpsHost}:${httpsPort}" -ForegroundColor Green
+    }
     if ($Lan) {
         foreach ($address in Get-LanAddresses) {
+            if ($httpsProxyEnabled) {
+                Write-Host "局域网地址（HTTPS，请确保主机名解析到此机器）：https://${httpsHost}:${httpsPort}"
+                break
+            }
             Write-Host "局域网地址（明文 HTTP）：http://${address}:$Port"
         }
     } else {

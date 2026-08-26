@@ -1,0 +1,4 @@
+{$IMAGEGEN_HTTPS_HOST} {
+    {$IMAGEGEN_CADDY_TLS}
+    reverse_proxy web:7860
+}
