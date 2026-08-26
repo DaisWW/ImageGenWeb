@@ -497,6 +497,7 @@ class TestPromptDrafts(PlatformTestCase):
                 "selection_reason": "单对象局部移除。",
                 "brief": {
                     "deliverable": "编辑后的商品图",
+                    "style": "克制商业摄影，冷灰金属材质与柔和侧光",
                     "reference_plan": [
                         {
                             "image_number": 1,
@@ -532,6 +533,9 @@ class TestPromptDrafts(PlatformTestCase):
         self.assertIn("移除右侧花瓶", draft.payload["prompt"])
         self.assertIn('"must_preserve"', draft.payload["prompt"])
         self.assertIn('"reference_roles"', draft.payload["prompt"])
+        self.assertIn('"target_visual_style"', draft.payload["prompt"])
+        self.assertIn('"Product"', draft.payload["prompt"])
+        self.assertIn("克制商业摄影", draft.payload["prompt"])
         self.assertEqual(draft.payload["brief"]["reference_plan"][0]["role"], "待编辑原图")
 
     def test_prompt_draft_normalizes_explicit_canvas_request(self):

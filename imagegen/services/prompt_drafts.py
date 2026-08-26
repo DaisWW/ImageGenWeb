@@ -232,6 +232,7 @@ ready 时还必须完成一次交付前审查：
             prompt,
             brief=brief,
             production_spec=production_spec,
+            style_tags=catalog.get("style_tags", []),
             generation_mode="img2img" if edit_enabled else "text2img",
             translate_to_english=self.translate_to_english,
             maximum=self.max_prompt_characters,
@@ -420,6 +421,7 @@ def _enforce_prompt_contract(
     *,
     brief: dict[str, Any],
     production_spec: dict[str, Any],
+    style_tags: list[str],
     generation_mode: str,
     translate_to_english: bool,
     maximum: int,
@@ -431,6 +433,13 @@ def _enforce_prompt_contract(
             {"verbatim": text, "occurrences": 1, "extra_characters": False} for text in exact_text
         ]
     if generation_mode == "img2img":
+        visual_style = _text(brief.get("style"), 500)
+        normalized_style_tags = _string_list(style_tags, 4, 80)
+        if normalized_style_tags or visual_style:
+            contract["target_visual_style"] = {
+                "style_tags": normalized_style_tags,
+                "description": visual_style,
+            }
         if brief.get("reference_plan"):
             contract["reference_roles"] = brief["reference_plan"]
         for source_key, target_key in (

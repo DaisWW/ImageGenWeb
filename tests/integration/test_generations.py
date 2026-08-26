@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 from decimal import Decimal
 from pathlib import Path
@@ -18,6 +19,7 @@ from imagegen.services import ServiceError
 from tests.support.platform import (
     CHANNEL_CONFIG,
     BlockingProviderFactory,
+    FakeProviderFactory,
     PlatformTestCase,
     png_bytes,
 )
@@ -100,6 +102,80 @@ class TestGenerations(PlatformTestCase):
                 self.assertNotIn("canvas_resolution", job["workflow"])
                 db.session.refresh(workspace)
                 self.assertEqual(workspace.settings["generation_stage"], stage)
+
+    def test_img2img_style_contract_reaches_worker_provider_request(self):
+        workspace = self.create_workspace("风格契约闭环")
+        reference = self.services.workspaces.add_assets(
+            workspace,
+            [("product.png", png_bytes())],
+        )[0]
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="保留产品主体，改成克制的冷灰商业摄影风格。",
+        )
+        self.chat_client.prompt_draft_content = json.dumps(
+            {
+                "status": "ready",
+                "summary_zh": "保留产品主体并使用冷灰商业摄影风格。",
+                "prompt": "保留产品主体，改成冷灰商业摄影风格。",
+                "reference_usage": "generation",
+                "reference_reason": "参考图用于保留产品主体。",
+                "creative_direction": "product",
+                "template_id": "product-commerce-visual",
+                "style_tags": ["Product"],
+                "brief": {
+                    "deliverable": "商品图",
+                    "style": "克制商业摄影，冷灰金属材质与柔和侧光",
+                    "reference_plan": [
+                        {
+                            "image_number": 1,
+                            "role": "待编辑原图",
+                            "preserve": ["产品主体"],
+                            "change": ["背景风格"],
+                        }
+                    ],
+                    "preserve": ["产品主体"],
+                    "change": ["背景风格"],
+                },
+                "hard_checks": ["产品主体保持", "背景风格完成替换"],
+            },
+            ensure_ascii=False,
+        )
+        draft = self.services.conversations.create_prompt_draft(
+            workspace,
+            model_id="test-chat",
+            translate_to_english=False,
+            mode="img2img",
+            reference_ids=(reference.id,),
+        )
+
+        response = self.user_client().post(
+            "/api/generations",
+            json={
+                "workspace_id": workspace.id,
+                "channel_id": "test",
+                "model": "model-b",
+                "mode": "img2img",
+                "prompt": draft.payload["prompt"],
+                "prompt_draft_id": draft.id,
+                "reference_ids": [reference.id],
+            },
+        )
+
+        self.assertEqual(response.status_code, 202, response.get_data(as_text=True))
+        queued_prompt = response.json["job"]["items"][0]["prompt"]
+        self.assertIn('"target_visual_style"', queued_prompt)
+        self.assertIn('"Product"', queued_prompt)
+        self.assertIn("克制商业摄影", queued_prompt)
+
+        worker = self.create_worker()
+        worker.providers = FakeProviderFactory()
+        channel = self.app.extensions["channel_registry"].get("test")
+        item_id = response.json["job"]["items"][0]["id"]
+        self.assertTrue(worker._claim(item_id, channel))
+        worker._process_item(item_id)
+        self.assertEqual(worker.providers.adapter.request.prompt, queued_prompt)
 
     def test_explore_strategy_persists_distinct_effective_prompts(self):
         workspace = self.create_workspace("受控探索")
