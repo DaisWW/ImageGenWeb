@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
+import requests
 from PIL import Image
 from sqlalchemy import func, select
 
@@ -15,6 +16,7 @@ from imagegen.integrations.diagnostics import response_summary
 from imagegen.integrations.images import (
     GenerationRequest,
     OpenAIImagesAdapter,
+    ProviderError,
     ReferencePayload,
 )
 from imagegen.integrations.openai_chat import OpenAIChatClient, OpenAIChatError
@@ -27,6 +29,7 @@ from imagegen.services.runtime_logs import sanitize_details
 from tests.support.platform import (
     FailingOnceChatClient,
     FakeChatResponse,
+    FakeImageHTTPResponse,
     PlatformTestCase,
     RecordingChatSession,
     RecordingImageSession,
@@ -204,6 +207,115 @@ class TestProviderAndRuntime(PlatformTestCase):
         self.assertEqual(result.content, png_bytes())
         self.assertEqual(len(session.requests), 1)
         self.assertNotIn("background", session.requests[0]["json"])
+
+    def test_image_upstream_errors_are_localized_without_losing_diagnostics(self):
+        channel = self.app.extensions["channel_registry"].get("test")
+        request = GenerationRequest(
+            prompt="错误提示测试",
+            model="model-a",
+            size="1024x1024",
+            quality="high",
+            output_format="png",
+            compression=90,
+        )
+
+        class ErrorImageSession:
+            def __init__(self, response):
+                self.response = response
+
+            def post(self, _url, **_kwargs):
+                return self.response
+
+        class InvalidJSONResponse(FakeImageHTTPResponse):
+            def json(self):
+                raise ValueError("invalid json")
+
+        cases = [
+            (
+                403,
+                {
+                    "error": {
+                        "code": "insufficient_quota",
+                        "type": "insufficient_quota",
+                        "message": "You exceeded your current quota.",
+                    }
+                },
+                "渠道配额或余额不足",
+            ),
+            (
+                429,
+                {"error": {"message": "Too many requests"}},
+                "渠道请求过于频繁，请稍后重试",
+            ),
+            (
+                500,
+                {"error": {"message": "internal server error"}},
+                "渠道服务暂时异常，请稍后重试",
+            ),
+            (
+                502,
+                {"error": {"message": "stream disconnected before completion"}},
+                "渠道服务暂时异常，请稍后重试",
+            ),
+        ]
+        for status_code, payload, expected in cases:
+            with self.subTest(status_code=status_code):
+                response = FakeImageHTTPResponse(status_code=status_code, payload=payload)
+                adapter = OpenAIImagesAdapter()
+                adapter._local.session = ErrorImageSession(response)
+
+                with self.assertRaises(ProviderError) as raised:
+                    adapter.generate(channel, request)
+
+                self.assertEqual(str(raised.exception), expected)
+                self.assertEqual(raised.exception.status_code, status_code)
+                self.assertEqual(raised.exception.request_id, "image-http-test")
+                self.assertEqual(raised.exception.details["status_code"], status_code)
+
+        adapter = OpenAIImagesAdapter()
+        adapter._local.session = ErrorImageSession(InvalidJSONResponse(status_code=418))
+        with self.assertRaises(ProviderError) as raised:
+            adapter.generate(channel, request)
+        self.assertEqual(str(raised.exception), "渠道请求失败，请稍后重试")
+        self.assertEqual(raised.exception.status_code, 418)
+        self.assertEqual(raised.exception.details["json_type"], "invalid")
+
+    def test_image_connection_errors_are_localized_without_exception_names(self):
+        channel = self.app.extensions["channel_registry"].get("test")
+        request = GenerationRequest(
+            prompt="连接错误测试",
+            model="model-a",
+            size="1024x1024",
+            quality="high",
+            output_format="png",
+            compression=90,
+        )
+
+        class FailingImageSession:
+            def __init__(self, error):
+                self.error = error
+
+            def post(self, _url, **_kwargs):
+                raise self.error
+
+        for error, expected, code in (
+            (requests.Timeout("timed out"), "渠道请求超时，请稍后重试", "timeout"),
+            (
+                requests.ConnectionError("connection reset"),
+                "无法连接生图渠道，请稍后重试",
+                "connection_error",
+            ),
+        ):
+            with self.subTest(code=code):
+                adapter = OpenAIImagesAdapter()
+                adapter._local.session = FailingImageSession(error)
+
+                with self.assertRaises(ProviderError) as raised:
+                    adapter.generate(channel, request)
+
+                self.assertEqual(str(raised.exception), expected)
+                self.assertEqual(raised.exception.code, code)
+                self.assertNotIn(error.__class__.__name__, str(raised.exception))
 
     def test_chat_request_sends_configured_reasoning_effort(self):
         model = self.app.extensions["chat_model_registry"].get("test-chat")

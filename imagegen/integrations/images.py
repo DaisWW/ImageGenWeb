@@ -148,13 +148,13 @@ class OpenAIImagesAdapter:
             )
         except requests.Timeout as exc:
             raise ProviderError(
-                "上游生成超时",
+                "渠道请求超时，请稍后重试",
                 code="timeout",
                 details={"exception_type": exc.__class__.__name__},
             ) from exc
         except requests.RequestException as exc:
             raise ProviderError(
-                f"无法连接生图渠道：{exc.__class__.__name__}",
+                "无法连接生图渠道，请稍后重试",
                 code="connection_error",
                 details={"exception_type": exc.__class__.__name__},
             ) from exc
@@ -370,25 +370,53 @@ def _api_endpoint(base_url: str, path: str) -> str:
 
 
 def _upstream_error(response: requests.Response) -> str:
-    friendly = {
-        401: "API Key 无效或已失效",
-        403: "API Key 没有调用该模型的权限",
-        429: "渠道请求过于频繁或余额不足",
-        524: "渠道网关等待生成超时",
-    }
-    if response.status_code in friendly:
-        return friendly[response.status_code]
     try:
         payload = response.json()
-    except ValueError:
+    except (TypeError, ValueError):
         payload = None
+
+    error_codes: list[str] = []
     if isinstance(payload, dict):
+        sources: list[dict[str, Any]] = [payload]
         error = payload.get("error")
-        if isinstance(error, dict) and isinstance(error.get("message"), str):
-            return f"渠道错误：{error['message'][:500]}"
-        if isinstance(error, str):
-            return f"渠道错误：{error[:500]}"
-    return f"渠道返回 HTTP {response.status_code}"
+        if isinstance(error, dict):
+            sources.append(error)
+        for source in sources:
+            for key in ("code", "type"):
+                value = source.get(key)
+                if isinstance(value, str):
+                    code = value.strip().lower()
+                    if code and code not in error_codes:
+                        error_codes.append(code)
+
+    code_messages = {
+        "insufficient_quota": "渠道配额或余额不足",
+        "billing_hard_limit_reached": "渠道配额或余额不足",
+        "quota_exceeded": "渠道配额或余额不足",
+        "rate_limit_exceeded": "渠道请求过于频繁，请稍后重试",
+        "rate_limit_error": "渠道请求过于频繁，请稍后重试",
+        "invalid_api_key": "渠道 API Key 无效或已失效",
+        "authentication_error": "渠道 API Key 无效或已失效",
+        "permission_error": "渠道 API Key 没有调用权限",
+        "permission_denied": "渠道 API Key 没有调用权限",
+    }
+    for code in error_codes:
+        if code in code_messages:
+            return code_messages[code]
+
+    status_messages = {
+        401: "渠道 API Key 无效或已失效",
+        403: "渠道 API Key 没有调用权限",
+        429: "渠道请求过于频繁，请稍后重试",
+        500: "渠道服务暂时异常，请稍后重试",
+        502: "渠道服务暂时异常，请稍后重试",
+        503: "渠道服务暂时异常，请稍后重试",
+        504: "渠道服务暂时异常，请稍后重试",
+        524: "渠道网关等待生成超时",
+    }
+    if response.status_code in status_messages:
+        return status_messages[response.status_code]
+    return "渠道请求失败，请稍后重试"
 
 
 def _pinned_download_target(url: str):
