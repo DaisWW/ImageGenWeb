@@ -4,6 +4,7 @@ import json
 import threading
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import patch
 
 from sqlalchemy import func, select
 
@@ -699,6 +700,29 @@ class TestGenerations(PlatformTestCase):
             )
         )
         self.assertEqual(charge_count, 0)
+
+    def test_cancel_requested_before_provider_call_skips_provider(self):
+        workspace = self.create_workspace("调用前取消")
+        job = self.submit(workspace)
+        worker = self.create_worker()
+        providers = FakeProviderFactory()
+        worker.providers = providers
+        channel = self.app.extensions["channel_registry"].get("test")
+        self.assertTrue(worker._claim(job.items[0].id, channel))
+
+        request_references = worker._request_references
+
+        def cancel_before_request(item):
+            self.services.generations.cancel(job.id, user_id=self.user.id)
+            return request_references(item)
+
+        with patch.object(worker, "_request_references", side_effect=cancel_before_request):
+            worker._process_item(job.items[0].id)
+
+        db.session.expire_all()
+        item = db.session.get(GenerationItem, job.items[0].id)
+        self.assertEqual(item.status, "canceled")
+        self.assertEqual(providers.adapter.requests, [])
 
     def test_canceled_request_keeps_real_user_slot_until_provider_returns(self):
         workspace = self.create_workspace("取消仍占真实槽位")

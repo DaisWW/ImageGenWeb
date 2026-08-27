@@ -717,6 +717,22 @@ class GenerationWorker:
                 references = self._request_references(item)
                 if item.job.transparent_background and item.job.mode == "img2img":
                     self._validate_transparent_references(references)
+                db.session.expire_all()
+                latest_item = db.session.scalar(
+                    select(GenerationItem)
+                    .options(selectinload(GenerationItem.job))
+                    .where(GenerationItem.id == item_id)
+                )
+                if (
+                    latest_item is None
+                    or latest_item.cancel_requested_at
+                    or latest_item.job.cancel_requested_at
+                ):
+                    with self._settlement_lock:
+                        self._settle_canceled(item_id, started)
+                    attempt_status = "canceled"
+                    return
+                item = latest_item
                 adapter = self.providers.for_channel(channel)
                 result = adapter.generate(
                     channel,
@@ -807,6 +823,10 @@ class GenerationWorker:
                         details=exc.details,
                         retryable=(
                             not exc.provider_completed and self._provider_error_is_retryable(exc)
+                        ),
+                        result_unknown=(
+                            not exc.provider_completed
+                            and exc.code in {"timeout", "connection_error"}
                         ),
                         record_channel_failure=(
                             not exc.provider_completed
@@ -991,11 +1011,11 @@ class GenerationWorker:
 
     @staticmethod
     def _provider_error_is_retryable(error: ProviderError) -> bool:
+        if error.code in {"timeout", "connection_error"}:
+            return False
         if error.code in {
             "adapter_error",
-            "connection_error",
             "invalid_response",
-            "timeout",
         }:
             return True
         status = error.status_code
@@ -1104,6 +1124,7 @@ class GenerationWorker:
         details: dict | None = None,
         retryable: bool = False,
         record_channel_failure: bool = False,
+        result_unknown: bool = False,
     ) -> None:
         db.session.expire_all()
         preview = db.session.get(GenerationItem, item_id, populate_existing=True)
@@ -1147,7 +1168,7 @@ class GenerationWorker:
                 self._reset_item_for_retry(item)
                 job.completed_at = None
             else:
-                item.status = "failed"
+                item.status = "interrupted" if result_unknown else "failed"
                 item.error_code = code[:80]
                 item.error_message = message[:1000]
                 item.upstream_status = upstream_status
@@ -1182,6 +1203,7 @@ class GenerationWorker:
                 "max_attempts": self.channels.queue.max_channel_attempts,
                 "will_retry": will_retry,
                 "circuit_opened": circuit_opened,
+                "result_unknown": result_unknown,
                 "attempt_status": "unknown"
                 if record_channel_failure and not retryable
                 else "failed",

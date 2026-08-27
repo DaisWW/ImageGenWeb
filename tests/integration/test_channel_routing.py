@@ -298,7 +298,7 @@ class TestChannelRouting(PlatformTestCase):
         self.assertEqual([entry.provider_id for entry in logs], ["current", "lucen"])
         self.assertTrue(logs[0].details["will_retry"])
 
-    def test_auto_routing_switches_after_uncertain_provider_error_without_releasing_reservation(
+    def test_uncertain_provider_error_stops_without_switching_channel(
         self,
     ):
         for code in ("timeout", "connection_error"):
@@ -308,7 +308,7 @@ class TestChannelRouting(PlatformTestCase):
                 item_id = job.items[0].id
                 worker = self.create_worker()
                 worker.providers = SelectiveProviderFactory(
-                    {"current": ProviderError("刀哥调用结果未知", code=code)}
+                    {"current": ProviderError("刀哥调用结果未知", code=code, status_code=504)}
                 )
 
                 self.assertTrue(worker._claim(item_id))
@@ -323,18 +323,14 @@ class TestChannelRouting(PlatformTestCase):
                         GenerationAttempt.attempt_number == 1,
                     )
                 )
-                self.assertEqual(retried.status, "queued")
+                self.assertEqual(retried.status, "interrupted")
                 self.assertEqual(retried.attempted_channel_ids, ["current"])
                 self.assertEqual(attempt.status, "unknown")
-                self.assertEqual(user.reserved_rmb, Decimal("0.0900"))
-
-                self.assertTrue(worker._claim(item_id))
-                worker._process_item(item_id)
-                db.session.expire_all()
-                completed = db.session.get(GenerationItem, item_id)
-                self.assertEqual(worker.providers.calls, ["current", "lucen"])
-                self.assertEqual(completed.status, "succeeded")
-                self.assertEqual(completed.channel_id, "lucen")
+                self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
+                self.assertEqual(worker.providers.calls, ["current"])
+                log = db.session.scalar(select(RuntimeLog).where(RuntimeLog.item_id == item_id))
+                self.assertFalse(log.details["will_retry"])
+                self.assertTrue(log.details["result_unknown"])
 
     def test_selected_channel_failure_does_not_retry_on_another_channel(self):
         workspace = self.create_workspace()
