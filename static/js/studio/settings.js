@@ -83,6 +83,10 @@
       this.updatePromptCounter();
       this.el.batchCount.value = this.generationStrategyPolicy()
         .normalizeCount("sample", settings.batch_count);
+      const preferred = this.channels.find((channel) => (
+        channel.id === settings.channel_id && channel.configured
+      )) || this.channels.find((channel) => channel.configured) || this.channels[0];
+      this.renderChannelOptions(preferred?.id);
       this.applyChannel(settings, false);
       this.setMode(settings.mode || "text2img", false);
       this.setGenerationStrategy(settings.generation_strategy || "sample", false);
@@ -115,6 +119,22 @@
       this.updateInteractionState();
     },
 
+    renderChannelOptions(selectedId = this.el.channelSelect.value) {
+      const options = this.channels.map((channel) => {
+        const option = document.createElement("option");
+        option.value = channel.id;
+        option.textContent = `${channel.label}${channel.configured ? "" : " · 未配置"}`;
+        option.disabled = !channel.configured;
+        return option;
+      });
+      this.el.channelSelect.replaceChildren(...options);
+      const selected = this.channels.find((channel) => (
+        channel.id === selectedId && channel.configured
+      )) || this.channels.find((channel) => channel.configured);
+      this.el.channelSelect.value = selected?.id || "";
+      this.el.channelSelect.disabled = !selected;
+    },
+
     applyChannel(saved = null, shouldSave = false) {
       const channel = this.currentChannel();
       if (!channel) {
@@ -132,29 +152,27 @@
         return;
       }
       const settings = saved || this.collectSettings();
-      const modelProfile = this.routingProfile(settings.model) || channel;
       this.fillSelect(
         this.el.modelSelect,
-        this.routingProfile()?.models || channel.models,
+        channel.models,
         settings.model,
         "id",
         "label",
       );
-      const selectedProfile = this.routingProfile(this.el.modelSelect.value) || modelProfile;
-      this.fillSizeSuggestions(selectedProfile.capabilities.sizes, settings.size);
-      this.fillSelect(this.el.formatSelect, selectedProfile.capabilities.formats, settings.output_format, null, null, {
+      this.fillSizeSuggestions(channel.capabilities.sizes, settings.size);
+      this.fillSelect(this.el.formatSelect, channel.capabilities.formats, settings.output_format, null, null, {
         png: "PNG", jpeg: "JPEG", webp: "WebP",
       });
       this.updateTransparentBackgroundState();
       document.querySelectorAll("[data-mode]").forEach((button) => {
-        button.disabled = !selectedProfile.capabilities.modes.includes(button.dataset.mode);
+        button.disabled = !channel.capabilities.modes.includes(button.dataset.mode);
       });
-      if (!selectedProfile.capabilities.modes.includes(this.el.modeSwitch.dataset.mode)) {
-        this.setMode(selectedProfile.capabilities.modes[0], false);
+      if (!channel.capabilities.modes.includes(this.el.modeSwitch.dataset.mode)) {
+        this.setMode(channel.capabilities.modes[0], false);
       }
       if (
         this.el.generationStrategy?.value === "series"
-        && !selectedProfile.capabilities.modes.includes("img2img")
+        && !channel.capabilities.modes.includes("img2img")
       ) {
         this.setGenerationStrategy("sample", false);
         if (shouldSave) UI.toast("当前渠道不支持系列延续，已切回同提示词抽样", "info");
@@ -560,7 +578,7 @@
       return {
         mode: this.el.modeSwitch.dataset.mode,
         prompt: this.el.promptInput.value,
-        channel_id: "",
+        channel_id: this.el.channelSelect.value,
         model: this.el.modelSelect.value,
         size: this.normalizeSize(this.el.sizeInput.value)
           || this.activeWorkspace?.settings?.size

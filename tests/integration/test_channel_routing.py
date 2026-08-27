@@ -122,12 +122,33 @@ class TestChannelRouting(PlatformTestCase):
         self.assertEqual({item.channel_id for item in job.items}, {"__auto__"})
         self.assertEqual(job.workflow["channel_routing"]["candidate_ids"], ["current", "lucen"])
 
-    def test_submission_ignores_a_legacy_user_channel_choice(self):
+    def test_submission_honors_a_user_channel_choice(self):
         workspace = self.create_workspace()
         job = self.submit(workspace, channel_id="lucen")
 
-        self.assertEqual(job.channel_id, "current")
-        self.assertEqual(job.workflow["channel_routing"]["candidate_ids"], ["current", "lucen"])
+        self.assertEqual(job.channel_id, "lucen")
+        self.assertEqual(job.price_per_image_rmb, Decimal("0.0900"))
+        self.assertEqual({item.channel_id for item in job.items}, {"lucen"})
+        self.assertEqual({item.channel_label for item in job.items}, {"Lucen"})
+        self.assertEqual(job.workflow["channel_routing"]["mode"], "selected")
+        self.assertEqual(job.workflow["channel_routing"]["candidate_ids"], ["lucen"])
+        self.assertEqual(workspace.settings["channel_id"], "lucen")
+
+    def test_selected_channel_capacity_does_not_fall_back_to_another_channel(self):
+        workspace = self.create_workspace()
+        job = self.submit(workspace, channel_id="current", batch_count=4)
+        db.session.get(User, self.user.id).generation_concurrency = 4
+        db.session.commit()
+
+        worker = self.create_worker()
+        worker._thread_pool = HoldingExecutor()
+        worker._schedule_available()
+
+        db.session.expire_all()
+        saved = db.session.get(GenerationJob, job.id)
+        self.assertEqual(sum(item.status == "running" for item in saved.items), 2)
+        self.assertEqual(sum(item.status == "queued" for item in saved.items), 2)
+        self.assertEqual({item.channel_id for item in saved.items}, {"current"})
 
     def test_worker_fills_priority_channel_then_falls_back_to_lucen(self):
         workspace = self.create_workspace()
@@ -275,6 +296,35 @@ class TestChannelRouting(PlatformTestCase):
         self.assertEqual(ledger_count, 1)
         self.assertEqual([entry.provider_id for entry in logs], ["current", "lucen"])
         self.assertTrue(logs[0].details["will_retry"])
+
+    def test_selected_channel_failure_does_not_retry_on_another_channel(self):
+        workspace = self.create_workspace()
+        job = self.submit(workspace, channel_id="current", batch_count=1)
+        item_id = job.items[0].id
+        worker = self.create_worker()
+        worker.providers = SelectiveProviderFactory(
+            {
+                "current": ProviderError(
+                    "刀哥暂时不可用",
+                    code="upstream_error",
+                    status_code=502,
+                )
+            }
+        )
+
+        self.assertTrue(worker._claim(item_id))
+        worker._process_item(item_id)
+
+        db.session.expire_all()
+        item = db.session.get(GenerationItem, item_id)
+        user = db.session.get(User, self.user.id)
+        log = db.session.scalar(select(RuntimeLog).where(RuntimeLog.item_id == item_id))
+        self.assertEqual(worker.providers.calls, ["current"])
+        self.assertEqual(item.status, "failed")
+        self.assertEqual(item.channel_id, "current")
+        self.assertEqual(item.attempted_channel_ids, ["current"])
+        self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
+        self.assertFalse(log.details["will_retry"])
 
     def test_non_retryable_provider_error_fails_without_opening_circuit(self):
         workspace = self.create_workspace()

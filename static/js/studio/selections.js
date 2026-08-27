@@ -15,6 +15,7 @@
     },
 
     generationRoutingCandidates(settings = {}, workspaceId = this.activeWorkspace?.id) {
+      const channelId = String(settings.channel_id || "").trim();
       const modelId = String(settings.model || "").trim();
       const mode = String(settings.mode || "").trim();
       const outputFormat = String(settings.output_format || "").trim();
@@ -22,6 +23,7 @@
         ? this.currentSelection(workspaceId).size
         : 0;
       return this.routingChannels().filter((channel) => {
+        if (channelId && channel.id !== channelId) return false;
         if (modelId && !(channel.models || []).some((model) => model.id === modelId)) {
           return false;
         }
@@ -102,8 +104,8 @@
     },
 
     currentChannel() {
-      return this.routingProfile(this.el?.modelSelect?.value || "")
-        || this.routingProfile();
+      const channelId = String(this.el?.channelSelect?.value || "").trim();
+      return this.channels.find((channel) => channel.id === channelId) || null;
     },
 
     renderCreativeDirectionOptions(selectedId = "auto") {
@@ -145,6 +147,11 @@
 
     referenceSelectionLimit(target, workspace = this.activeWorkspace) {
       if (target === "chat") return this.limits.max_chat_attachments;
+      const channelId = workspace?.id === this.activeWorkspace?.id
+        ? this.el?.channelSelect?.value
+        : workspace?.settings?.channel_id;
+      const channel = this.channels.find((item) => item.id === channelId);
+      if (channel) return channel.capabilities.max_reference_images || 0;
       const modelId = workspace?.id === this.activeWorkspace?.id
         ? this.el?.modelSelect?.value
         : workspace?.settings?.model;

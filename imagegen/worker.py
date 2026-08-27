@@ -976,6 +976,9 @@ class GenerationWorker:
     def _can_retry_item(self, item: GenerationItem, attempted: list[str]) -> bool:
         if len(attempted) >= self.channels.queue.max_channel_attempts:
             return False
+        routing = item.job.workflow.get("channel_routing") if item.job.workflow else None
+        if isinstance(routing, dict) and routing.get("mode") == "selected":
+            return False
         attempted_ids = set(attempted)
         return any(
             channel.identifier not in attempted_ids

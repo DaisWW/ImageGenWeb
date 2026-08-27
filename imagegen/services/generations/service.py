@@ -86,11 +86,13 @@ class GenerationService:
         # that amount while releasing the full per-item reservation.
         reservation_unit_price = max(channel.price_rmb for channel in routing_channels)
         primary_channel = routing_channels[0]
+        requested_channel_id = str(request.channel_id or "").strip()
+        user_selected_channel = requested_channel_id not in {"", AUTO_CHANNEL_ID}
         reserved = money(reservation_unit_price * requested_count)
         self.billing.reserve(user, reserved)
         workflow = sanitize_workflow(request.workflow)
         workflow["channel_routing"] = {
-            "mode": "priority",
+            "mode": "selected" if user_selected_channel else "priority",
             "candidate_ids": [channel.identifier for channel in routing_channels],
             "candidate_labels": [channel.label for channel in routing_channels],
         }
@@ -137,8 +139,12 @@ class GenerationService:
                 GenerationItem(
                     job_id=job.id,
                     user_id=user.id,
-                    channel_id=AUTO_CHANNEL_ID,
-                    channel_label=AUTO_CHANNEL_LABEL,
+                    channel_id=(
+                        primary_channel.identifier if user_selected_channel else AUTO_CHANNEL_ID
+                    ),
+                    channel_label=(
+                        primary_channel.label if user_selected_channel else AUTO_CHANNEL_LABEL
+                    ),
                     position=position,
                     prompt=item_prompts[position],
                     status="queued",
@@ -151,7 +157,9 @@ class GenerationService:
                 **(workspace.settings or {}),
                 "mode": request.mode,
                 "prompt": request.prompt,
-                "channel_id": AUTO_CHANNEL_ID,
+                "channel_id": (
+                    primary_channel.identifier if user_selected_channel else AUTO_CHANNEL_ID
+                ),
                 "model": selected_model.identifier,
                 "size": normalized_size,
                 "output_format": request.output_format,
@@ -182,9 +190,18 @@ class GenerationService:
         one model shared by the largest number of providers.
         """
 
-        configured = [
-            channel for channel in self.channels.list(include_disabled=False) if channel.configured
-        ]
+        requested_channel_id = str(request.channel_id or "").strip()
+        if requested_channel_id and requested_channel_id != AUTO_CHANNEL_ID:
+            try:
+                configured = [self.channels.get(requested_channel_id)]
+            except ValueError as exc:
+                raise ServiceError(str(exc)) from exc
+        else:
+            configured = [
+                channel
+                for channel in self.channels.list(include_disabled=False)
+                if channel.configured
+            ]
         if not configured:
             raise ServiceError(
                 "暂无可用生图渠道",

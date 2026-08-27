@@ -58,6 +58,7 @@
         if (initialized && !changed) return;
         const previous = this.collectSettings();
         this.channels = data.channels;
+        this.renderChannelOptions(previous.channel_id);
         this.applyChannel(previous, false);
         if (changed && notify) UI.toast("渠道与模型配置已更新", "success");
       } catch (error) {

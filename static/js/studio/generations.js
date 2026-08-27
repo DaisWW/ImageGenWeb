@@ -20,8 +20,15 @@
       const price = Number(this.currentChannel()?.price_rmb || 0);
       const strategy = this.el.generationStrategy?.value || "sample";
       const suffix = strategy === "explore" ? "探索方案" : strategy === "series" ? "系列图片" : unit;
-      this.el.priceEstimateLabel.textContent = `${count} ${suffix}最高预计总价`;
+      this.el.priceEstimateLabel.textContent = `${count} ${suffix}预计总价`;
       this.el.priceEstimate.textContent = UI.money(price * count);
+      this.channels.forEach((channel, index) => {
+        const option = this.el.channelSelect.options[index];
+        if (option) {
+          const unitPrice = UI.money(channel.price_rmb);
+          option.textContent = `${channel.label} · ${unitPrice}/${unit}${channel.configured ? "" : " · 未配置"}`;
+        }
+      });
     },
 
     async submitGeneration(event) {
@@ -109,7 +116,7 @@
           return;
         }
         if (!this.generationRoutingCandidates(settings, workspace.id).length) {
-          UI.toast("当前模型、模式、格式或垫图数量没有可用渠道", "error");
+          UI.toast("所选渠道不支持当前模型、模式、格式或垫图数量", "error");
           return;
         }
         settings.prompt_draft_id = reviewedDraft?.id || "";
