@@ -31,6 +31,14 @@
       const suffix = strategy === "explore" ? "探索方案" : strategy === "series" ? "系列图片" : unit;
       this.el.priceEstimateLabel.textContent = `${count} ${suffix}预计总价`;
       this.el.priceEstimate.textContent = UI.money(price * count);
+      this.channels.forEach((channel) => {
+        const option = [...this.el.channelSelect.options]
+          .find((item) => item.value === channel.id);
+        if (option) {
+          const unitPrice = UI.money(channel.price_rmb);
+          option.textContent = `${channel.label} · ${unitPrice}/${unit}${channel.configured ? "" : " · 未配置"}`;
+        }
+      });
     },
 
     async submitGeneration(event) {

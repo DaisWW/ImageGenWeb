@@ -57,6 +57,23 @@ async function mockConfiguredImageChannel(page) {
           formats: ["png", "jpeg", "webp"],
         },
         limits: { max_concurrency: 2 },
+      }, {
+        id: "lucen",
+        label: "Lucen",
+        enabled: true,
+        configured: true,
+        models: [{ id: "e2e-image", label: "GPT Image 2" }],
+        default_model: "e2e-image",
+        price_rmb: "0.0800",
+        capabilities: {
+          modes: ["text2img", "img2img"],
+          max_reference_images: 2,
+          max_reference_image_mb: 10,
+          max_reference_total_mb: 40,
+          sizes: ["1024x1024"],
+          formats: ["png", "jpeg", "webp"],
+        },
+        limits: { max_concurrency: 2 },
       }],
     },
   }));

@@ -57,8 +57,13 @@
         this.channelVersion = data.version;
         if (initialized && !changed) return;
         const previous = this.collectSettings();
+        const savedChannelId = String(this.activeWorkspace?.settings?.channel_id || "").trim();
+        const settingsPending = this.saveTimer !== null
+          || this.workspaceSettingSaves.has(this.activeWorkspace?.id);
         this.channels = data.channels;
-        this.renderChannelOptions(previous.channel_id);
+        this.renderChannelOptions(
+          settingsPending ? previous.channel_id : (savedChannelId || previous.channel_id),
+        );
         this.applyChannel(previous, false);
         if (changed && notify) UI.toast("渠道与模型配置已更新", "success");
       } catch (error) {

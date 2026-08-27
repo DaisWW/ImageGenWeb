@@ -140,9 +140,10 @@
     },
 
     currentChannel() {
-      return this.routingProfile(this.el?.modelSelect?.value)
-        || this.routingProfile()
-        || null;
+      const channelId = String(this.el?.channelSelect?.value || "").trim();
+      return this.channels.find((channel) => (
+        channel.id === channelId && channel.configured
+      )) || null;
     },
 
     renderCreativeDirectionOptions(selectedId = "auto") {
