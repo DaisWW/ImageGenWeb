@@ -165,7 +165,22 @@
           ? "first-output"
           : "waiting-output",
         message.delivery_error || message.retry_error || "",
+        message.kind === "error"
+          ? this.isResolvedChatError(message) ? "retry-resolved" : "retry-open"
+          : "",
       ].join(":");
+    },
+
+    isResolvedChatError(message) {
+      const userMessageId = message.kind === "error"
+        ? message.payload?.retry_user_message_id
+        : "";
+      if (!userMessageId) return false;
+      return this.messages.some((candidate) => (
+        candidate.role === "assistant"
+        && candidate.kind !== "error"
+        && candidate.payload?.reply_to_message_id === userMessageId
+      ));
     },
 
     reconcileTimeline(timeline) {
@@ -352,7 +367,8 @@
           failure.textContent = errorText;
           card.append(failure);
         }
-        if (message.kind === "error" && message.payload?.retry_user_message_id) {
+        if (message.kind === "error" && message.payload?.retry_user_message_id
+          && !this.isResolvedChatError(message)) {
           const retry = document.createElement("button");
           retry.type = "button";
           retry.className = "button ghost small";

@@ -224,3 +224,90 @@ test("server chat operation does not show an assistant before its message is sto
     .not.toHaveText("正在发送消息");
   await expect(page.locator(".message-row.assistant")).toHaveCount(0);
 });
+
+test("successful chat retry removes the action from the old error", async ({ page }) => {
+  const userId = "1".repeat(32);
+  const errorId = "2".repeat(32);
+  const assistantId = "3".repeat(32);
+  const sentAt = new Date().toISOString();
+  const context = {
+    compacted: false,
+    estimated_context_tokens: 0,
+    max_context_tokens: 32000,
+  };
+  const messages = [
+    {
+      id: userId,
+      role: "user",
+      kind: "message",
+      content: "请整理这条需求",
+      payload: { reply_message_id: errorId },
+      created_at: sentAt,
+      attachments: [],
+    },
+    {
+      id: errorId,
+      role: "assistant",
+      kind: "error",
+      content: "聊天模型连接中断，请重试",
+      payload: {
+        retry_user_message_id: userId,
+        reply_to_message_id: userId,
+      },
+      provider_label: "E2E 助手",
+      created_at: sentAt,
+      attachments: [],
+    },
+  ];
+  const assistantMessage = {
+    id: assistantId,
+    role: "assistant",
+    kind: "message",
+    content: "已成功整理提示词",
+    payload: { reply_to_message_id: userId },
+    provider_label: "E2E 助手",
+    created_at: new Date(Date.now() + 1000).toISOString(),
+    attachments: [],
+  };
+
+  await mockConfiguredChatModel(page);
+  await page.route(`**/api/workspaces/*/messages/${errorId}/retry`, async (route) => {
+    messages[0].payload.reply_message_id = assistantId;
+    messages.push(assistantMessage);
+    await route.fulfill({
+      status: 201,
+      json: { message: assistantMessage, context },
+    });
+  });
+  await page.route("**/api/workspaces/*/messages*", async (route) => {
+    const request = route.request();
+    if (request.method() === "GET") {
+      await route.fulfill({
+        json: {
+          messages,
+          total: messages.length,
+          has_more: false,
+          context,
+          conversation_operation: { busy: false },
+        },
+      });
+      return;
+    }
+    await route.continue();
+  });
+
+  await loginAsAdmin(page);
+  const errorRow = page.locator(`[data-message-id="${errorId}"]`);
+  await expect(errorRow.getByRole("button", { name: "重新发送" })).toBeVisible();
+
+  await errorRow.getByRole("button", { name: "重新发送" }).click();
+  await expect(page.locator(`[data-message-id="${assistantId}"]`))
+    .toContainText("已成功整理提示词");
+  await expect(errorRow.getByRole("button", { name: "重新发送" })).toHaveCount(0);
+
+  await page.reload();
+  await expect(page.locator(`[data-message-id="${assistantId}"]`))
+    .toContainText("已成功整理提示词");
+  await expect(page.locator(`[data-message-id="${errorId}"]`)
+    .getByRole("button", { name: "重新发送" })).toHaveCount(0);
+});
