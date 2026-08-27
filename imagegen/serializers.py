@@ -266,6 +266,24 @@ def item_dict(item: GenerationItem, *, now: datetime, admin: bool = False) -> di
             upstream_status=item.upstream_status,
             upstream_request_id=item.upstream_request_id,
             error_code=item.error_code,
+            attempts=[
+                {
+                    "id": attempt.id,
+                    "number": attempt.attempt_number,
+                    "channel_id": attempt.channel_id,
+                    "channel": attempt.channel_label,
+                    "status": attempt.status,
+                    "provider_completed": attempt.provider_completed,
+                    "started_at": _iso(attempt.started_at),
+                    "completed_at": _iso(attempt.completed_at),
+                    "capacity_expires_at": _iso(attempt.capacity_expires_at),
+                    "upstream_status": attempt.upstream_status,
+                    "upstream_request_id": attempt.upstream_request_id,
+                    "error_code": attempt.error_code,
+                    "error": attempt.error_message,
+                }
+                for attempt in item.attempts
+            ],
         )
     return result
 

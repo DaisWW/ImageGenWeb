@@ -160,7 +160,9 @@ class ImageStorage:
     def read_bytes(self, relative_path: str) -> bytes:
         return self.read(relative_path).read_bytes()
 
-    def healthcheck(self) -> None:
+    def healthcheck(self, *, minimum_free_bytes: int = 0) -> None:
+        if minimum_free_bytes > 0 and shutil.disk_usage(self.root).free < minimum_free_bytes:
+            raise StorageError("图片存储可用空间不足")
         relative = Path(f".healthcheck-{uuid.uuid4().hex}.tmp")
         self._atomic_write(relative, b"ok")
         self.delete(relative.as_posix())

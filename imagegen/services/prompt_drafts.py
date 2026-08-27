@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from ..errors import ServiceError
 from .common import normalize_canvas_request
@@ -21,6 +22,200 @@ from .creative import (
 )
 from .creative.models import CreativeCase, PromptTemplate
 from .structured_output import parse_json_object
+
+_VISIBLE_MESSAGE_KEYS = (
+    "message",
+    "content",
+    "reply",
+    "answer",
+    "text",
+    "response",
+    "reply_text",
+    "final",
+)
+_VISIBLE_MESSAGE_NESTING_KEYS = ("message", "result", "output", "data")
+_HIDDEN_REASONING_BLOCK = re.compile(
+    r"<\s*(think|analysis|reasoning|internal|scratchpad)\b[^>]*>.*?"
+    r"(?:<\s*/\s*\1\s*>|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+_HIDDEN_REASONING_CLOSE = re.compile(
+    r"<\s*/\s*(?:think|analysis|reasoning|internal|scratchpad)\s*>",
+    re.IGNORECASE,
+)
+
+
+class PromptDraftStreamPreview:
+    """Extract complete user-visible fields from an otherwise incomplete JSON object."""
+
+    def __init__(
+        self,
+        *,
+        translate_to_english: bool,
+        maximum: int,
+        publish: Callable[[str], None],
+        allow_conversation: bool = True,
+    ):
+        self.translate_to_english = translate_to_english
+        self.maximum = maximum
+        self.publish = publish
+        self.allow_conversation = allow_conversation
+        self.content = ""
+        self.preview = ""
+        self.complete = False
+
+    def feed(self, delta: str) -> None:
+        if self.complete or not isinstance(delta, str):
+            return
+        self.content += delta
+        fields = _partial_top_level_fields(self.content)
+        status = _draft_status(fields)
+        preview = ""
+        if status == "needs_clarification":
+            raw_questions = fields.get("questions")
+            if isinstance(raw_questions, str):
+                raw_questions = [raw_questions]
+            questions = _string_list(raw_questions, 4, 2000)
+            if questions:
+                body = "\n".join(
+                    f"{index}. {question}" for index, question in enumerate(questions, 1)
+                )
+                preview = f"为了让生成结果更符合预期，还需要确认：\n{body}"
+                self.complete = True
+        elif status == "ready":
+            summary = _text(fields.get("summary_zh") or fields.get("summary"), self.maximum)
+            prompt = _text(fields.get("prompt") or fields.get("final_prompt"), self.maximum)
+            if summary:
+                preview = f"需求确认\n{summary}"
+            if summary and prompt:
+                label = "English prompt" if self.translate_to_english else "生图提示词"
+                preview = f"{preview}\n\n{label}\n{prompt}"
+                self.complete = True
+        elif status == "conversation" and self.allow_conversation:
+            preview = _visible_message(fields, self.maximum)
+            self.complete = bool(preview)
+        elif self.allow_conversation and _plain_text_response(self.content):
+            preview = _text(self.content, self.maximum)
+        if preview and preview != self.preview:
+            self.preview = preview
+            self.publish(preview)
+
+
+_PREVIEW_FIELDS = frozenset(
+    {
+        "status",
+        "questions",
+        "summary_zh",
+        "summary",
+        "prompt",
+        "final_prompt",
+        *_VISIBLE_MESSAGE_NESTING_KEYS,
+        *_VISIBLE_MESSAGE_KEYS,
+    }
+)
+
+
+def _partial_top_level_fields(content: str) -> dict[str, Any]:
+    text = content.lstrip()
+    if not text.startswith("{"):
+        return {}
+    decoder = json.JSONDecoder()
+    fields: dict[str, Any] = {}
+    seen: set[str] = set()
+    index = 1
+    while True:
+        while index < len(text) and text[index].isspace():
+            index += 1
+        if index >= len(text) or text[index] == "}":
+            return fields
+        try:
+            key, index = decoder.raw_decode(text, index)
+        except (TypeError, ValueError):
+            return fields
+        if not isinstance(key, str) or key in seen:
+            return {}
+        seen.add(key)
+        while index < len(text) and text[index].isspace():
+            index += 1
+        if index >= len(text) or text[index] != ":":
+            return fields
+        index += 1
+        while index < len(text) and text[index].isspace():
+            index += 1
+        try:
+            value, index = decoder.raw_decode(text, index)
+        except (TypeError, ValueError):
+            return fields
+        if key in _PREVIEW_FIELDS:
+            fields[key] = value
+        while index < len(text) and text[index].isspace():
+            index += 1
+        if index >= len(text) or text[index] == "}":
+            return fields
+        if text[index] != ",":
+            return fields
+        index += 1
+
+
+def _plain_text_response(content: str) -> bool:
+    if not isinstance(content, str):
+        return False
+    text = content.strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    return not text.startswith(("{", "[")) and not lowered.startswith("```json")
+
+
+def _draft_status(payload: dict[str, Any]) -> str:
+    status = _text(payload.get("status"), 40).lower()
+    aliases = {
+        "chat": "conversation",
+        "message": "conversation",
+        "text": "conversation",
+        "reply": "conversation",
+        "clarification": "needs_clarification",
+        "clarify": "needs_clarification",
+        "needs-clarification": "needs_clarification",
+        "needs clarification": "needs_clarification",
+        "complete": "ready",
+        "completed": "ready",
+        "ready_to_generate": "ready",
+        "ready-to-generate": "ready",
+        "done": "ready",
+    }
+    normalized = aliases.get(status, status)
+    if normalized in {"conversation", "needs_clarification", "ready"}:
+        return normalized
+    if any(_text(payload.get(key), 1) for key in _VISIBLE_MESSAGE_KEYS):
+        return "conversation"
+    if any(_visible_message(payload.get(key), 1) for key in _VISIBLE_MESSAGE_NESTING_KEYS):
+        return "conversation"
+    if payload.get("questions"):
+        return "needs_clarification"
+    if payload.get("prompt") or payload.get("final_prompt"):
+        return "ready"
+    return ""
+
+
+def _visible_response_text(content: str, maximum: int) -> str:
+    if _plain_text_response(content):
+        return _text(content, maximum)
+    payload = parse_json_object(content)
+    fields = payload if payload is not None else _partial_top_level_fields(content)
+    if message := _visible_message(fields, maximum):
+        return message
+    raw_questions = fields.get("questions")
+    if isinstance(raw_questions, str):
+        raw_questions = [raw_questions]
+    questions = _string_list(raw_questions, 4, 2000)
+    if questions:
+        return "\n".join(f"{index}. {question}" for index, question in enumerate(questions, 1))
+    summary = _text(fields.get("summary_zh") or fields.get("summary"), maximum)
+    prompt = _text(fields.get("prompt") or fields.get("final_prompt"), maximum)
+    if summary and prompt:
+        return f"{summary}\n\n{prompt}"[:maximum]
+    return summary or prompt
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +237,7 @@ class PromptDraftReview:
     active_series_contract: dict[str, Any] = field(default_factory=dict)
 
     def system_prompt(self) -> str:
+        allow_conversation = bool(self.conversation_prompt.strip())
         target = (
             "prompt 必须是自然、具体、结构清晰的英文生图提示词"
             if self.translate_to_english
@@ -86,7 +282,21 @@ class PromptDraftReview:
             if self.active_series_contract
             else ""
         )
-        return f"""你是高级 AI 视觉创作搭档与提示词工程师。本次调用同时完成需求确认和最终提示词整理：先判断会话是否已经足够明确，再决定是继续澄清还是直接为 GPT Image 2 整理最终提示词。
+        conversation_decision = (
+            "\n先判断用户当前是在普通交流，还是在提出、补充、修改或分析图像创作需求。"
+            "普通问候、身份或能力询问，以及与当前图像方案无关的交流，直接输出自然语言，"
+            "不要包装成 JSON，不要强行追问画面参数或编造生图提示词。只要当前消息实质上推进了图像创作，"
+            "就必须继续使用 needs_clarification 或 ready。"
+            if allow_conversation
+            else ""
+        )
+        output_contract = (
+            "若属于普通交流，直接输出给用户看的自然语言，不要输出 JSON。"
+            "若属于图像创作需求，只输出一个 JSON 对象，不要 Markdown，不要额外说明。"
+            if allow_conversation
+            else "只输出一个 JSON 对象，不要 Markdown，不要额外说明。"
+        )
+        return f"""你是高级 AI 视觉创作搭档与提示词工程师。对于图像创作，本次调用同时完成需求确认和最终提示词整理：先判断会话是否已经足够明确，再决定是继续澄清还是直接为 GPT Image 2 整理最终提示词。{conversation_decision}
 独立核对用户已经确认的事实、用户明确授权 AI 决定的事项、未解决问题和互相冲突的要求。助手曾提出但用户没有接受的建议不能视为已确认；用户明确回答“你决定”或同义表达时，该项视为已授权，不要再次阻塞。
 只有缺失或冲突会让主体、用途、构图、风格、精确文字、参考图用途或主体动作产生明显不同结果时，才判定需要澄清。不要为了补齐所有常见参数而阻塞；不影响核心意图的衔接细节可采用克制、专业且不抢戏的默认选择。
 若需要澄清，先完整核对会话，筛掉不会明显改变结果的低影响细节，把本轮能够识别的主问题以及答案会触发的可预见的条件分支，在同一条回复中一次性输出。问题宁少勿多，最多四个主题问题；不得把已经能识别的问题拆到后续轮次，也不要为了凑满四个补充问题。只有用户回答后才出现、事先无法合理列出的新事实或冲突，才允许追加追问。
@@ -114,21 +324,39 @@ ready 时还必须完成一次交付前审查：
 - exploration_plan 必须给出 4 个仍然满足同一交付物的受控方案。每个方案只允许变化 1～2 个维度，delta 使用 1～4 条具体变化；不得改变主体身份、产品外形、精确文字、参考图职责、画幅、模板或硬门槛。四个方案不能只是同义改写。
 - series_contract 用于后续系列图片保持一致，只提炼可复用的身份锚点、视觉语言、色板材质、构图规则、排版规则和保持项；不要把本张图片专属文案或场景写成永久锁定项。当前工作站已有 series_contract 时必须原样沿用，不得重新定义。
 - quality_hint 只能是 low、medium 或 high，默认使用 high；用户明确要求草稿探索或方向精修时，才分别使用 low 或 medium。生成时沿用工作站保存的阶段。
-只输出一个 JSON 对象，不要 Markdown，不要额外说明。字段名称只能出现一次，字段类型必须与示例一致，不得用 null 代替字符串、数组或对象。严格使用以下两种格式之一：
+为了让界面尽早展示可见回复，图像创作 JSON 的顶层字段顺序必须固定：needs_clarification 依次先输出 status、questions；ready 依次先输出 status、summary_zh、prompt；其余字段随后输出。
+{output_contract}JSON 字段名称只能出现一次，字段类型必须与示例一致，不得用 null 代替字符串、数组或对象。图像创作严格使用以下格式之一：
 {{"status":"needs_clarification","questions":["问题 1","问题 2"],"creative_direction":"poster"}}
 {{"status":"ready","summary_zh":"中文需求确认","prompt":"最终生图提示词","canvas_request":{{"aspect_ratio":"16:9","width":1920,"height":1080}},"reference_usage":"generation","reference_reason":"用户要求保持参考图主体并修改背景。","creative_direction":"poster","template_id":"poster-layout-system","edit_recipe_id":"","gallery_categories":["typography-and-posters"],"style_tags":["Poster"],"scene_tags":["Commerce"],"selection_reason":"交付物是商业海报，匹配排版与海报图谱及海报排版模板。","brief":{{"deliverable":"交付物","intended_use":"用途与受众","subject":"主体","composition":"构图与画幅","style":"媒介、材质、光线与配色","exact_text":["必须逐字出现的文字"],"reference_plan":[{{"image_number":1,"role":"职责","preserve":["保持项"],"change":["改变项"]}}],"preserve":["全局保持项"],"change":["改变项"],"avoid":["禁止项"]}},"production_spec":{{"platform":"平台","canvas":"画布","screen_type":"界面或交付物状态","safe_area":"安全区","hud_zones":["区域职责"],"panel_count":0,"panel_roles":["面板职责"],"identity_anchors":["身份锚点"],"camera_and_action":"镜头与动作","materials":["材质"],"palette_and_lighting":"色板与光线","exact_text":["必须逐字出现的文字"],"ui_constraints":["界面约束"],"consistency_rules":["一致性规则"]}},"exploration_plan":[{{"label":"中心层级","delta":["主体采用中心英雄构图","使用冷蓝银色色板"]}},{{"label":"非对称留白","delta":["主体采用三分法构图","右侧保留呼吸空间"]}},{{"label":"材质近景","delta":["镜头更接近主体","强化材质与侧光"]}},{{"label":"环境叙事","delta":["使用更宽的环境构图","增加前中后景层次"]}}],"series_contract":{{"identity_anchors":["系列主体身份"],"visual_language":["统一视觉语言"],"palette_materials":["统一色板和材质"],"composition_rules":["统一构图语法"],"typography_rules":["统一字体层级"],"must_preserve":["跨图保持项"],"allowed_changes":["文案、动作和场景内容"]}},"hard_checks":["可从成品判断的硬门槛"],"quality_hint":"high"}}"""
 
     def parse(self, content: str) -> dict[str, Any]:
         payload = parse_json_object(content)
         if payload is not None:
+            status = _draft_status(payload)
             parser = {
+                "conversation": self._conversation,
                 "needs_clarification": self._clarification,
                 "ready": self._ready,
-            }.get(_text(payload.get("status"), 40).lower())
+            }.get(status)
             parsed = parser(payload) if parser else None
             if parsed is not None:
                 return parsed
+        if self.conversation_prompt.strip() and _plain_text_response(content):
+            if visible := _text(content, self.max_prompt_characters):
+                return self._conversation_result(visible)
         raise ServiceError("聊天模型未能返回有效提示词草稿，请重试")
+
+    def conversation_fallback(self, *contents: str) -> dict[str, Any] | None:
+        if not self.conversation_prompt.strip():
+            return None
+        for content in contents:
+            visible = _visible_response_text(content, self.max_prompt_characters)
+            if visible:
+                return self._conversation_result(visible)
+        return self._conversation_result(
+            "我已经收到你的消息，但这次没能整理成可直接生成的提示词。"
+            "你可以继续描述想法，或让我重新整理当前需求。"
+        )
 
     def finalize(
         self,
@@ -139,6 +367,15 @@ ready 时还必须完成一次交付前审查：
     ) -> dict[str, Any]:
         result = dict(draft)
         candidate_ids = list(reference_ids)
+        if result.get("status") == "conversation":
+            result.update(
+                {
+                    "reference_usage": "analysis_only" if candidate_ids else "none",
+                    "generation_mode": generation_mode,
+                    "reference_ids": [],
+                }
+            )
+            return result
         usage = str(result.get("reference_usage", "")).strip().lower()
         if generation_mode == "auto":
             use_references = bool(candidate_ids) and usage not in {"analysis_only", "none"}
@@ -166,6 +403,8 @@ ready 时还必须完成一次交付前审查：
         return result
 
     def message_content(self, draft: dict[str, Any]) -> tuple[str, str]:
+        if draft["status"] == "conversation":
+            return draft["message"], "message"
         if draft["status"] == "needs_clarification":
             questions = "\n".join(
                 f"{index}. {question}" for index, question in enumerate(draft["questions"], 1)
@@ -174,8 +413,32 @@ ready 时还必须完成一次交付前审查：
         label = "English prompt" if self.translate_to_english else "生图提示词"
         return f"需求确认\n{draft['summary_zh']}\n\n{label}\n{draft['prompt']}", "prompt_draft"
 
+    def _conversation(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        if not self.conversation_prompt.strip():
+            return None
+        message = next(
+            (
+                text
+                for key in _VISIBLE_MESSAGE_NESTING_KEYS
+                if (text := _visible_message(payload.get(key), self.max_prompt_characters))
+            ),
+            _visible_message(payload, self.max_prompt_characters),
+        )
+        if not message:
+            return None
+        return self._conversation_result(message)
+
+    def _conversation_result(self, message: str) -> dict[str, Any]:
+        return {
+            "status": "conversation",
+            "message": message,
+            "language": "en" if self.translate_to_english else "zh",
+        }
+
     def _clarification(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         raw_questions = payload.get("questions")
+        if isinstance(raw_questions, str):
+            raw_questions = [raw_questions]
         if not isinstance(raw_questions, list):
             return None
         questions = _string_list(raw_questions, 4, 2000)
@@ -196,8 +459,14 @@ ready 时还必须完成一次交付前审查：
         }
 
     def _ready(self, payload: dict[str, Any]) -> dict[str, Any] | None:
-        summary = _text(payload.get("summary_zh"), self.max_prompt_characters)
-        prompt = _text(payload.get("prompt"), self.max_prompt_characters)
+        summary = _text(
+            payload.get("summary_zh") or payload.get("summary"),
+            self.max_prompt_characters,
+        )
+        prompt = _text(
+            payload.get("prompt") or payload.get("final_prompt"),
+            self.max_prompt_characters,
+        )
         if not summary or not prompt:
             return None
         direction_id = _direction_id(
@@ -353,7 +622,24 @@ def _reference_usage(value: Any) -> str:
 
 
 def _text(value: Any, maximum: int) -> str:
-    return value.strip()[:maximum] if isinstance(value, str) else ""
+    if not isinstance(value, str):
+        return ""
+    text = _HIDDEN_REASONING_BLOCK.sub("", value)
+    text = _HIDDEN_REASONING_CLOSE.sub("", text)
+    return text.strip()[:maximum]
+
+
+def _visible_message(value: Any, maximum: int, depth: int = 0) -> str:
+    if depth > 2:
+        return ""
+    if text := _text(value, maximum):
+        return text
+    if not isinstance(value, dict):
+        return ""
+    for key in (*_VISIBLE_MESSAGE_KEYS, *_VISIBLE_MESSAGE_NESTING_KEYS):
+        if text := _visible_message(value.get(key), maximum, depth + 1):
+            return text
+    return ""
 
 
 def _string_list(value: Any, limit: int, maximum: int) -> list[str]:
@@ -363,7 +649,7 @@ def _string_list(value: Any, limit: int, maximum: int) -> list[str]:
     for item in value:
         if not isinstance(item, str):
             continue
-        text = item.strip()[:maximum]
+        text = _text(item, maximum)
         if text and text not in result:
             result.append(text)
         if len(result) >= limit:

@@ -24,6 +24,7 @@ models:
     review_reasoning_effort: medium
     timeout_seconds: 180
     max_output_tokens: 16000
+    fallback_model_ids: [gpt-5-6-terra, gpt-5-6-luna]
   - id: gpt-5-6-luna
     label: GPT 5.6 LUNA
     enabled: true
@@ -35,6 +36,7 @@ models:
     review_reasoning_effort: medium
     timeout_seconds: 180
     max_output_tokens: 16000
+    fallback_model_ids: [gpt-5-6-terra, gpt]
   - id: gpt-5-6-terra
     label: GPT 5.6 TERRA
     enabled: true
@@ -46,3 +48,4 @@ models:
     review_reasoning_effort: medium
     timeout_seconds: 180
     max_output_tokens: 16000
+    fallback_model_ids: [gpt-5-6-luna, gpt]

@@ -44,7 +44,7 @@
               message.workspace_id === workspaceId
               && serverMessageIds.has(id)
               && (
-                message.delivery_state === "sending"
+                ["sending", "accepted"].includes(message.delivery_state)
                 || repliedUserMessageIds.has(id)
               )
             ) {
@@ -121,6 +121,7 @@
         return time || String(left.id).localeCompare(String(right.id));
       });
       const operation = this.chatOperations.get(workspaceId);
+      const preview = this.chatPreviewForOperation(workspaceId, operation);
       if (operation
         && !this.chatOperationAwaitingMessageAcceptance(operation)
         && !this.chatOperationHasReply(operation)) {
@@ -138,6 +139,8 @@
             first_output_seconds: operation.first_output_seconds,
             output_characters: operation.output_characters,
             request_body_bytes: operation.request_body_bytes,
+            preview_active: Boolean(preview?.targetText),
+            preview_text: preview?.displayedText || "",
             created_at: operation.started_at || null,
             provider_label: this.el.chatModelSelect.selectedOptions[0]?.textContent || "",
             workspace_id: workspaceId,
@@ -164,6 +167,7 @@
           && message.first_output_seconds !== undefined
           ? "first-output"
           : "waiting-output",
+        message.preview_active ? "streaming-preview" : "status-only",
         message.delivery_error || message.retry_error || "",
         message.kind === "error"
           ? this.isResolvedChatError(message) ? "retry-resolved" : "retry-open"
@@ -343,9 +347,28 @@
 
       if (message.kind === "pending") {
         const pending = document.createElement("div");
-        pending.className = "message-pending";
         pending.dataset.pendingProgress = "";
-        pending.innerHTML = '<span class="message-pending-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="message-pending-copy"><span class="message-pending-label"></span><small class="message-pending-meta"></small></span>';
+        if (message.preview_active) {
+          pending.className = "message-stream";
+          pending.setAttribute("aria-busy", "true");
+          const content = document.createElement("div");
+          content.className = "message-stream-content";
+          const text = document.createElement("span");
+          text.className = "message-stream-text";
+          text.textContent = message.preview_text || "";
+          const cursor = document.createElement("span");
+          cursor.className = "message-stream-cursor";
+          cursor.setAttribute("aria-hidden", "true");
+          content.append(text, cursor);
+
+          const status = document.createElement("div");
+          status.className = "message-stream-status";
+          status.innerHTML = '<i data-lucide="sparkles" aria-hidden="true"></i><span class="message-pending-copy"><span class="message-stream-label"></span><small class="message-stream-meta"></small></span>';
+          pending.append(content, status);
+        } else {
+          pending.className = "message-pending";
+          pending.innerHTML = '<span class="message-pending-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="message-pending-copy"><span class="message-pending-label"></span><small class="message-pending-meta"></small></span>';
+        }
         this.updatePendingOperation(pending, message);
         card.append(pending);
         cancelAction = this.chatCancelButton(message, "取消等待");
@@ -565,8 +588,8 @@
 
     updatePendingOperation(node, operation) {
       if (!node || !operation) return;
-      const label = node.querySelector(".message-pending-label");
-      const meta = node.querySelector(".message-pending-meta");
+      const label = node.querySelector(".message-pending-label, .message-stream-label");
+      const meta = node.querySelector(".message-pending-meta, .message-stream-meta");
       if (label) label.textContent = operation.stage_label || operation.content || "正在等待 AI 回复";
       if (meta) meta.textContent = this.pendingOperationDetails(operation);
     },

@@ -221,6 +221,56 @@
   font-variant-numeric: tabular-nums;
 }
 
+.message-stream {
+  display: grid;
+  min-width: 0;
+  gap: 11px;
+}
+
+.message-stream-content {
+  min-height: 1.72em;
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.72;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.message-stream-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  margin-left: 2px;
+  border-radius: 1px;
+  vertical-align: -.14em;
+  background: var(--accent);
+  animation: stream-cursor 880ms steps(2, end) infinite;
+}
+
+.message-stream-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.message-stream-status > svg {
+  width: 13px;
+  height: 13px;
+  color: var(--accent);
+}
+
+.message-stream-label {
+  color: var(--muted);
+}
+
+.message-stream-meta {
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
 .message-cancel-button svg {
   width: 13px;
   height: 13px;

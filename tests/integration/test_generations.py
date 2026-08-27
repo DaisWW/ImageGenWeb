@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from imagegen.config.channels import ChannelRegistry
 from imagegen.extensions import db
 from imagegen.models import (
+    GenerationAttempt,
     GenerationItem,
     GenerationJob,
     User,
@@ -20,6 +21,7 @@ from tests.support.platform import (
     CHANNEL_CONFIG,
     BlockingProviderFactory,
     FakeProviderFactory,
+    HoldingExecutor,
     PlatformTestCase,
     png_bytes,
 )
@@ -677,3 +679,37 @@ class TestGenerations(PlatformTestCase):
             )
         )
         self.assertEqual(charge_count, 0)
+
+    def test_canceled_request_keeps_real_user_slot_until_provider_returns(self):
+        workspace = self.create_workspace("取消仍占真实槽位")
+        db.session.get(User, self.user.id).generation_concurrency = 1
+        db.session.commit()
+        job = self.submit(workspace)
+        worker = self.create_worker()
+        providers = BlockingProviderFactory()
+        worker.providers = providers
+        channel = self.app.extensions["channel_registry"].get("test")
+        self.assertTrue(worker._claim(job.items[0].id, channel))
+
+        processing = threading.Thread(target=worker._process_item, args=(job.items[0].id,))
+        processing.start()
+        self.assertTrue(providers.adapter.started.wait(5))
+        self.services.generations.cancel(job.id, user_id=self.user.id)
+        replacement = self.submit(workspace)
+        worker._thread_pool = HoldingExecutor()
+
+        worker._schedule_available()
+        db.session.expire_all()
+        attempt = db.session.scalar(
+            select(GenerationAttempt).where(GenerationAttempt.item_id == job.items[0].id)
+        )
+        self.assertEqual(attempt.status, "running")
+        self.assertEqual(db.session.get(GenerationItem, replacement.items[0].id).status, "queued")
+
+        providers.adapter.release.set()
+        processing.join(10)
+        self.assertFalse(processing.is_alive())
+        worker._schedule_available()
+        db.session.expire_all()
+        self.assertEqual(attempt.status, "discarded")
+        self.assertEqual(db.session.get(GenerationItem, replacement.items[0].id).status, "running")

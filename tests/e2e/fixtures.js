@@ -64,6 +64,15 @@ async function mockConfiguredImageChannel(page) {
 }
 
 async function mockConfiguredChatModel(page, version = "e2e-chat-models") {
+  await page.route(
+    "**/api/workspaces/*/operations/*/preview-reservation",
+    (route) => route.fulfill({ json: { reserved: true } }),
+  );
+  await page.route("**/api/workspaces/*/operations/*/events", (route) => route.fulfill({
+    status: 200,
+    headers: { "Content-Type": "text/event-stream" },
+    body: "event: close\ndata: {}\n\n",
+  }));
   await page.route("**/api/chat-models", (route) => route.fulfill({
     json: {
       version,

@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import tarfile
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import call, patch
+from unittest.mock import ANY, call, patch
 
 from sqlalchemy import event, func, select
 
@@ -23,7 +24,8 @@ from imagegen.models import (
 from imagegen.services import ServiceError, SubmitGeneration, SystemSettingsService
 from imagegen.services.settings import SYSTEM_SETTINGS_KEY
 from imagegen.storage import StorageError
-from scripts.backup import copy_private_file, create_backup
+from scripts.backup import _write_manifest, copy_private_file, create_backup, verify_backup
+from scripts.restore import restore_backup
 from tests.support.platform import (
     FakeProviderFactory,
     PlatformTestCase,
@@ -462,6 +464,8 @@ class TestAdminAndMaintenance(PlatformTestCase):
         with (
             patch("scripts.backup.restrict_private_path"),
             patch("scripts.backup.copy_private_file"),
+            patch("scripts.backup._write_manifest"),
+            patch("scripts.backup.verify_backup"),
             patch(
                 "scripts.backup.running_services",
                 return_value={"db", "web", "worker"},
@@ -476,8 +480,10 @@ class TestAdminAndMaintenance(PlatformTestCase):
         self.assertEqual(
             run.call_args_list,
             [
-                call("stop", "--timeout", "720", "worker", "web"),
-                call("start", "web", "worker"),
+                call("stop", "--timeout", "30", "web"),
+                call("stop", "--timeout", "720", "worker"),
+                call("start", "web"),
+                call("start", "worker"),
             ],
         )
         self.assertEqual(output.call_count, 2)
@@ -515,8 +521,105 @@ class TestAdminAndMaintenance(PlatformTestCase):
         self.assertEqual(
             run.call_args_list,
             [
-                call("stop", "--timeout", "720", "web"),
+                call("stop", "--timeout", "30", "web"),
                 call("start", "web"),
+            ],
+        )
+        self.assertEqual(list(root.iterdir()), [])
+
+    def test_backup_uses_a_unique_name_when_timestamp_already_exists(self):
+        root = Path(self.temp.name) / "same-second-backup-test"
+        env_file = Path(self.temp.name) / "same-second-backup.env"
+        env_file.write_text("SECRET_KEY=test", encoding="utf-8")
+        fixed_now = datetime(2026, 8, 27, 12, 34, 56)
+        existing = root / fixed_now.strftime("%Y%m%d-%H%M%S")
+        existing.mkdir(parents=True)
+        (existing / "keep").write_text("existing", encoding="utf-8")
+
+        with (
+            patch("scripts.backup.datetime") as clock,
+            patch("scripts.backup.restrict_private_path"),
+            patch("scripts.backup.copy_private_file"),
+            patch("scripts.backup._write_manifest"),
+            patch("scripts.backup.verify_backup"),
+            patch("scripts.backup.running_services", return_value={"db"}),
+            patch("scripts.backup.docker_output", side_effect=[b"database", b"files"]),
+            patch("scripts.backup.docker_run"),
+        ):
+            clock.now.return_value = fixed_now
+            target = create_backup(root, env_file)
+
+        self.assertNotEqual(target.name, existing.name)
+        self.assertTrue(target.name.startswith(existing.name + "-"))
+        self.assertEqual((existing / "keep").read_text(encoding="utf-8"), "existing")
+
+    def test_backup_manifest_detects_tampering_and_unsafe_archives(self):
+        target = Path(self.temp.name) / "verified-backup"
+        target.mkdir()
+        (target / "database.dump").write_bytes(b"database")
+        (target / "deployment.env").write_text("SECRET_KEY=test", encoding="utf-8")
+        source = Path(self.temp.name) / "archive-source"
+        source.mkdir()
+        (source / "image.png").write_bytes(b"image")
+        with tarfile.open(target / "files.tar.gz", "w:gz") as archive:
+            archive.add(source, arcname="files")
+        _write_manifest(target)
+
+        manifest = verify_backup(target)
+        self.assertEqual(manifest["schema"], 1)
+        (target / "database.dump").write_bytes(b"tampered")
+        with self.assertRaisesRegex(RuntimeError, "校验失败"):
+            verify_backup(target)
+
+    def test_restore_stops_writers_and_only_restarts_after_success(self):
+        target = Path(self.temp.name) / "restore-backup"
+        target.mkdir()
+        (target / "database.dump").write_bytes(b"database")
+        (target / "files.tar.gz").write_bytes(b"files")
+        env_file = Path(self.temp.name) / "restore.env"
+
+        with (
+            patch("scripts.restore.verify_backup"),
+            patch("scripts.restore.running_services", return_value={"db", "web", "worker"}),
+            patch("scripts.restore.docker_input") as docker_input,
+            patch("scripts.restore.docker_run") as docker_run,
+        ):
+            restore_backup(target, env_file)
+
+        self.assertEqual(docker_input.call_count, 2)
+        self.assertEqual(
+            docker_run.call_args_list,
+            [
+                call("stop", "--timeout", "30", "web"),
+                call("stop", "--timeout", "720", "worker"),
+                call("exec", "-T", "db", "sh", "-ec", ANY),
+                call("run", "--rm", "--no-deps", "migrate"),
+                call("start", "web"),
+                call("start", "worker"),
+            ],
+        )
+
+    def test_restore_failure_keeps_application_stopped(self):
+        target = Path(self.temp.name) / "failed-restore-backup"
+        target.mkdir()
+        (target / "database.dump").write_bytes(b"database")
+        (target / "files.tar.gz").write_bytes(b"files")
+
+        with (
+            patch("scripts.restore.verify_backup"),
+            patch("scripts.restore.running_services", return_value={"db", "web", "worker"}),
+            patch("scripts.restore.docker_input", side_effect=RuntimeError("restore failed")),
+            patch("scripts.restore.docker_run") as docker_run,
+            self.assertRaisesRegex(RuntimeError, "保持停止"),
+        ):
+            restore_backup(target, Path(self.temp.name) / "restore.env")
+
+        self.assertEqual(
+            docker_run.call_args_list,
+            [
+                call("stop", "--timeout", "30", "web"),
+                call("stop", "--timeout", "720", "worker"),
+                call("exec", "-T", "db", "sh", "-ec", ANY),
             ],
         )
 

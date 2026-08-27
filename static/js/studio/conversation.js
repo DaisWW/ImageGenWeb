@@ -11,6 +11,8 @@
     setAttribute,
   } = window.ImageGenStudio;
 
+  const CHAT_PREVIEW_HANDOFF_MS = 180;
+
   Object.assign(StudioApp.prototype, {
     clearOutgoingMessages(workspaceId) {
       for (const [id, message] of this.outgoingMessages) {
@@ -368,6 +370,7 @@
       workspaceId = this.activeWorkspace?.id,
     ) {
       if (!operation?.message_id) return false;
+      if (this.chatPreviewForOperation(workspaceId, operation)?.targetText) return false;
       if (this.outgoingMessages.has(operation.message_id)) return true;
       return workspaceId === this.activeWorkspace?.id && !this.messages.some((message) => (
         message.id === operation.message_id
@@ -396,7 +399,9 @@
       try {
         await this.flushSettings(workspaceId, { signal: operation.controller.signal });
         if (!operation.canceled) {
+          await this.startChatPreviewStream(workspaceId, operation);
           data = await request(operation);
+          await this.completeChatPreview(workspaceId, operation, data, messageId);
           if (operation.canceled) {
             canceled = true;
             this.requestOperationCancellation(workspaceId, operation.operation_id);
@@ -406,6 +411,7 @@
         canceled = this.isChatOperationCanceled(operation, error);
         if (!canceled) failure = error;
       } finally {
+        this.stopChatPreviewStream(workspaceId, operation.operation_id);
         this.finishLocalChatOperation(workspaceId, operation);
       }
       return {
@@ -414,6 +420,219 @@
         failure,
         canceled: canceled || this.isChatOperationCanceled(operation),
       };
+    },
+
+    chatPreviewForOperation(workspaceId, operation) {
+      if (!workspaceId || !operation) return null;
+      const preview = this.chatPreviews.get(workspaceId);
+      const operationIds = [operation.operation_id, operation.message_id].filter(Boolean);
+      return preview && operationIds.includes(preview.operationId) ? preview : null;
+    },
+
+    async startChatPreviewStream(workspaceId, operation) {
+      const operationId = operation?.operation_id || operation?.message_id;
+      if (!workspaceId || !operationId
+        || !["reply", "prompt_draft"].includes(operation.kind)
+        || typeof window.EventSource !== "function") return;
+      const existing = this.chatPreviews.get(workspaceId);
+      if (existing?.operationId === operationId && (existing.source || existing.finished)) return;
+      if (existing) this.stopChatPreviewStream(workspaceId);
+      const state = {
+        workspaceId,
+        operationId,
+        source: null,
+        targetText: "",
+        targetCharacters: [],
+        displayedText: "",
+        displayedCount: 0,
+        frame: null,
+        drainTimer: null,
+        handoffTimer: null,
+        drainResolve: null,
+        finalText: "",
+        finished: false,
+      };
+      this.chatPreviews.set(workspaceId, state);
+      try {
+        await UI.api(
+          `/api/workspaces/${encodeURIComponent(workspaceId)}`
+            + `/operations/${encodeURIComponent(operationId)}/preview-reservation`,
+          { method: "POST", body: {} },
+        );
+      } catch (_error) {
+        if (this.chatPreviews.get(workspaceId) === state) this.chatPreviews.delete(workspaceId);
+        return;
+      }
+      if (this.chatPreviews.get(workspaceId) !== state || operation.canceled) return;
+      const source = new EventSource(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}`
+          + `/operations/${encodeURIComponent(operationId)}/events`,
+      );
+      state.source = source;
+      source.addEventListener("preview", (event) => {
+        if (this.chatPreviews.get(workspaceId) !== state) return;
+        try {
+          const payload = JSON.parse(event.data);
+          this.queueChatPreview(state, String(payload.text || ""));
+        } catch (_error) {
+          // Ignore malformed preview events; the final JSON response remains authoritative.
+        }
+      });
+      source.addEventListener("close", () => {
+        if (this.chatPreviews.get(workspaceId) !== state) return;
+        source.close();
+        state.source = null;
+        state.finished = true;
+      });
+      source.onerror = () => {
+        if (this.chatPreviews.get(workspaceId) !== state) return;
+        source.close();
+        state.source = null;
+        state.finished = true;
+      };
+    },
+
+    queueChatPreview(state, text) {
+      if (!text || state.targetText === text || this.chatPreviews.get(state.workspaceId) !== state) {
+        return;
+      }
+      if (state.finalText && text !== state.finalText) return;
+      const characters = Array.from(text);
+      if (!text.startsWith(state.displayedText)) {
+        const displayed = Array.from(state.displayedText);
+        let common = 0;
+        while (common < displayed.length
+          && common < characters.length
+          && displayed[common] === characters[common]) common += 1;
+        state.displayedCount = common;
+        state.displayedText = characters.slice(0, common).join("");
+      }
+      state.targetText = text;
+      state.targetCharacters = characters;
+      const operation = this.chatOperations.get(state.workspaceId);
+      const outgoing = operation?.message_id
+        ? this.outgoingMessages.get(operation.message_id)
+        : null;
+      if (outgoing?.delivery_state === "sending") outgoing.delivery_state = "accepted";
+      if (this.activeWorkspace?.id === state.workspaceId) this.renderMessages();
+      if (this.reducedMotion.matches) {
+        state.displayedCount = characters.length;
+        state.displayedText = text;
+        this.updateChatPreviewText(state);
+        return;
+      }
+      this.scheduleChatPreviewFrame(state);
+    },
+
+    completeChatPreview(workspaceId, operation, data, messageId) {
+      const state = this.chatPreviewForOperation(workspaceId, operation);
+      if (!state || operation.canceled) return Promise.resolve();
+      const messages = [
+        ...(Array.isArray(data?.messages) ? data.messages : []),
+        ...(data?.message ? [data.message] : []),
+      ];
+      const reply = messages.find((message) => (
+        message?.role === "assistant"
+        && message.kind !== "error"
+        && (!messageId || message.payload?.reply_to_message_id === messageId || messages.length === 1)
+      ));
+      const finalText = String(reply?.content || "");
+      if (finalText) {
+        state.finalText = finalText;
+        this.queueChatPreview(state, finalText);
+      }
+      if (!state.targetText || state.displayedCount >= state.targetCharacters.length) {
+        return Promise.resolve();
+      }
+      if (this.reducedMotion.matches || document.hidden) {
+        state.displayedCount = state.targetCharacters.length;
+        state.displayedText = state.targetText;
+        this.updateChatPreviewText(state);
+        return Promise.resolve();
+      }
+      return new Promise((resolve) => {
+        state.drainResolve = resolve;
+        const resolveImmediately = () => {
+          if (state.drainResolve !== resolve) return;
+          state.drainResolve = null;
+          resolve();
+        };
+        const resolveAfterHandoff = () => {
+          if (state.handoffTimer !== null) return;
+          state.handoffTimer = window.setTimeout(() => {
+            state.handoffTimer = null;
+            resolveImmediately();
+          }, CHAT_PREVIEW_HANDOFF_MS);
+        };
+        const waitForPreview = () => {
+          state.drainTimer = null;
+          if (this.chatPreviews.get(workspaceId) !== state
+            || operation.canceled
+          ) {
+            resolveImmediately();
+            return;
+          }
+          if (state.displayedCount >= state.targetCharacters.length) {
+            resolveAfterHandoff();
+            return;
+          }
+          if (document.hidden) {
+            state.displayedCount = state.targetCharacters.length;
+            state.displayedText = state.targetText;
+            this.updateChatPreviewText(state);
+            resolveImmediately();
+            return;
+          }
+          state.drainTimer = window.setTimeout(waitForPreview, 16);
+        };
+        waitForPreview();
+      });
+    },
+
+    scheduleChatPreviewFrame(state) {
+      if (state.frame !== null || state.displayedCount >= state.targetCharacters.length) return;
+      state.frame = window.requestAnimationFrame(() => {
+        state.frame = null;
+        if (this.chatPreviews.get(state.workspaceId) !== state) return;
+        const remaining = state.targetCharacters.length - state.displayedCount;
+        const batch = remaining > 800 ? 32
+          : remaining > 320 ? 16
+            : remaining > 120 ? 8
+              : remaining > 48 ? 4
+                : remaining > 18 ? 2 : 1;
+        state.displayedCount = Math.min(state.targetCharacters.length, state.displayedCount + batch);
+        state.displayedText = state.targetCharacters.slice(0, state.displayedCount).join("");
+        this.updateChatPreviewText(state);
+        if (state.displayedCount >= state.targetCharacters.length) return;
+        this.scheduleChatPreviewFrame(state);
+      });
+    },
+
+    updateChatPreviewText(state) {
+      if (this.activeWorkspace?.id !== state.workspaceId) return;
+      const row = [...this.el.messageList.querySelectorAll(".message-row.assistant.pending")]
+        .find((node) => node.dataset.workspaceId === state.workspaceId);
+      const content = row?.querySelector(".message-stream-text");
+      if (!content) return;
+      const scrollGap = this.el.conversationScroll.scrollHeight
+        - this.el.conversationScroll.scrollTop
+        - this.el.conversationScroll.clientHeight;
+      setText(content, state.displayedText);
+      if (scrollGap < 120) this.scrollConversation();
+    },
+
+    stopChatPreviewStream(workspaceId, operationId = "") {
+      const state = this.chatPreviews.get(workspaceId);
+      if (!state || (operationId && state.operationId !== operationId)) return;
+      state.source?.close();
+      if (state.frame !== null) window.cancelAnimationFrame(state.frame);
+      if (state.drainTimer !== null) window.clearTimeout(state.drainTimer);
+      if (state.handoffTimer !== null) window.clearTimeout(state.handoffTimer);
+      const finish = state.drainResolve;
+      state.handoffTimer = null;
+      state.drainResolve = null;
+      finish?.();
+      this.chatPreviews.delete(workspaceId);
     },
 
     mergeConversationMessages(messages, context) {
@@ -499,6 +718,7 @@
       canceled.add(targetId);
       operationIds.forEach((id) => canceled.add(id));
       this.requestOperationCancellation(workspaceId, targetId);
+      this.stopChatPreviewStream(workspaceId);
       this.renderWorkspaceList();
       if (this.activeWorkspace?.id === workspaceId) this.renderMessages();
     },
@@ -525,6 +745,7 @@
           || previous.output_characters !== next.output_characters
           || previous.request_body_bytes !== next.request_body_bytes;
         this.chatOperations.set(workspaceId, next);
+        void this.startChatPreviewStream(workspaceId, next);
         return changed;
       }
       if (previous?.local) return false;
@@ -549,6 +770,8 @@
           && previous.output_characters === next.output_characters
           && previous.request_body_bytes === next.request_body_bytes
         ));
+      if (next) void this.startChatPreviewStream(workspaceId, next);
+      else this.stopChatPreviewStream(workspaceId);
       if (unchanged) return false;
       if (operation?.busy) {
         this.chatOperations.set(workspaceId, next);

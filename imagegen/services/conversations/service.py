@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any
@@ -199,6 +200,17 @@ class ConversationService:
 
     def cancel_operation(self, workspace_id: str, operation_id: str) -> bool:
         return self.operations.cancel(workspace_id, operation_id)
+
+    def preview_events(
+        self,
+        workspace_id: str,
+        operation_id: str,
+        user_id: int,
+    ) -> Iterator[dict[str, Any]]:
+        return self.operations.preview_events(workspace_id, operation_id, user_id)
+
+    def reserve_preview(self, workspace_id: str, operation_id: str, user_id: int) -> None:
+        self.operations.reserve_preview(workspace_id, operation_id, user_id)
 
     def generation_submission(
         self,

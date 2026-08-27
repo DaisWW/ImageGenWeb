@@ -108,6 +108,21 @@ function Get-EnvFlag {
     return $false
 }
 
+function Get-EnvValue {
+    param(
+        [System.Collections.IEnumerable]$Lines,
+        [string]$Name
+    )
+
+    $prefix = "$Name="
+    foreach ($line in $Lines) {
+        if ($line.StartsWith($prefix, [StringComparison]::Ordinal)) {
+            return $line.Substring($prefix.Length).Trim()
+        }
+    }
+    return ""
+}
+
 function Initialize-EnvironmentFile {
     $lines = New-Object "System.Collections.Generic.List[string]"
     if (Test-Path -LiteralPath $envPath) {
@@ -154,6 +169,9 @@ function Initialize-EnvironmentFile {
     Set-EnvValue $lines "IMAGEGEN_HTTPS_PORT" "18443" -ReplaceBlank | Out-Null
     Set-EnvValue $lines "IMAGEGEN_CADDY_TLS" "tls internal" | Out-Null
     Set-EnvValue $lines "CADDY_IMAGE" "caddy:2-alpine" -ReplaceBlank | Out-Null
+    Set-EnvValue $lines "IMAGEGEN_BACKUP_RETENTION_DAYS" "30" -ReplaceBlank | Out-Null
+    Set-EnvValue $lines "IMAGEGEN_BACKUP_TIME" "03:00" -ReplaceBlank | Out-Null
+    Set-EnvValue $lines "IMAGEGEN_BACKUP_MIRROR" "" | Out-Null
 
     [IO.File]::WriteAllLines($envPath, $lines, (New-Object Text.UTF8Encoding($false)))
     if ($adminPasswordChanged) {
@@ -246,6 +264,12 @@ try {
     $generatedAdminPassword = Initialize-EnvironmentFile
     $envLines = [IO.File]::ReadAllLines($envPath)
     $httpsProxyEnabled = Get-EnvFlag -Lines $envLines -Name "IMAGEGEN_HTTPS_ENABLED"
+    [int]$backupRetentionDays = 30
+    $configuredRetention = Get-EnvValue -Lines $envLines -Name "IMAGEGEN_BACKUP_RETENTION_DAYS"
+    [int]$parsedRetention = 0
+    if ([int]::TryParse($configuredRetention, [ref]$parsedRetention) -and $parsedRetention -ge 1) {
+        $backupRetentionDays = $parsedRetention
+    }
     [int]$httpsPort = 18443
     $httpsHost = "localhost"
     foreach ($line in $envLines) {
@@ -257,6 +281,27 @@ try {
         } elseif ($line.StartsWith("IMAGEGEN_HTTPS_HOST=", [StringComparison]::Ordinal)) {
             $httpsHost = $line.Substring("IMAGEGEN_HTTPS_HOST=".Length).Trim()
         }
+    }
+
+    $preDeployBackup = $null
+    $runningServices = docker compose --project-directory $projectDir ps --services --status running
+    if ($LASTEXITCODE -eq 0 -and $runningServices -contains "db") {
+        $python = Get-Command py.exe -ErrorAction SilentlyContinue
+        $pythonArguments = @("-3")
+        if ($null -eq $python) {
+            $python = Get-Command python.exe -ErrorAction Stop
+            $pythonArguments = @()
+        }
+        Write-Host "正在创建并演练部署前备份..."
+        $backupOutput = & $python.Source @pythonArguments scripts/backup.py `
+            --output backups `
+            --env-file .env `
+            --retention-days $backupRetentionDays
+        if ($LASTEXITCODE -ne 0) {
+            throw "部署前备份或恢复演练失败，已停止部署。"
+        }
+        $preDeployBackup = @($backupOutput)[-1]
+        Write-Host "部署前备份：$preDeployBackup" -ForegroundColor Green
     }
 
     if ($Lan -and $httpsProxyEnabled) {
@@ -351,7 +396,7 @@ try {
 
     if (-not $NoBuild) {
         Write-Host "正在构建主站与 Worker 镜像..."
-        & docker compose --project-directory $projectDir build web worker
+        & docker compose --project-directory $projectDir build web
         if ($LASTEXITCODE -ne 0) {
             throw "主站/Worker 镜像构建失败。"
         }
@@ -400,9 +445,12 @@ try {
     if ($httpsProxyEnabled) {
         $composeProfiles += @("--profile", "https")
     }
-    & docker compose --project-directory $projectDir @composeProfiles up -d --no-build --force-recreate --remove-orphans
+    & docker compose --project-directory $projectDir @composeProfiles up -d --no-build --remove-orphans
     if ($LASTEXITCODE -ne 0) {
-        throw "docker compose 启动失败。"
+        if ($preDeployBackup) {
+            Write-Warning "可用以下备份恢复：py scripts/restore.py --backup-dir `"$preDeployBackup`" --confirm RESTORE"
+        }
+        throw "docker compose 启动或数据库迁移失败。"
     }
 
     $healthUrl = "http://127.0.0.1:$Port/health"
@@ -465,6 +513,26 @@ try {
         Write-Host "初始管理员：$AdminUsername" -ForegroundColor Yellow
         Write-Host "初始密码：$generatedAdminPassword" -ForegroundColor Yellow
         Write-Host "请在登录后修改密码；该密码也保存在 .env 中。" -ForegroundColor Yellow
+    }
+    $backupTime = "03:00"
+    foreach ($line in $envLines) {
+        if ($line.StartsWith("IMAGEGEN_BACKUP_TIME=", [StringComparison]::Ordinal)) {
+            $configuredBackupTime = $line.Substring("IMAGEGEN_BACKUP_TIME=".Length).Trim()
+            if ($configuredBackupTime -match "^([01]\d|2[0-3]):[0-5]\d$") {
+                $backupTime = $configuredBackupTime
+            }
+            break
+        }
+    }
+    try {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $projectDir "scripts\install-backup-task.ps1") `
+            -At $backupTime
+        if ($LASTEXITCODE -ne 0) {
+            throw "任务计划程序返回 $LASTEXITCODE"
+        }
+    } catch {
+        Write-Warning "每日备份任务未能自动安装：$($_.Exception.Message)"
     }
 } finally {
     Pop-Location

@@ -10,6 +10,7 @@ from imagegen.extensions import db
 from imagegen.integrations.images import ProviderError, ProviderResult
 from imagegen.models import (
     ChannelCircuitState,
+    GenerationAttempt,
     GenerationItem,
     GenerationJob,
     RuntimeLog,
@@ -296,6 +297,44 @@ class TestChannelRouting(PlatformTestCase):
         self.assertEqual(ledger_count, 1)
         self.assertEqual([entry.provider_id for entry in logs], ["current", "lucen"])
         self.assertTrue(logs[0].details["will_retry"])
+
+    def test_auto_routing_switches_after_uncertain_provider_error_without_releasing_reservation(
+        self,
+    ):
+        for code in ("timeout", "connection_error"):
+            with self.subTest(code=code):
+                workspace = self.create_workspace(code)
+                job = self.submit(workspace, channel_id="", batch_count=1)
+                item_id = job.items[0].id
+                worker = self.create_worker()
+                worker.providers = SelectiveProviderFactory(
+                    {"current": ProviderError("刀哥调用结果未知", code=code)}
+                )
+
+                self.assertTrue(worker._claim(item_id))
+                worker._process_item(item_id)
+
+                db.session.expire_all()
+                retried = db.session.get(GenerationItem, item_id)
+                user = db.session.get(User, self.user.id)
+                attempt = db.session.scalar(
+                    select(GenerationAttempt).where(
+                        GenerationAttempt.item_id == item_id,
+                        GenerationAttempt.attempt_number == 1,
+                    )
+                )
+                self.assertEqual(retried.status, "queued")
+                self.assertEqual(retried.attempted_channel_ids, ["current"])
+                self.assertEqual(attempt.status, "unknown")
+                self.assertEqual(user.reserved_rmb, Decimal("0.0900"))
+
+                self.assertTrue(worker._claim(item_id))
+                worker._process_item(item_id)
+                db.session.expire_all()
+                completed = db.session.get(GenerationItem, item_id)
+                self.assertEqual(worker.providers.calls, ["current", "lucen"])
+                self.assertEqual(completed.status, "succeeded")
+                self.assertEqual(completed.channel_id, "lucen")
 
     def test_selected_channel_failure_does_not_retry_on_another_channel(self):
         workspace = self.create_workspace()

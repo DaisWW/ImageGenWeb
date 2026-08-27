@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from flask import jsonify, request
+import json
+
+from flask import Response, jsonify, request
 from flask_login import current_user, login_required
 
 from ..errors import ServiceError
@@ -198,6 +200,39 @@ def cancel_workspace_operation(workspace_id: str, operation_id: str):
     workspace = owned_workspace(workspace_id)
     canceled = services().conversations.cancel_operation(workspace.id, operation_id)
     return jsonify(canceled=True, operation_id=operation_id, active=canceled)
+
+
+@web.get("/api/workspaces/<workspace_id>/operations/<operation_id>/events")
+@login_required
+def stream_workspace_operation_events(workspace_id: str, operation_id: str):
+    workspace = owned_workspace(workspace_id)
+    events = services().conversations.preview_events(
+        workspace.id,
+        operation_id,
+        current_user.id,
+    )
+
+    def generate():
+        for item in events:
+            event = str(item.get("event", "message"))
+            if event == "keepalive":
+                yield ": keepalive\n\n"
+                continue
+            data = json.dumps(item.get("data", {}), ensure_ascii=False, separators=(",", ":"))
+            yield f"event: {event}\ndata: {data}\n\n"
+
+    response = Response(generate(), mimetype="text/event-stream")
+    response.headers["Cache-Control"] = "no-cache, no-transform"
+    response.headers["X-Accel-Buffering"] = "no"
+    return response
+
+
+@web.post("/api/workspaces/<workspace_id>/operations/<operation_id>/preview-reservation")
+@login_required
+def reserve_workspace_operation_preview(workspace_id: str, operation_id: str):
+    workspace = owned_workspace(workspace_id)
+    services().conversations.reserve_preview(workspace.id, operation_id, current_user.id)
+    return jsonify(reserved=True, operation_id=operation_id)
 
 
 @web.post("/api/workspaces/<workspace_id>/prompt-drafts")

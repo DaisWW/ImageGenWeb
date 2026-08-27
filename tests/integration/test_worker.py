@@ -16,6 +16,7 @@ from imagegen.integrations.images import (
 )
 from imagegen.integrations.matting import LucidaMattingClient
 from imagegen.models import (
+    GenerationAttempt,
     GenerationItem,
     GenerationJob,
     RuntimeLog,
@@ -50,6 +51,7 @@ class TestWorker(PlatformTestCase):
         self.assertTrue(worker._claim(job.items[0].id, channel))
         worker._process_item(job.items[0].id)
         self.assertTrue(worker.providers.adapter.request.transparent_background)
+        self.assertTrue(worker.providers.adapter.request.idempotency_key)
 
         db.session.expire_all()
         item = db.session.get(GenerationItem, job.items[0].id)
@@ -73,6 +75,11 @@ class TestWorker(PlatformTestCase):
         self.assertEqual(runtime_log.status, "success")
         self.assertEqual(runtime_log.provider_id, "test")
         self.assertNotIn(job.prompt, json.dumps(runtime_log.details, ensure_ascii=False))
+        attempt = db.session.scalar(
+            select(GenerationAttempt).where(GenerationAttempt.item_id == item.id)
+        )
+        self.assertEqual(attempt.status, "succeeded")
+        self.assertTrue(attempt.provider_completed)
 
     def test_transparent_img2img_rejects_baked_checkerboard_reference_before_provider(self):
         workspace = self.create_workspace()
@@ -397,7 +404,11 @@ class TestWorker(PlatformTestCase):
         worker.worker_id = "periodic-recovery-worker"
         channel = self.app.extensions["channel_registry"].get("test")
         self.assertTrue(worker._claim(item_id, channel))
-        db.session.get(GenerationItem, item_id).heartbeat_at = utcnow() - timedelta(minutes=30)
+        stale_at = utcnow() - timedelta(minutes=30)
+        db.session.get(GenerationItem, item_id).heartbeat_at = stale_at
+        db.session.scalar(
+            select(GenerationAttempt).where(GenerationAttempt.item_id == item_id)
+        ).heartbeat_at = stale_at
         db.session.commit()
         worker._futures[item_id] = Future()
 
@@ -410,6 +421,11 @@ class TestWorker(PlatformTestCase):
         db.session.expire_all()
         self.assertEqual(db.session.get(GenerationItem, item_id).status, "interrupted")
         self.assertEqual(db.session.get(User, self.user.id).reserved_rmb, Decimal("0.0000"))
+        attempt = db.session.scalar(
+            select(GenerationAttempt).where(GenerationAttempt.item_id == item_id)
+        )
+        self.assertEqual(attempt.status, "unknown")
+        self.assertGreater(attempt.capacity_expires_at, attempt.started_at)
 
     def test_worker_keeps_excess_images_queued_at_user_and_channel_limits(self):
         workspace = self.create_workspace()
@@ -432,6 +448,42 @@ class TestWorker(PlatformTestCase):
         statuses = [item.status for item in db.session.get(GenerationJob, job.id).items]
         self.assertEqual(statuses.count("running"), 3)
         self.assertEqual(statuses.count("queued"), 1)
+
+    def test_worker_pauses_queue_before_provider_when_storage_is_unavailable(self):
+        workspace = self.create_workspace("存储故障预检")
+        job = self.submit(workspace)
+        worker = self.create_worker()
+        worker.providers = FakeProviderFactory()
+
+        with patch.object(worker.storage, "healthcheck", side_effect=StorageError("disk full")):
+            worker._schedule_available()
+
+        db.session.expire_all()
+        self.assertEqual(db.session.get(GenerationItem, job.items[0].id).status, "queued")
+        self.assertEqual(worker.providers.adapter.requests, [])
+        log = db.session.scalar(
+            select(RuntimeLog).where(RuntimeLog.event == "worker.dependency_paused")
+        )
+        self.assertEqual(log.error_code, "storage_unavailable")
+
+    def test_worker_pauses_transparent_queue_until_lucida_recovers(self):
+        workspace = self.create_workspace("Lucida 故障预检")
+        job = self.submit(workspace, transparent_background=True)
+        worker = self.create_worker()
+        worker._thread_pool = HoldingExecutor()
+
+        worker._schedule_available()
+        db.session.expire_all()
+        self.assertEqual(db.session.get(GenerationItem, job.items[0].id).status, "queued")
+
+        self.app.extensions["lucida_matting_client"] = LucidaMattingClient(
+            base_url="http://lucida.test",
+            session=_StaticMattingSession(transparent_icon_png_bytes()),
+        )
+        worker._dependency_next_check["lucida"] = 0
+        worker._schedule_available()
+        db.session.expire_all()
+        self.assertEqual(db.session.get(GenerationItem, job.items[0].id).status, "running")
 
     def test_worker_schedules_with_its_own_application_context(self):
         workspace = self.create_workspace()

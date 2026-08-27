@@ -160,6 +160,15 @@ class RuntimeConfigService:
                 if old
                 else ""
             )
+            fallback_model_ids = (
+                raw["fallback_model_ids"]
+                if "fallback_model_ids" in raw
+                else list(old.fallback_model_ids)
+                if old
+                else []
+            )
+            if not isinstance(fallback_model_ids, list):
+                raise ServiceError("备用模型列表格式无效")
             models.append(
                 {
                     "id": identifier,
@@ -172,6 +181,7 @@ class RuntimeConfigService:
                     "review_reasoning_effort": str(review_reasoning_effort).strip(),
                     "timeout_seconds": raw.get("timeout_seconds"),
                     "max_output_tokens": raw.get("max_output_tokens"),
+                    "fallback_model_ids": [str(item).strip() for item in fallback_model_ids],
                 }
             )
         context = payload.get("context")

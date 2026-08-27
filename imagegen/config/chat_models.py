@@ -56,6 +56,7 @@ class ChatModelConfig:
     timeout_seconds: int
     max_output_tokens: int
     api_key: str = field(repr=False)
+    fallback_model_ids: tuple[str, ...] = ()
 
     @property
     def configured(self) -> bool:
@@ -74,6 +75,7 @@ class ChatModelConfig:
             "model": self.model,
             "reasoning_effort": self.reasoning_effort,
             "review_reasoning_effort": self.review_reasoning_effort,
+            "fallback_model_ids": list(self.fallback_model_ids),
         }
 
     def editable_dict(self) -> dict[str, Any]:
@@ -90,6 +92,7 @@ class ChatModelConfig:
             "review_reasoning_effort": self.review_reasoning_effort,
             "timeout_seconds": self.timeout_seconds,
             "max_output_tokens": self.max_output_tokens,
+            "fallback_model_ids": list(self.fallback_model_ids),
         }
 
 
@@ -176,6 +179,14 @@ class ChatModelRegistry(ReloadableConfigRegistry[ChatModelSnapshot]):
             if model.identifier in models:
                 raise ValueError(f"聊天模型 ID 重复：{model.identifier}")
             models[model.identifier] = model
+        for model in models.values():
+            invalid = [
+                identifier
+                for identifier in model.fallback_model_ids
+                if identifier == model.identifier or identifier not in models
+            ]
+            if invalid:
+                raise ValueError(f"{model.label} 的备用模型无效：{', '.join(invalid)}")
         raw_system_prompts = raw.get("system_prompts", {})
         if not isinstance(raw_system_prompts, dict):
             raise ValueError("system_prompts 配置必须是对象")
@@ -245,6 +256,7 @@ class ChatModelRegistry(ReloadableConfigRegistry[ChatModelSnapshot]):
             review_reasoning_effort=review_reasoning_effort,
             timeout_seconds=bounded_int(raw, "timeout_seconds", 180, 10, 600),
             max_output_tokens=bounded_int(raw, "max_output_tokens", 2000, 128, 16000),
+            fallback_model_ids=_fallback_model_ids(raw.get("fallback_model_ids", [])),
             api_key=api_key,
         )
 
@@ -266,3 +278,12 @@ def _parse_prompts(
             raise ValueError(f"{kind} {label}长度必须在 1 到 {maximum} 个字符之间")
         prompts[kind] = value
     return prompts
+
+
+def _fallback_model_ids(raw: Any) -> tuple[str, ...]:
+    if not isinstance(raw, list):
+        raise ValueError("备用模型必须是列表")
+    values = tuple(str(item).strip() for item in raw)
+    if any(not value for value in values) or len(values) != len(set(values)):
+        raise ValueError("备用模型不能留空或重复")
+    return values

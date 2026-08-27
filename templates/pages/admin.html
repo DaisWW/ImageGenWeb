@@ -138,6 +138,10 @@
           <label class="field"><span>附件合计 MiB</span><input type="number" name="max_attachment_total_mb" min="1" max="40" required></label>
           <label class="field"><span>全局对话并发</span><input type="number" name="max_concurrent_chats" min="1" max="64" required></label>
           <label class="field"><span>单用户对话并发</span><input type="number" name="max_concurrent_chats_per_user" min="1" max="16" required></label>
+          <label class="field"><span>对话故障尝试数</span><input type="number" name="chat_failover_attempts" min="1" max="5" required></label>
+          <label class="field"><span>全局预览连接</span><input type="number" name="max_preview_streams" min="1" max="32" required></label>
+          <label class="field"><span>单用户预览连接</span><input type="number" name="max_preview_streams_per_user" min="1" max="8" required></label>
+          <label class="field"><span>预览预约秒数</span><input type="number" name="preview_reservation_seconds" min="5" max="60" required></label>
         </div>
       </fieldset>
       <fieldset class="settings-group">
@@ -153,6 +157,9 @@
           <label class="field"><span>轮询毫秒</span><input type="number" name="worker_poll_milliseconds" min="100" max="10000" step="100" required></label>
           <label class="field"><span>心跳秒数</span><input type="number" name="worker_heartbeat_seconds" min="5" max="120" required></label>
           <label class="field"><span>恢复检查秒数</span><input type="number" name="worker_recovery_seconds" min="10" max="3600" required></label>
+          <label class="field"><span>看门狗秒数</span><input type="number" name="worker_watchdog_seconds" min="30" max="3600" required></label>
+          <label class="field"><span>依赖重试秒数</span><input type="number" name="dependency_retry_seconds" min="5" max="600" required></label>
+          <label class="field"><span>存储最小可用 MiB</span><input type="number" name="storage_min_free_mb" min="32" max="10240" required></label>
           <label class="field"><span>清理间隔分钟</span><input type="number" name="cleanup_interval_minutes" min="5" max="1440" required></label>
         </div>
       </fieldset>
@@ -251,6 +258,7 @@
       <label class="field"><span>上游模型</span><input name="model" maxlength="150" required></label>
     </div>
     <label class="check-line" data-clear-chat-key-row hidden><input type="checkbox" name="clear_api_key"><span>清除已保存的 API Key</span></label>
+    <label class="field"><span>备用模型 ID（逗号分隔）</span><input name="fallback_model_ids" maxlength="300" placeholder="model-b, model-c"></label>
     <div class="form-grid four-columns">
       <label class="field"><span>推理强度</span><select name="reasoning_effort"><option value="">默认</option><option value="none">None</option><option value="minimal">Minimal</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="max">Max</option></select></label>
       <label class="field"><span>需求整理推理强度</span><select name="review_reasoning_effort"><option value="">继承通用</option><option value="none">None</option><option value="minimal">Minimal</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="max">Max</option></select></label>

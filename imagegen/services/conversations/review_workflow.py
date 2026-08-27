@@ -119,16 +119,22 @@ class ImageReviewWorkflow(ConversationSupport):
             )
         operation.update_progress("context", "正在准备验收上下文")
         try:
-            result = self.client.complete(
+            model, result = self._complete_with_failover(
+                workspace,
                 model,
+                "chat.image_review",
                 system=evaluation.system_prompt(),
                 messages=[{"role": "user", "content": parts}],
                 max_output_tokens=min(model.max_output_tokens, 1800),
-                reasoning_effort=model.effective_review_reasoning_effort,
-                progress=operation.client_progress,
+                operation=operation,
             )
         except OpenAIChatError as exc:
-            self._raise_chat_error(workspace, model, "chat.image_review", exc)
+            self._raise_chat_error(
+                workspace,
+                getattr(exc, "chat_model", model),
+                "chat.image_review",
+                exc,
+            )
         operation.update_progress("parsing", "正在解析验收结果")
         review = evaluation.parse(result.content)
         review.update(

@@ -262,6 +262,7 @@ class FakeChatClient:
         max_output_tokens=None,
         reasoning_effort=None,
         progress=None,
+        output_delta=None,
     ):
         self.calls.append(
             {
@@ -324,6 +325,8 @@ class FakeChatClient:
             )
         else:
             content = self.reply_content or "测试回复"
+        if output_delta:
+            output_delta(content)
         return ChatCompletion(
             content=content,
             request_id="chat-request-test",
@@ -343,6 +346,7 @@ class FailingOnceChatClient(FakeChatClient):
         max_output_tokens=None,
         reasoning_effort=None,
         progress=None,
+        output_delta=None,
     ):
         result = super().complete(
             model,
@@ -351,6 +355,7 @@ class FailingOnceChatClient(FakeChatClient):
             max_output_tokens=max_output_tokens,
             reasoning_effort=reasoning_effort,
             progress=progress,
+            output_delta=output_delta,
         )
         if len(self.calls) == 1:
             raise OpenAIChatError(
@@ -361,6 +366,72 @@ class FailingOnceChatClient(FakeChatClient):
                 elapsed_seconds=0.25,
             )
         return result
+
+
+class FailingBeforeOutputChatClient(FakeChatClient):
+    def complete(
+        self,
+        model,
+        *,
+        system,
+        messages,
+        max_output_tokens=None,
+        reasoning_effort=None,
+        progress=None,
+        output_delta=None,
+    ):
+        if not self.calls:
+            self.calls.append({"model_id": model.identifier, "model": model.model})
+            raise OpenAIChatError(
+                "测试聊天模型超时",
+                code="chat_timeout",
+                status_code=504,
+                elapsed_seconds=0.25,
+                details={"first_output_seconds": None},
+            )
+        return super().complete(
+            model,
+            system=system,
+            messages=messages,
+            max_output_tokens=max_output_tokens,
+            reasoning_effort=reasoning_effort,
+            progress=progress,
+            output_delta=output_delta,
+        )
+
+
+class FailingAfterOutputChatClient(FakeChatClient):
+    def complete(
+        self,
+        model,
+        *,
+        system,
+        messages,
+        max_output_tokens=None,
+        reasoning_effort=None,
+        progress=None,
+        output_delta=None,
+    ):
+        if not self.calls:
+            self.calls.append({"model_id": model.identifier, "model": model.model})
+            if output_delta:
+                output_delta("已开始输出")
+            raise OpenAIChatError(
+                "测试聊天模型在输出后失败",
+                code="chat_upstream_error",
+                status_code=502,
+                elapsed_seconds=0.25,
+                details={"first_output_seconds": 0.1},
+            )
+        return super().complete(
+            model,
+            system=system,
+            messages=messages,
+            max_output_tokens=max_output_tokens,
+            reasoning_effort=reasoning_effort,
+            progress=progress,
+            output_delta=output_delta,
+        )
 
 
 class BlockingFirstChatClient:
@@ -379,6 +450,7 @@ class BlockingFirstChatClient:
         max_output_tokens=None,
         reasoning_effort=None,
         progress=None,
+        output_delta=None,
     ):
         with self._lock:
             self.calls.append(
@@ -402,15 +474,18 @@ class BlockingFirstChatClient:
             self.started.set()
             if not self.release.wait(10):
                 raise RuntimeError("blocking chat client timed out")
+        content = json.dumps(
+            {
+                "status": "needs_clarification",
+                "questions": [f"并行回复 {call_number}"],
+                "creative_direction": "other",
+            },
+            ensure_ascii=False,
+        )
+        if output_delta:
+            output_delta(content)
         return ChatCompletion(
-            content=json.dumps(
-                {
-                    "status": "needs_clarification",
-                    "questions": [f"并行回复 {call_number}"],
-                    "creative_direction": "other",
-                },
-                ensure_ascii=False,
-            ),
+            content=content,
             request_id=f"parallel-chat-{call_number}",
             input_tokens=10,
             output_tokens=5,

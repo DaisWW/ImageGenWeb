@@ -9,7 +9,7 @@ from ...extensions import db
 from ...integrations.openai_chat import ChatCompletion, OpenAIChatError
 from ...models import Asset, ConversationMessage, Workspace, utcnow
 from ..creative import get_creative_direction
-from ..prompt_drafts import PromptDraftReview
+from ..prompt_drafts import PromptDraftReview, PromptDraftStreamPreview
 from .operations import ConversationOperation, ConversationOperationRegistry
 from .prompts import generation_mode_prompt
 from .support import ConversationDependencies, ConversationSupport
@@ -111,6 +111,14 @@ class PromptDraftWorkflow(ConversationSupport):
             active_series_contract=series_anchor.anchor.contract if series_anchor else {},
         )
         system_prompt = review.system_prompt()
+        requested_model = model
+        stream_preview = PromptDraftStreamPreview(
+            translate_to_english=review.translate_to_english,
+            maximum=review.max_prompt_characters,
+            publish=operation.update_preview,
+            allow_conversation=False,
+        )
+        max_output_tokens = min(model.max_output_tokens, 2400)
         operation.update_progress("context", "正在整理会话上下文")
         try:
             context = self.context.build(
@@ -120,23 +128,41 @@ class PromptDraftWorkflow(ConversationSupport):
                 system_prompt=system_prompt,
             )
             db.session.commit()
-            result = self.client.complete(
+            model, result = self._complete_with_failover(
+                workspace,
                 model,
+                "chat.prompt_draft",
                 system=system_prompt,
                 messages=context,
-                max_output_tokens=min(model.max_output_tokens, 2400),
-                reasoning_effort=model.effective_review_reasoning_effort,
-                progress=operation.client_progress,
+                max_output_tokens=max_output_tokens,
+                operation=operation,
+                output_delta=stream_preview.feed,
             )
         except OpenAIChatError as exc:
-            self._raise_chat_error(workspace, model, "chat.prompt_draft", exc)
+            self._raise_chat_error(
+                workspace,
+                getattr(exc, "chat_model", model),
+                "chat.prompt_draft",
+                exc,
+            )
         operation.update_progress("parsing", "正在解析模型结果")
         try:
+            parsed, result, format_repaired = self._parse_prompt_draft_result(
+                review=review,
+                model=model,
+                system_prompt=system_prompt,
+                messages=context,
+                result=result,
+                operation=operation,
+                max_output_tokens=max_output_tokens,
+            )
             draft = review.finalize(
-                review.parse(result.content),
+                parsed,
                 generation_mode=effective_mode,
                 reference_ids=[asset.id for asset in attachments],
             )
+        except OpenAIChatError as exc:
+            self._raise_chat_error(workspace, model, "chat.prompt_draft", exc)
         except ServiceError as exc:
             self._raise_chat_error(
                 workspace,
@@ -146,6 +172,7 @@ class PromptDraftWorkflow(ConversationSupport):
             )
         generation_references = self._draft_references(draft, attachments)
         content, message_kind = review.message_content(draft)
+        operation.update_preview(content)
         message = self._assistant_message(
             workspace,
             model,
@@ -174,6 +201,7 @@ class PromptDraftWorkflow(ConversationSupport):
                 "generation_mode": draft["generation_mode"],
                 "reference_count": len(generation_references),
                 "reference_usage": draft["reference_usage"],
+                "format_repaired": format_repaired,
                 "creative_direction": draft.get("creative_direction", "other"),
                 "template_id": draft.get("template_id", "custom"),
                 "edit_recipe_id": draft.get("edit_recipe_id", ""),
@@ -183,7 +211,7 @@ class PromptDraftWorkflow(ConversationSupport):
         )
         self._remember_preferences(
             workspace,
-            model_id=model.identifier,
+            model_id=requested_model.identifier,
             translate_to_english=translate_to_english,
             creative_direction_id=creative_direction_id,
             gallery_category_id=gallery_category_id,

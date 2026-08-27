@@ -390,8 +390,8 @@ test("direct generation bypasses AI conversation", { tag: "@responsive" }, async
   await page.locator("#directGenerationButton").click();
 
   await expect(page.locator("#generationForm")).toBeVisible();
-  await expect(page.locator("#channelSelect")).toHaveValue("e2e");
-  await expect(page.locator("#channelSelect option")).toHaveText(["E2E 渠道 · ¥0.03/张"]);
+  await expect(page.locator("#channelSelect")).toHaveValue("__auto__");
+  await expect(page.locator("#channelSelect")).toBeHidden();
   await expect(page.locator("#promptInput"))
     .toHaveValue("一张雨夜霓虹街道的电影感照片");
   await page.evaluate(() => {
@@ -426,7 +426,7 @@ test("direct generation bypasses AI conversation", { tag: "@responsive" }, async
   await page.locator("#generateButton").click();
   const body = (await generationRequest).postDataJSON();
   expect(body.prompt).toBe("一张雨夜霓虹街道的电影感照片");
-  expect(body.channel_id).toBe("e2e");
+  expect(body.channel_id).toBe("__auto__");
   expect(body.prompt_draft_id).toBe("");
   expect(body.generation_stage).toBe("final");
   expect(aiRequests).toBe(0);

@@ -319,6 +319,48 @@ class GenerationItem(TimestampMixin, db.Model):
 
     job: Mapped[GenerationJob] = relationship(back_populates="items")
     user: Mapped[User] = relationship()
+    attempts: Mapped[list[GenerationAttempt]] = relationship(
+        back_populates="item",
+        cascade="all, delete-orphan",
+        order_by="GenerationAttempt.attempt_number",
+    )
+
+
+class GenerationAttempt(db.Model):
+    __tablename__ = "generation_attempts"
+    __table_args__ = (
+        UniqueConstraint("item_id", "attempt_number", name="uq_generation_attempt_number"),
+        UniqueConstraint("idempotency_key", name="uq_generation_attempt_idempotency_key"),
+        Index("ix_generation_attempts_capacity", "status", "capacity_expires_at"),
+        Index("ix_generation_attempts_channel_status", "channel_id", "status"),
+        Index("ix_generation_attempts_user_status", "user_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(db.String(32), primary_key=True, default=new_public_id)
+    item_id: Mapped[str] = mapped_column(
+        ForeignKey("generation_items.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    channel_id: Mapped[str] = mapped_column(db.String(64))
+    channel_label: Mapped[str] = mapped_column(db.String(100), default="", nullable=False)
+    attempt_number: Mapped[int]
+    idempotency_key: Mapped[str] = mapped_column(db.String(64))
+    status: Mapped[str] = mapped_column(db.String(24), default="running", nullable=False)
+    circuit_probe: Mapped[bool] = mapped_column(default=False, nullable=False)
+    provider_completed: Mapped[bool] = mapped_column(default=False, nullable=False)
+    claimed_by: Mapped[str | None] = mapped_column(db.String(100))
+    heartbeat_at: Mapped[datetime | None]
+    started_at: Mapped[datetime] = mapped_column(default=utcnow, nullable=False)
+    completed_at: Mapped[datetime | None]
+    capacity_expires_at: Mapped[datetime] = mapped_column(nullable=False)
+    error_code: Mapped[str | None] = mapped_column(db.String(80))
+    error_message: Mapped[str | None] = mapped_column(db.String(1000))
+    upstream_status: Mapped[int | None]
+    upstream_request_id: Mapped[str | None] = mapped_column(db.String(255))
+    elapsed_seconds: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+
+    item: Mapped[GenerationItem] = relationship(back_populates="attempts")
+    user: Mapped[User] = relationship()
 
 
 class WalletLedger(db.Model):

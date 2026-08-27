@@ -48,12 +48,14 @@ class ProviderError(RuntimeError):
         status_code: int | None = None,
         request_id: str = "",
         details: dict[str, Any] | None = None,
+        provider_completed: bool = False,
     ):
         super().__init__(message)
         self.code = code
         self.status_code = status_code
         self.request_id = request_id
         self.details = details or {}
+        self.provider_completed = provider_completed
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,7 @@ class GenerationRequest:
     compression: int
     transparent_background: bool = False
     references: tuple[ReferencePayload, ...] = ()
+    idempotency_key: str = ""
 
 
 @dataclass(frozen=True)
@@ -101,6 +104,8 @@ class OpenAIImagesAdapter:
         if request.output_format in {"jpeg", "webp"}:
             payload["output_compression"] = request.compression
         headers = {"Authorization": f"Bearer {channel.api_key}"}
+        if request.idempotency_key:
+            headers["Idempotency-Key"] = request.idempotency_key
         request_data: dict[str, Any]
         if request.references:
             references: list[ReferencePayload] = []
@@ -164,6 +169,7 @@ class OpenAIImagesAdapter:
                     request_id=request_id,
                     details=response_summary(response),
                 )
+            provider_completed = True
             try:
                 response_payload = response.json()
             except ValueError as exc:
@@ -173,6 +179,7 @@ class OpenAIImagesAdapter:
                     status_code=response.status_code,
                     request_id=request_id,
                     details=response_summary(response),
+                    provider_completed=provider_completed,
                 ) from exc
             diagnostics = response_summary(response, response_payload)
         finally:
@@ -185,7 +192,12 @@ class OpenAIImagesAdapter:
         )
 
         if len(content) > MAX_OUTPUT_BYTES:
-            raise ProviderError("生成图片超过 50 MiB 限制", code="output_too_large")
+            raise ProviderError(
+                "生成图片超过 50 MiB 限制",
+                code="output_too_large",
+                request_id=request_id,
+                provider_completed=True,
+            )
         return ProviderResult(content=content, request_id=request_id)
 
     def _extract(
@@ -201,6 +213,7 @@ class OpenAIImagesAdapter:
                 code="invalid_response",
                 request_id=request_id,
                 details=diagnostics,
+                provider_completed=True,
             )
         for item in payload["data"]:
             if not isinstance(item, dict):
@@ -215,6 +228,7 @@ class OpenAIImagesAdapter:
                         code="invalid_response",
                         request_id=request_id,
                         details=diagnostics,
+                        provider_completed=True,
                     ) from exc
             image_url = item.get("url")
             if isinstance(image_url, str) and image_url:
@@ -224,13 +238,24 @@ class OpenAIImagesAdapter:
             code="invalid_response",
             request_id=request_id,
             details=diagnostics,
+            provider_completed=True,
         )
 
     def _download(self, image_url: str, channel: Channel, request_id: str) -> bytes:
         current_url = image_url
         channel_origin = _url_origin(channel.base_url)
         for _redirect in range(4):
-            parsed, pinned_url, host_header = _pinned_download_target(current_url)
+            try:
+                parsed, pinned_url, host_header = _pinned_download_target(current_url)
+            except ProviderError as exc:
+                raise ProviderError(
+                    str(exc),
+                    code=exc.code,
+                    status_code=exc.status_code,
+                    request_id=request_id,
+                    details=exc.details,
+                    provider_completed=True,
+                ) from exc
             headers = {"Host": host_header}
             if _url_origin(parsed) == channel_origin:
                 headers["Authorization"] = f"Bearer {channel.api_key}"
@@ -243,7 +268,13 @@ class OpenAIImagesAdapter:
                     allow_redirects=False,
                 )
             except requests.RequestException as exc:
-                raise ProviderError("下载生成图片失败", code="download_error") from exc
+                raise ProviderError(
+                    "下载生成图片失败",
+                    code="download_error",
+                    request_id=request_id,
+                    details={"exception_type": exc.__class__.__name__},
+                    provider_completed=True,
+                ) from exc
             if response.status_code not in {301, 302, 303, 307, 308}:
                 try:
                     if not 200 <= response.status_code < 300:
@@ -252,29 +283,51 @@ class OpenAIImagesAdapter:
                             code="download_error",
                             status_code=response.status_code,
                             request_id=request_id,
+                            provider_completed=True,
                         )
                     chunks: list[bytes] = []
                     total = 0
-                    for chunk in response.iter_content(64 * 1024):
-                        if not chunk:
-                            continue
-                        total += len(chunk)
-                        if total > MAX_OUTPUT_BYTES:
-                            raise ProviderError(
-                                "生成图片超过 50 MiB 限制",
-                                code="output_too_large",
-                            )
-                        chunks.append(chunk)
+                    try:
+                        for chunk in response.iter_content(64 * 1024):
+                            if not chunk:
+                                continue
+                            total += len(chunk)
+                            if total > MAX_OUTPUT_BYTES:
+                                raise ProviderError(
+                                    "生成图片超过 50 MiB 限制",
+                                    code="output_too_large",
+                                    request_id=request_id,
+                                    provider_completed=True,
+                                )
+                            chunks.append(chunk)
+                    except requests.RequestException as exc:
+                        raise ProviderError(
+                            "下载生成图片失败",
+                            code="download_error",
+                            request_id=request_id,
+                            details={"exception_type": exc.__class__.__name__},
+                            provider_completed=True,
+                        ) from exc
                     return b"".join(chunks)
                 finally:
                     response.close()
             location = response.headers.get("Location", "")
             response.close()
             if not location:
-                raise ProviderError("图片下载重定向缺少地址", code="download_error")
+                raise ProviderError(
+                    "图片下载重定向缺少地址",
+                    code="download_error",
+                    request_id=request_id,
+                    provider_completed=True,
+                )
             current_url = urljoin(current_url, location)
         else:
-            raise ProviderError("图片下载重定向次数过多", code="download_error")
+            raise ProviderError(
+                "图片下载重定向次数过多",
+                code="download_error",
+                request_id=request_id,
+                provider_completed=True,
+            )
         raise AssertionError("unreachable")
 
     def _session(self) -> requests.Session:

@@ -302,7 +302,7 @@ class GenerationService:
         query = (
             select(GenerationJob)
             .options(
-                selectinload(GenerationJob.items),
+                selectinload(GenerationJob.items).selectinload(GenerationItem.attempts),
                 selectinload(GenerationJob.references).selectinload(GenerationReference.asset),
                 selectinload(GenerationJob.user),
             )
@@ -324,7 +324,7 @@ class GenerationService:
         limit: int = 100,
     ) -> list[GenerationJob]:
         eager_options = [
-            selectinload(GenerationJob.items),
+            selectinload(GenerationJob.items).selectinload(GenerationItem.attempts),
             selectinload(GenerationJob.references).selectinload(GenerationReference.asset),
         ]
         if admin:

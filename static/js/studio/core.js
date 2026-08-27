@@ -129,6 +129,7 @@
       this.clarificationReplies = new Map();
       this.chatDrafts = new Map();
       this.chatOperations = new Map();
+      this.chatPreviews = new Map();
       this.outgoingMessages = new Map();
       this.canceledChatOperationIds = new Map();
       this.generationSubmissions = new Map();

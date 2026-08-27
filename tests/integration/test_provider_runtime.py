@@ -72,6 +72,7 @@ class TestProviderAndRuntime(PlatformTestCase):
             quality="high",
             output_format="png",
             compression=90,
+            idempotency_key="imagegen-test-key",
         )
         adapter.generate(channel, request)
         self.assertEqual(session.request["url"], "https://relay.example/v1/images/generations")
@@ -80,6 +81,7 @@ class TestProviderAndRuntime(PlatformTestCase):
         self.assertNotIn("background", session.request["json"])
         self.assertNotIn("data", session.request)
         self.assertEqual(session.request["headers"]["Content-Type"], "application/json")
+        self.assertEqual(session.request["headers"]["Idempotency-Key"], "imagegen-test-key")
 
         # Transparent backgrounds are handled by Lucida in the worker; provider stays opaque.
         transparent_result = adapter.generate(
@@ -263,11 +265,13 @@ class TestProviderAndRuntime(PlatformTestCase):
             ]
         )
         events = []
+        deltas = []
         result = OpenAIChatClient(RecordingChatSession([response])).complete(
             model,
             system="系统提示",
             messages=[{"role": "user", "content": "你好"}],
             progress=events.append,
+            output_delta=deltas.append,
         )
 
         names = [event.stage for event in events]
@@ -279,6 +283,7 @@ class TestProviderAndRuntime(PlatformTestCase):
         self.assertEqual(result.content, "测试")
         self.assertEqual(events[-1].stage, "completed")
         self.assertEqual(events[-1].output_characters, 2)
+        self.assertEqual(deltas, ["测试"])
         self.assertNotIn("内部内容不应透传", repr(events))
 
     def test_chat_progress_callback_cannot_change_chat_result(self):

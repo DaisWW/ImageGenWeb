@@ -1,6 +1,7 @@
 name: ${COMPOSE_PROJECT_NAME:-snow-ai-studio}
 
 x-app: &app
+  image: ${IMAGEGEN_APP_IMAGE:-snow-ai-studio-app:latest}
   build:
     context: .
     args:
@@ -76,16 +77,23 @@ services:
       retries: 30
       start_period: 180s
 
-  web:
+  migrate:
     <<: *app
-    command: >-
-      sh -c "alembic upgrade head &&
-      exec gunicorn --bind 0.0.0.0:7860 --workers 1 --threads 8 --timeout 700 app:app"
-    ports:
-      - "${IMAGEGEN_BIND_HOST:-127.0.0.1}:${IMAGEGEN_PORT:-18081}:7860"
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
     depends_on:
       db:
         condition: service_healthy
+
+  web:
+    <<: *app
+    command:
+      ["gunicorn", "--bind", "0.0.0.0:7860", "--workers", "1", "--threads", "16", "--timeout", "700", "app:app"]
+    ports:
+      - "${IMAGEGEN_BIND_HOST:-127.0.0.1}:${IMAGEGEN_PORT:-18081}:7860"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/health/live', timeout=3)"]
       interval: 10s

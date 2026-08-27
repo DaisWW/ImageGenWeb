@@ -17,18 +17,20 @@
     updatePrice() {
       const count = this.generationCount();
       const unit = "张";
-      const price = Number(this.currentChannel()?.price_rmb || 0);
+      const candidates = this.generationRoutingCandidates({
+        channel_id: this.el.channelSelect?.value || "__auto__",
+        model: this.el.modelSelect?.value || "",
+        mode: this.el.modeSwitch?.dataset.mode || "",
+        size: this.el.sizeInput?.value || "",
+        output_format: this.el.formatSelect?.value || "",
+      });
+      const price = candidates.length
+        ? Math.max(...candidates.map((channel) => Number(channel.price_rmb || 0)))
+        : 0;
       const strategy = this.el.generationStrategy?.value || "sample";
       const suffix = strategy === "explore" ? "探索方案" : strategy === "series" ? "系列图片" : unit;
       this.el.priceEstimateLabel.textContent = `${count} ${suffix}预计总价`;
       this.el.priceEstimate.textContent = UI.money(price * count);
-      this.channels.forEach((channel, index) => {
-        const option = this.el.channelSelect.options[index];
-        if (option) {
-          const unitPrice = UI.money(channel.price_rmb);
-          option.textContent = `${channel.label} · ${unitPrice}/${unit}${channel.configured ? "" : " · 未配置"}`;
-        }
-      });
     },
 
     async submitGeneration(event) {

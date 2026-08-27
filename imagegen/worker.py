@@ -11,7 +11,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from flask import Flask
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
@@ -32,6 +32,7 @@ from .integrations.images import (
 from .integrations.matting import LucidaMattingClient, image_has_baked_checkerboard
 from .models import (
     ChannelCircuitState,
+    GenerationAttempt,
     GenerationItem,
     GenerationJob,
     User,
@@ -69,15 +70,23 @@ class GenerationWorker:
         self.worker_id = f"{hostname}:{os.getpid()}:{uuid.uuid4().hex[:12]}"
         self._stopping = threading.Event()
         self._settlement_lock = threading.Lock()
+        self._dependency_lock = threading.Lock()
+        self._dependency_available: dict[str, bool] = {}
+        self._dependency_next_check: dict[str, float] = {}
         self._futures: dict[str, Future] = {}
         self._last_heartbeat = 0.0
         self._last_recovery = 0.0
         self._last_cleanup = 0.0
+        self._last_loop_progress = time.monotonic()
+        self._watchdog_timeout = 120
+        self._watchdog_thread: threading.Thread | None = None
         self._lease_acquired = False
 
     def run_forever(self) -> None:
         with self.app.app_context():
             self._acquire_worker_lease()
+            self._watchdog_timeout = self.settings.runtime().worker_watchdog_seconds
+        self._start_watchdog()
         LOGGER.info("生成 Worker 已启动：%s", self.worker_id)
         try:
             with self.app.app_context():
@@ -92,6 +101,7 @@ class GenerationWorker:
                 self._recover_orphaned_items(immediate=True)
                 self._last_recovery = time.monotonic()
             while not self._stopping.is_set():
+                self._last_loop_progress = time.monotonic()
                 self._collect_finished()
                 with self.app.app_context():
                     self.channels.reload_if_changed()
@@ -99,11 +109,14 @@ class GenerationWorker:
                 self._schedule_available()
                 self._run_periodic_cleanup()
                 with self.app.app_context():
+                    runtime = self.settings.runtime()
+                    self._watchdog_timeout = runtime.worker_watchdog_seconds
                     wait_seconds = (
                         self.poll_seconds
                         if self.poll_seconds is not None
-                        else self.settings.runtime().worker_poll_milliseconds / 1000
+                        else runtime.worker_poll_milliseconds / 1000
                     )
+                self._last_loop_progress = time.monotonic()
                 self._stopping.wait(wait_seconds)
         finally:
             self._stopping.set()
@@ -119,6 +132,27 @@ class GenerationWorker:
                     details={"worker_id": self.worker_id},
                 )
                 self._release_worker_lease()
+
+    def _start_watchdog(self) -> None:
+        if self._watchdog_thread is not None:
+            return
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop,
+            name="generation-worker-watchdog",
+            daemon=True,
+        )
+        self._watchdog_thread.start()
+
+    def _watchdog_loop(self) -> None:
+        while not self._stopping.wait(5):
+            elapsed = time.monotonic() - self._last_loop_progress
+            if elapsed <= self._watchdog_timeout:
+                continue
+            LOGGER.critical(
+                "生成 Worker 主循环超过 %d 秒无进展，终止进程以触发容器重启",
+                self._watchdog_timeout,
+            )
+            os._exit(70)
 
     def _shutdown_executor(self) -> None:
         if not hasattr(self, "_thread_pool"):
@@ -203,6 +237,7 @@ class GenerationWorker:
             except Exception:
                 LOGGER.exception("生成任务线程异常退出：%s", item_id)
                 with self.app.app_context():
+                    self._recover_crashed_attempt(item_id)
                     self.runtime_logs.commit_best_effort(
                         category="worker",
                         event="worker.item_crashed",
@@ -216,18 +251,29 @@ class GenerationWorker:
 
     def _schedule_available(self) -> None:
         with self.app.app_context():
+            if not self._dependency_ready("storage"):
+                db.session.remove()
+                return
+            now = utcnow()
+            capacity_active = or_(
+                GenerationAttempt.status == "running",
+                and_(
+                    GenerationAttempt.status == "unknown",
+                    GenerationAttempt.capacity_expires_at > now,
+                ),
+            )
             active_rows = db.session.execute(
                 select(
-                    GenerationItem.user_id,
-                    GenerationItem.channel_id,
-                    GenerationItem.circuit_probe,
-                    func.count(GenerationItem.id),
+                    GenerationAttempt.user_id,
+                    GenerationAttempt.channel_id,
+                    GenerationAttempt.circuit_probe,
+                    func.count(GenerationAttempt.id),
                 )
-                .where(GenerationItem.status.in_(["running", "canceling"]))
+                .where(capacity_active)
                 .group_by(
-                    GenerationItem.user_id,
-                    GenerationItem.channel_id,
-                    GenerationItem.circuit_probe,
+                    GenerationAttempt.user_id,
+                    GenerationAttempt.channel_id,
+                    GenerationAttempt.circuit_probe,
                 )
             ).all()
             user_active: dict[int, int] = {}
@@ -283,6 +329,8 @@ class GenerationWorker:
                         continue
                     if first_for_user and item.user_id in scheduled_users:
                         continue
+                    if item.job.transparent_background and not self._dependency_ready("lucida"):
+                        continue
                     channel = self._select_channel_for_item(
                         item,
                         channel_active,
@@ -314,6 +362,67 @@ class GenerationWorker:
 
         for item_id in selected:
             self._futures[item_id] = self._executor().submit(self._process_item, item_id)
+
+    def _dependency_ready(self, name: str) -> bool:
+        now = time.monotonic()
+        with self._dependency_lock:
+            if now < self._dependency_next_check.get(name, 0.0):
+                return self._dependency_available.get(name, False)
+            runtime = self.settings.runtime()
+            try:
+                if name == "storage":
+                    self.storage.healthcheck(
+                        minimum_free_bytes=runtime.storage_min_free_mb * 1024 * 1024
+                    )
+                elif name == "lucida":
+                    client = self._lucida_client()
+                    if not client.enabled:
+                        raise ServiceError(
+                            "Lucida 抠图服务未配置",
+                            code="matting_unavailable",
+                            status_code=503,
+                        )
+                    client.healthcheck()
+                else:
+                    raise ValueError(f"未知 Worker 依赖：{name}")
+            except Exception as exc:
+                self._set_dependency_state(name, False, runtime.dependency_retry_seconds, exc)
+                return False
+            self._set_dependency_state(name, True, 5, None)
+            return True
+
+    def _pause_dependency(self, name: str, error: Exception) -> None:
+        runtime = self.settings.runtime()
+        with self._dependency_lock:
+            self._set_dependency_state(name, False, runtime.dependency_retry_seconds, error)
+
+    def _set_dependency_state(
+        self,
+        name: str,
+        available: bool,
+        retry_seconds: int,
+        error: Exception | None,
+    ) -> None:
+        previous = self._dependency_available.get(name)
+        self._dependency_available[name] = available
+        self._dependency_next_check[name] = time.monotonic() + retry_seconds
+        if previous is available or (previous is None and available):
+            return
+        label = "图片存储" if name == "storage" else "Lucida 抠图"
+        self.runtime_logs.commit_best_effort(
+            category="worker",
+            event="worker.dependency_recovered" if available else "worker.dependency_paused",
+            status="success" if available else "error",
+            level="info" if available else "warning",
+            message=f"{label}已恢复调度" if available else f"{label}不可用，已暂停相关调度",
+            source="worker",
+            error_code="" if available else f"{name}_unavailable",
+            details={
+                "dependency": name,
+                "retry_seconds": retry_seconds,
+                "error": "" if error is None else str(error)[:500],
+            },
+        )
 
     def _claim(self, item_id: str, channel: Channel | None = None) -> bool:
         db.session.expire_all()
@@ -359,6 +468,36 @@ class GenerationWorker:
             return False
 
         now = utcnow()
+        attempt_number = (
+            int(
+                db.session.scalar(
+                    select(func.coalesce(func.max(GenerationAttempt.attempt_number), 0)).where(
+                        GenerationAttempt.item_id == item_id
+                    )
+                )
+                or 0
+            )
+            + 1
+        )
+        attempt = GenerationAttempt(
+            id=uuid.uuid4().hex,
+            item_id=item_id,
+            user_id=item_preview.user_id,
+            channel_id=channel.identifier,
+            channel_label=channel.label,
+            attempt_number=attempt_number,
+            idempotency_key=uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"imagegen:{item_id}:{attempt_number}",
+            ).hex,
+            status="running",
+            circuit_probe=circuit_probe,
+            claimed_by=self.worker_id,
+            heartbeat_at=now,
+            started_at=now,
+            capacity_expires_at=now + timedelta(seconds=channel.limits.timeout_seconds + 30),
+        )
+        db.session.add(attempt)
         claimed = db.session.execute(
             update(GenerationItem)
             .where(
@@ -412,12 +551,18 @@ class GenerationWorker:
         if probe_active is None:
             probe_active = dict(
                 db.session.execute(
-                    select(GenerationItem.channel_id, func.count(GenerationItem.id))
+                    select(GenerationAttempt.channel_id, func.count(GenerationAttempt.id))
                     .where(
-                        GenerationItem.circuit_probe.is_(True),
-                        GenerationItem.status.in_(["running", "canceling"]),
+                        GenerationAttempt.circuit_probe.is_(True),
+                        or_(
+                            GenerationAttempt.status == "running",
+                            and_(
+                                GenerationAttempt.status == "unknown",
+                                GenerationAttempt.capacity_expires_at > utcnow(),
+                            ),
+                        ),
                     )
-                    .group_by(GenerationItem.channel_id)
+                    .group_by(GenerationAttempt.channel_id)
                 ).all()
             )
         for channel in self._routable_channels(item):
@@ -473,11 +618,17 @@ class GenerationWorker:
         if self._circuit_is_open(state):
             return None
         active_probes = db.session.scalar(
-            select(func.count(GenerationItem.id)).where(
-                GenerationItem.id != item_id,
-                GenerationItem.channel_id == channel.identifier,
-                GenerationItem.circuit_probe.is_(True),
-                GenerationItem.status.in_(["running", "canceling"]),
+            select(func.count(GenerationAttempt.id)).where(
+                GenerationAttempt.item_id != item_id,
+                GenerationAttempt.channel_id == channel.identifier,
+                GenerationAttempt.circuit_probe.is_(True),
+                or_(
+                    GenerationAttempt.status == "running",
+                    and_(
+                        GenerationAttempt.status == "unknown",
+                        GenerationAttempt.capacity_expires_at > utcnow(),
+                    ),
+                ),
             )
         )
         if int(active_probes or 0) >= channel.limits.half_open_max_probes:
@@ -535,7 +686,12 @@ class GenerationWorker:
 
     def _process_item(self, item_id: str) -> None:
         started = time.monotonic()
+        attempt_status = "unknown"
+        attempt_error: dict[str, object] = {}
         with self.app.app_context():
+            attempt = self._running_attempt(item_id)
+            if attempt is None or attempt.claimed_by != self.worker_id:
+                return
             item = db.session.scalar(
                 select(GenerationItem)
                 .options(
@@ -543,11 +699,16 @@ class GenerationWorker:
                 )
                 .where(GenerationItem.id == item_id)
             )
-            if item is None or not self._owns_claim(item):
+            if item is None:
+                self._finalize_attempt(item_id, status="unknown", started=started)
+                db.session.remove()
                 return
             if item.cancel_requested_at or item.job.cancel_requested_at:
-                with self._settlement_lock:
-                    self._settle_canceled(item_id, started)
+                if self._owns_claim(item):
+                    with self._settlement_lock:
+                        self._settle_canceled(item_id, started)
+                self._finalize_attempt(item_id, status="canceled", started=started)
+                db.session.remove()
                 return
             try:
                 channel = self.channels.get(item.channel_id)
@@ -566,6 +727,7 @@ class GenerationWorker:
                         compression=item.job.compression,
                         transparent_background=item.job.transparent_background,
                         references=references,
+                        idempotency_key=attempt.idempotency_key,
                     ),
                 )
                 content = result.content
@@ -576,8 +738,9 @@ class GenerationWorker:
                         str(exc),
                         code="invalid_response",
                         request_id=result.request_id,
+                        provider_completed=True,
                     ) from exc
-                self._record_channel_success(channel, item_id)
+                self._record_channel_success(channel, item_id, result.request_id)
                 if item.job.transparent_background:
                     content = self._apply_lucida_matting(
                         content,
@@ -591,7 +754,16 @@ class GenerationWorker:
                         )
                 with self._settlement_lock:
                     self._settle_success(item_id, content, result.request_id, started)
+                attempt_status = "succeeded"
             except ServiceError as exc:
+                if exc.code.startswith("matting_"):
+                    self._pause_dependency("lucida", exc)
+                attempt_status = "failed"
+                attempt_error = {
+                    "code": exc.code,
+                    "message": str(exc),
+                    "upstream_status": exc.status_code,
+                }
                 with self._settlement_lock:
                     self._settle_failure(
                         item_id,
@@ -609,6 +781,19 @@ class GenerationWorker:
                         },
                     )
             except ProviderError as exc:
+                attempt_status = (
+                    "downstream_failed"
+                    if exc.provider_completed
+                    else "unknown"
+                    if exc.code in {"timeout", "connection_error"}
+                    else "failed"
+                )
+                attempt_error = {
+                    "code": exc.code,
+                    "message": str(exc),
+                    "upstream_status": exc.status_code,
+                    "upstream_request_id": exc.request_id,
+                }
                 with self._settlement_lock:
                     self._settle_failure(
                         item_id,
@@ -618,9 +803,21 @@ class GenerationWorker:
                         upstream_request_id=exc.request_id,
                         started=started,
                         details=exc.details,
-                        retryable=self._provider_error_is_retryable(exc),
+                        retryable=(
+                            not exc.provider_completed and self._provider_error_is_retryable(exc)
+                        ),
+                        record_channel_failure=(
+                            not exc.provider_completed
+                            and exc.code in {"timeout", "connection_error"}
+                        ),
                     )
             except (StorageError, OSError) as exc:
+                self._pause_dependency("storage", exc)
+                attempt_status = "failed"
+                attempt_error = {
+                    "code": "storage_error",
+                    "message": str(exc),
+                }
                 with self._settlement_lock:
                     self._settle_failure(
                         item_id,
@@ -633,6 +830,11 @@ class GenerationWorker:
                     )
             except Exception as exc:
                 LOGGER.exception("生成任务发生未预期异常：%s", item_id)
+                attempt_status = "unknown"
+                attempt_error = {
+                    "code": "internal_error",
+                    "message": f"内部错误：{exc.__class__.__name__}",
+                }
                 with self._settlement_lock:
                     self._settle_failure(
                         item_id,
@@ -644,13 +846,22 @@ class GenerationWorker:
                         details={"exception_type": exc.__class__.__name__},
                     )
             finally:
+                self._finalize_attempt(
+                    item_id,
+                    status=attempt_status,
+                    started=started,
+                    **attempt_error,
+                )
                 db.session.remove()
 
     def _apply_lucida_matting(self, content: bytes, *, filename: str) -> bytes:
+        return self._lucida_client().remove_background(content, filename=filename)
+
+    def _lucida_client(self) -> LucidaMattingClient:
         client = self.app.extensions.get("lucida_matting_client")
         if client is None:
             client = LucidaMattingClient()
-        return client.remove_background(content, filename=filename)
+        return client
 
     def _request_references(self, item: GenerationItem) -> tuple[ReferencePayload, ...]:
         return tuple(
@@ -671,8 +882,17 @@ class GenerationWorker:
                 status_code=422,
             )
 
-    def _record_channel_success(self, channel: Channel, item_id: str) -> None:
+    def _record_channel_success(
+        self,
+        channel: Channel,
+        item_id: str,
+        request_id: str,
+    ) -> None:
         item = db.session.get(GenerationItem, item_id)
+        attempt = self._running_attempt(item_id, lock=True)
+        if attempt is not None:
+            attempt.provider_completed = True
+            attempt.upstream_request_id = request_id[:255]
         state = db.session.scalar(
             select(ChannelCircuitState)
             .where(ChannelCircuitState.channel_id == channel.identifier)
@@ -703,12 +923,75 @@ class GenerationWorker:
             )
         db.session.commit()
 
+    def _running_attempt(
+        self,
+        item_id: str,
+        *,
+        lock: bool = False,
+    ) -> GenerationAttempt | None:
+        query = (
+            select(GenerationAttempt)
+            .where(
+                GenerationAttempt.item_id == item_id,
+                GenerationAttempt.status == "running",
+            )
+            .order_by(GenerationAttempt.attempt_number.desc())
+            .limit(1)
+        )
+        if lock:
+            query = query.with_for_update()
+        return db.session.scalar(query)
+
+    def _finalize_attempt(
+        self,
+        item_id: str,
+        *,
+        status: str,
+        started: float,
+        code: object = "",
+        message: object = "",
+        upstream_status: object = None,
+        upstream_request_id: object = "",
+    ) -> None:
+        db.session.expire_all()
+        attempt = self._running_attempt(item_id, lock=True)
+        if attempt is None or attempt.claimed_by != self.worker_id:
+            db.session.rollback()
+            return
+        item = db.session.get(GenerationItem, item_id, populate_existing=True)
+        if status == "succeeded":
+            if item is not None and item.status == "succeeded":
+                final_status = "succeeded"
+            elif item is not None and item.status == "canceled":
+                final_status = "discarded" if attempt.provider_completed else "canceled"
+            else:
+                final_status = "downstream_failed" if attempt.provider_completed else "unknown"
+        elif status == "canceled":
+            final_status = "discarded" if attempt.provider_completed else "canceled"
+        elif status == "failed" and attempt.provider_completed:
+            final_status = "downstream_failed"
+        else:
+            final_status = status
+        attempt.status = final_status
+        attempt.claimed_by = None
+        attempt.heartbeat_at = None
+        attempt.completed_at = utcnow()
+        attempt.elapsed_seconds = Decimal(str(round(time.monotonic() - started, 3)))
+        if code:
+            attempt.error_code = str(code)[:80]
+        if message:
+            attempt.error_message = str(message)[:1000]
+        if upstream_status is not None:
+            attempt.upstream_status = int(upstream_status)
+        if upstream_request_id:
+            attempt.upstream_request_id = str(upstream_request_id)[:255]
+        db.session.commit()
+
     @staticmethod
     def _provider_error_is_retryable(error: ProviderError) -> bool:
         if error.code in {
             "adapter_error",
             "connection_error",
-            "download_error",
             "invalid_response",
             "timeout",
         }:
@@ -818,6 +1101,7 @@ class GenerationWorker:
         started: float,
         details: dict | None = None,
         retryable: bool = False,
+        record_channel_failure: bool = False,
     ) -> None:
         db.session.expire_all()
         preview = db.session.get(GenerationItem, item_id, populate_existing=True)
@@ -853,8 +1137,9 @@ class GenerationWorker:
             item.attempted_channel_ids = attempted
             item.circuit_probe = False
             attempt_number = len(attempted)
-            if retryable:
+            if retryable or record_channel_failure:
                 circuit_opened = self._record_channel_failure(item, provider_id, provider_label)
+            if retryable:
                 will_retry = self._can_retry_item(item, attempted)
             if will_retry:
                 self._reset_item_for_retry(item)
@@ -895,6 +1180,9 @@ class GenerationWorker:
                 "max_attempts": self.channels.queue.max_channel_attempts,
                 "will_retry": will_retry,
                 "circuit_opened": circuit_opened,
+                "attempt_status": "unknown"
+                if record_channel_failure and not retryable
+                else "failed",
             },
         )
         db.session.commit()
@@ -1107,6 +1395,15 @@ class GenerationWorker:
         item_ids = tuple(self._futures)
         if item_ids:
             db.session.execute(
+                update(GenerationAttempt)
+                .where(
+                    GenerationAttempt.item_id.in_(item_ids),
+                    GenerationAttempt.claimed_by == self.worker_id,
+                    GenerationAttempt.status == "running",
+                )
+                .values(heartbeat_at=now)
+            )
+            db.session.execute(
                 update(GenerationItem)
                 .where(
                     GenerationItem.id.in_(item_ids),
@@ -1119,8 +1416,37 @@ class GenerationWorker:
 
     def _recover_orphaned_items(self, *, immediate: bool) -> None:
         cutoff = utcnow() - timedelta(minutes=self.channels.queue.stale_running_minutes)
+        attempt_conditions = [GenerationAttempt.status == "running"]
+        if immediate:
+            attempt_conditions.append(
+                or_(
+                    GenerationAttempt.claimed_by.is_(None),
+                    GenerationAttempt.claimed_by != self.worker_id,
+                )
+            )
+        else:
+            attempt_conditions.append(
+                or_(
+                    GenerationAttempt.heartbeat_at.is_(None),
+                    GenerationAttempt.heartbeat_at < cutoff,
+                )
+            )
+        attempt_ids = list(
+            db.session.scalars(select(GenerationAttempt.id).where(*attempt_conditions))
+        )
+        recovered = 0
+        for attempt_id in attempt_ids:
+            if self._recover_orphaned_attempt(attempt_id, cutoff=cutoff, immediate=immediate):
+                recovered += 1
+
         conditions = [
             GenerationItem.status.in_(["running", "canceling"]),
+            ~select(GenerationAttempt.id)
+            .where(
+                GenerationAttempt.item_id == GenerationItem.id,
+                GenerationAttempt.status == "running",
+            )
+            .exists(),
         ]
         if immediate:
             conditions.append(
@@ -1137,12 +1463,116 @@ class GenerationWorker:
                 )
             )
         item_ids = list(db.session.scalars(select(GenerationItem.id).where(*conditions)))
-        recovered = 0
         for item_id in item_ids:
             if self._recover_orphaned_item(item_id, cutoff=cutoff, immediate=immediate):
                 recovered += 1
         if recovered:
             LOGGER.warning("已恢复 %d 个孤立的生成任务", recovered)
+
+    def _recover_crashed_attempt(self, item_id: str) -> None:
+        attempt_id = db.session.scalar(
+            select(GenerationAttempt.id)
+            .where(
+                GenerationAttempt.item_id == item_id,
+                GenerationAttempt.status == "running",
+            )
+            .order_by(GenerationAttempt.attempt_number.desc())
+            .limit(1)
+        )
+        if attempt_id is not None:
+            self._recover_orphaned_attempt(
+                attempt_id,
+                cutoff=utcnow(),
+                immediate=True,
+            )
+
+    def _recover_orphaned_attempt(self, attempt_id: str, *, cutoff, immediate: bool) -> bool:
+        db.session.expire_all()
+        attempt = db.session.scalar(
+            select(GenerationAttempt)
+            .where(GenerationAttempt.id == attempt_id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        )
+        if attempt is None or attempt.status != "running":
+            db.session.rollback()
+            return False
+        recoverable_claim = (
+            attempt.claimed_by != self.worker_id or attempt.item_id not in self._futures
+        )
+        comparison_cutoff = cutoff
+        if attempt.heartbeat_at is not None and attempt.heartbeat_at.tzinfo is None:
+            comparison_cutoff = cutoff.replace(tzinfo=None)
+        stale_claim = attempt.heartbeat_at is None or attempt.heartbeat_at < comparison_cutoff
+        if not recoverable_claim or (not immediate and not stale_claim):
+            db.session.rollback()
+            return False
+
+        item = db.session.scalar(
+            select(GenerationItem)
+            .where(GenerationItem.id == attempt.item_id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        )
+        job = None
+        user = None
+        if item is not None and self._active_status(item):
+            user = self.billing.lock_user(item.user_id)
+            job = db.session.scalar(
+                select(GenerationJob)
+                .options(selectinload(GenerationJob.items))
+                .where(GenerationJob.id == item.job_id)
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
+            if job is None:
+                db.session.rollback()
+                return False
+            item.status = (
+                "canceled" if item.cancel_requested_at or job.cancel_requested_at else "interrupted"
+            )
+            item.error_code = "worker_interrupted"
+            item.error_message = "Worker 中断，任务结果未知且未向用户扣费"
+            item.completed_at = utcnow()
+            item.claimed_by = None
+            item.heartbeat_at = None
+            self.billing.release(user, job, money(job.price_per_image_rmb))
+            self.generations.refresh_job_status(job)
+
+        attempt.status = "downstream_failed" if attempt.provider_completed else "unknown"
+        attempt.error_code = "worker_interrupted"
+        attempt.error_message = "Worker 中断，渠道调用结果未知"
+        attempt.claimed_by = None
+        attempt.heartbeat_at = None
+        attempt.completed_at = utcnow()
+        provider_id = attempt.channel_id
+        provider_label = attempt.channel_label or provider_id
+        self.runtime_logs.record(
+            category="worker",
+            event="worker.recovered_attempt",
+            status="error",
+            level="warning",
+            message=attempt.error_message,
+            source="worker",
+            user_id=attempt.user_id,
+            user_label=(user.display_name or user.username) if user is not None else "",
+            workspace_id=job.workspace_id if job is not None else "",
+            workspace_label=job.workspace.name if job is not None else "",
+            job_id=job.id if job is not None else "",
+            item_id=attempt.item_id,
+            provider_id=provider_id,
+            provider_label=provider_label,
+            model=job.model if job is not None else "",
+            error_code=attempt.error_code,
+            details={
+                "worker_id": self.worker_id,
+                "immediate": immediate,
+                "provider_completed": attempt.provider_completed,
+                "capacity_expires_at": attempt.capacity_expires_at.isoformat(),
+            },
+        )
+        db.session.commit()
+        return True
 
     def _recover_orphaned_item(self, item_id: str, *, cutoff, immediate: bool) -> bool:
         db.session.expire_all()

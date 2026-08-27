@@ -54,6 +54,7 @@ class OpenAIChatError(RuntimeError):
 
 
 ProgressCallback = Callable[[ChatProgress], None]
+OutputDeltaCallback = Callable[[str], None]
 
 
 @dataclass(frozen=True)
@@ -101,6 +102,7 @@ class OpenAIChatClient:
         max_output_tokens: int | None = None,
         reasoning_effort: str | None = None,
         progress: ProgressCallback | None = None,
+        output_delta: OutputDeltaCallback | None = None,
     ) -> ChatCompletion:
         started = time.monotonic()
         deadline = started + float(model.timeout_seconds)
@@ -159,6 +161,7 @@ class OpenAIChatClient:
                 deadline=deadline,
                 request_body_bytes=request_body_bytes,
                 reporter=reporter,
+                output_delta=output_delta,
             )
         except OpenAIChatError as exc:
             stage = {
@@ -207,6 +210,7 @@ class OpenAIChatClient:
         deadline: float,
         request_body_bytes: int,
         reporter: _ProgressReporter,
+        output_delta: OutputDeltaCallback | None,
     ) -> ChatCompletion:
         text_parts: list[str] = []
         terminal: dict[str, Any] | None = None
@@ -256,6 +260,12 @@ class OpenAIChatClient:
                                 output_characters=0,
                             )
                         text_parts.append(delta)
+                        if output_delta is not None:
+                            try:
+                                output_delta(delta)
+                            except Exception:
+                                # Streaming previews are observational and cannot affect the reply.
+                                pass
                         output_characters += len(delta)
                         reporter.emit(
                             "output",

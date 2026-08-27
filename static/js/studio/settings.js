@@ -83,10 +83,7 @@
       this.updatePromptCounter();
       this.el.batchCount.value = this.generationStrategyPolicy()
         .normalizeCount("sample", settings.batch_count);
-      const preferred = this.channels.find((channel) => (
-        channel.id === settings.channel_id && channel.configured
-      )) || this.channels.find((channel) => channel.configured) || this.channels[0];
-      this.renderChannelOptions(preferred?.id);
+      this.renderChannelOptions("__auto__");
       this.applyChannel(settings, false);
       this.setMode(settings.mode || "text2img", false);
       this.setGenerationStrategy(settings.generation_strategy || "sample", false);
@@ -119,20 +116,9 @@
       this.updateInteractionState();
     },
 
-    renderChannelOptions(selectedId = this.el.channelSelect.value) {
-      const options = this.channels.map((channel) => {
-        const option = document.createElement("option");
-        option.value = channel.id;
-        option.textContent = `${channel.label}${channel.configured ? "" : " · 未配置"}`;
-        option.disabled = !channel.configured;
-        return option;
-      });
-      this.el.channelSelect.replaceChildren(...options);
-      const selected = this.channels.find((channel) => (
-        channel.id === selectedId && channel.configured
-      )) || this.channels.find((channel) => channel.configured);
-      this.el.channelSelect.value = selected?.id || "";
-      this.el.channelSelect.disabled = !selected;
+    renderChannelOptions(_selectedId = "__auto__") {
+      this.el.channelSelect.value = "__auto__";
+      this.el.channelSelect.disabled = false;
     },
 
     applyChannel(saved = null, shouldSave = false) {
@@ -578,7 +564,7 @@
       return {
         mode: this.el.modeSwitch.dataset.mode,
         prompt: this.el.promptInput.value,
-        channel_id: this.el.channelSelect.value,
+        channel_id: "__auto__",
         model: this.el.modelSelect.value,
         size: this.normalizeSize(this.el.sizeInput.value)
           || this.activeWorkspace?.settings?.size

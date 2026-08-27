@@ -3,6 +3,9 @@
 
   const {
     StudioApp,
+    IMAGE_SIZE_PATTERN,
+    IMAGE_DIMENSION_MIN,
+    IMAGE_DIMENSION_MAX,
   } = window.ImageGenStudio;
 
   Object.assign(StudioApp.prototype, {
@@ -19,11 +22,39 @@
       const modelId = String(settings.model || "").trim();
       const mode = String(settings.mode || "").trim();
       const outputFormat = String(settings.output_format || "").trim();
-      const referenceCount = mode === "img2img"
-        ? this.currentSelection(workspaceId).size
-        : 0;
+      const workspace = this.workspaces?.find((item) => item.id === workspaceId)
+        || this.activeWorkspace;
+      const selection = this.currentSelection(workspaceId);
+      const referenceCount = mode === "img2img" ? selection.size : 0;
+      const size = String(
+        settings.size || workspace?.settings?.size || "1024x1024",
+      ).trim().toLowerCase().replaceAll("×", "x");
+      const references = mode === "img2img"
+        ? [...selection].map((id) => (
+          workspace?.assets?.find((asset) => asset.id === id)
+        )).filter(Boolean)
+        : [];
+      const referenceBytes = references.map((asset) => Number(asset.bytes || 0));
+      const referencesResolved = mode !== "img2img" || references.length === referenceCount;
+      const maxAttachmentBytes = Number(this.limits?.max_attachment_mb || 0) * 1024 * 1024;
+      const maxAttachmentTotalBytes = Number(this.limits?.max_attachment_total_mb || 0) * 1024 * 1024;
+      const referencesWithinRuntimeLimits = !references.length || (
+        maxAttachmentBytes > 0
+        && maxAttachmentTotalBytes > 0
+        && referenceBytes.every((bytes) => Number.isFinite(bytes) && bytes <= maxAttachmentBytes)
+        && referenceBytes.reduce((total, bytes) => total + bytes, 0) <= maxAttachmentTotalBytes
+      );
+      const sizeIsValid = !size || (() => {
+        const match = IMAGE_SIZE_PATTERN.exec(size);
+        return Boolean(match)
+          && [Number(match[1]), Number(match[2])]
+            .every((dimension) => dimension >= IMAGE_DIMENSION_MIN && dimension <= IMAGE_DIMENSION_MAX);
+      })();
+      if (!referencesResolved || !referencesWithinRuntimeLimits || !sizeIsValid) return [];
+      if ((mode === "img2img" && referenceCount === 0)
+        || (mode === "text2img" && referenceCount > 0)) return [];
       return this.routingChannels().filter((channel) => {
-        if (channelId && channel.id !== channelId) return false;
+        if (channelId && channelId !== "__auto__" && channel.id !== channelId) return false;
         if (modelId && !(channel.models || []).some((model) => model.id === modelId)) {
           return false;
         }
@@ -35,6 +66,14 @@
         if (
           referenceCount > Number(channel.capabilities?.max_reference_images || 0)
         ) return false;
+        const maxImageBytes = Number(channel.capabilities?.max_reference_image_mb || 0) * 1024 * 1024;
+        const maxTotalBytes = Number(channel.capabilities?.max_reference_total_mb || 0) * 1024 * 1024;
+        if (references.length && (
+          maxImageBytes <= 0
+          || maxTotalBytes <= 0
+          || referenceBytes.some((bytes) => bytes > maxImageBytes)
+          || referenceBytes.reduce((total, bytes) => total + bytes, 0) > maxTotalBytes
+        )) return false;
         return true;
       });
     },
@@ -104,8 +143,9 @@
     },
 
     currentChannel() {
-      const channelId = String(this.el?.channelSelect?.value || "").trim();
-      return this.channels.find((channel) => channel.id === channelId) || null;
+      return this.routingProfile(this.el?.modelSelect?.value)
+        || this.routingProfile()
+        || null;
     },
 
     renderCreativeDirectionOptions(selectedId = "auto") {

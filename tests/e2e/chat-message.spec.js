@@ -225,6 +225,106 @@ test("server chat operation does not show an assistant before its message is sto
   await expect(page.locator(".message-row.assistant")).toHaveCount(0);
 });
 
+test("chat streams a smooth visible preview before the final response", {
+  tag: "@responsive",
+}, async ({ page }) => {
+  const preview = [
+    "需求确认",
+    "竖版运动鞋新品海报，标题为 AIR ZERO。",
+    "",
+    "生图提示词",
+    "A polished vertical launch poster with a silver running shoe and exact title AIR ZERO.",
+  ].join("\n");
+  const assistantId = "f".repeat(32);
+  const sentAt = new Date().toISOString();
+  let releaseReply;
+  let releaseEvents;
+  let submitted = null;
+  let eventsRequested = false;
+  const replyReleased = new Promise((resolve) => {
+    releaseReply = resolve;
+  });
+  const eventsReleased = new Promise((resolve) => {
+    releaseEvents = resolve;
+  });
+
+  await mockConfiguredChatModel(page);
+  await page.unroute("**/api/workspaces/*/operations/*/events");
+  await page.route("**/api/workspaces/*/operations/*/events", async (route) => {
+    eventsRequested = true;
+    await eventsReleased;
+    await route.fulfill({
+      status: 200,
+      headers: {
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+      },
+      body: `event: preview\ndata: ${JSON.stringify({ text: preview })}\n\nevent: close\ndata: {}\n\n`,
+    });
+  });
+  await page.route("**/api/workspaces/*/messages", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    submitted = route.request().postDataJSON();
+    await replyReleased;
+    await route.fulfill({
+      status: 201,
+      json: {
+        messages: [
+          {
+            id: submitted.message_id,
+            role: "user",
+            kind: "message",
+            content: submitted.content,
+            payload: { reply_message_id: assistantId },
+            created_at: sentAt,
+            attachments: [],
+          },
+          {
+            id: assistantId,
+            role: "assistant",
+            kind: "message",
+            content: preview,
+            payload: { reply_to_message_id: submitted.message_id },
+            provider_label: "E2E 助手",
+            created_at: sentAt,
+            attachments: [],
+          },
+        ],
+        context: {
+          compacted: false,
+          estimated_context_tokens: 0,
+          max_context_tokens: 32000,
+        },
+      },
+    });
+  });
+
+  await loginAsAdmin(page);
+  await page.locator("#chatInput").fill("制作一张 AIR ZERO 运动鞋新品海报");
+  await page.locator("#chatForm").evaluate((form) => form.requestSubmit());
+  await expect.poll(() => Boolean(submitted)).toBe(true);
+  await expect.poll(() => eventsRequested).toBe(true);
+  releaseEvents();
+  await page.waitForFunction((length) => {
+    const text = document.querySelector(".message-stream-text")?.textContent || "";
+    return text.length > 0 && text.length < length;
+  }, preview.length);
+
+  const stream = page.locator(".message-row.assistant.pending .message-stream-text");
+  await expect(stream).toBeVisible();
+  await expect(page.locator(".message-stream-cursor")).toBeVisible();
+  releaseReply();
+  await page.waitForTimeout(100);
+  await expect(page.locator(".message-row.assistant.pending")).toHaveCount(1);
+  await expect(page.locator(`[data-message-id="${assistantId}"]`)).toHaveCount(0);
+  await expect(stream).toHaveText(preview);
+  await expect(page.locator(`[data-message-id="${assistantId}"]`)).toContainText("AIR ZERO");
+  await expect(page.locator(".message-row.assistant.pending")).toHaveCount(0);
+});
+
 test("successful chat retry removes the action from the old error", async ({ page }) => {
   const userId = "1".repeat(32);
   const errorId = "2".repeat(32);

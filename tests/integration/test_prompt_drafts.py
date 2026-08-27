@@ -19,6 +19,7 @@ from imagegen.services.creative import (
     creative_direction_dicts,
     gallery_category_dicts,
 )
+from imagegen.services.prompt_drafts import PromptDraftStreamPreview
 from tests.support.platform import (
     PlatformTestCase,
     png_bytes,
@@ -26,6 +27,91 @@ from tests.support.platform import (
 
 
 class TestPromptDrafts(PlatformTestCase):
+    def test_stream_preview_publishes_only_completed_visible_fields(self):
+        previews = []
+        stream = PromptDraftStreamPreview(
+            translate_to_english=False,
+            maximum=8000,
+            publish=previews.append,
+        )
+
+        stream.feed('{"status":"ready","summary_zh":"运动鞋')
+        self.assertEqual(previews, [])
+        stream.feed('新品海报","prompt":"cinematic')
+        self.assertEqual(previews, ["需求确认\n运动鞋新品海报"])
+        stream.feed(' poster","private":"内部内容不应显示"}')
+
+        self.assertEqual(
+            previews[-1],
+            "需求确认\n运动鞋新品海报\n\n生图提示词\ncinematic poster",
+        )
+        self.assertNotIn("内部内容不应显示", repr(previews))
+
+        questions = []
+        clarification = PromptDraftStreamPreview(
+            translate_to_english=False,
+            maximum=8000,
+            publish=questions.append,
+        )
+        clarification.feed(
+            '{"status":"needs_clarification","questions":["请选择画幅。\\nA. 竖版",'
+            '"是否包含标题？"]}'
+        )
+        self.assertEqual(
+            questions,
+            ["为了让生成结果更符合预期，还需要确认：\n1. 请选择画幅。\nA. 竖版\n2. 是否包含标题？"],
+        )
+
+        conversation = []
+        chat = PromptDraftStreamPreview(
+            translate_to_english=False,
+            maximum=8000,
+            publish=conversation.append,
+        )
+        chat.feed('{"status":"conversation","message":"我是你的 AI')
+        self.assertEqual(conversation, [])
+        chat.feed(' 视觉创作搭档。"}')
+        self.assertEqual(conversation, ["我是你的 AI 视觉创作搭档。"])
+
+        alias = []
+        alias_chat = PromptDraftStreamPreview(
+            translate_to_english=False,
+            maximum=8000,
+            publish=alias.append,
+        )
+        alias_chat.feed('{"status":"message","text":"<think>内部推理</think>可见回复"}')
+        self.assertEqual(alias, ["可见回复"])
+
+        nested = []
+        nested_chat = PromptDraftStreamPreview(
+            translate_to_english=False,
+            maximum=8000,
+            publish=nested.append,
+        )
+        nested_chat.feed('{"status":"chat","result":{"response":"嵌套回复"}}')
+        self.assertEqual(nested, ["嵌套回复"])
+
+        plain = []
+        natural = PromptDraftStreamPreview(
+            translate_to_english=False,
+            maximum=8000,
+            publish=plain.append,
+        )
+        natural.feed("我是你的 AI")
+        natural.feed(" 视觉创作搭档。")
+        self.assertEqual(plain, ["我是你的 AI", "我是你的 AI 视觉创作搭档。"])
+
+        hidden = []
+        hidden_chat = PromptDraftStreamPreview(
+            translate_to_english=False,
+            maximum=8000,
+            publish=hidden.append,
+        )
+        hidden_chat.feed("<analysis>内部推理")
+        self.assertEqual(hidden, [])
+        hidden_chat.feed("</analysis>最终回复")
+        self.assertEqual(hidden, ["最终回复"])
+
     def test_creative_catalog_keeps_all_source_dimensions(self):
         self.assertEqual(len(CREATIVE_DIRECTIONS), 15)
         self.assertEqual(len(STYLE_TAG_LABELS), 47)
