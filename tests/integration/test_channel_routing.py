@@ -369,9 +369,7 @@ class TestChannelRouting(PlatformTestCase):
         item = db.session.get(GenerationItem, item_id)
         user = db.session.get(User, self.user.id)
         ledger_count = db.session.scalar(
-            select(func.count(WalletLedger.id)).where(
-                WalletLedger.generation_item_id == item_id
-            )
+            select(func.count(WalletLedger.id)).where(WalletLedger.generation_item_id == item_id)
         )
         self.assertEqual(worker.providers.calls, ["current", "lucen"])
         self.assertEqual(item.status, "failed")

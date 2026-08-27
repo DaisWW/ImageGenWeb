@@ -117,16 +117,12 @@ class RuntimeConfigService:
                         "max_concurrency": _nested(raw, "limits", "max_concurrency"),
                         "timeout_seconds": _nested(raw, "limits", "timeout_seconds"),
                         "estimated_seconds": _nested(raw, "limits", "estimated_seconds"),
-                        "failure_window_seconds": _nested(
-                            raw, "limits", "failure_window_seconds"
-                        ),
+                        "failure_window_seconds": _nested(raw, "limits", "failure_window_seconds"),
                         "failure_threshold": _nested(raw, "limits", "failure_threshold"),
                         "circuit_breaker_seconds": _nested(
                             raw, "limits", "circuit_breaker_seconds"
                         ),
-                        "half_open_max_probes": _nested(
-                            raw, "limits", "half_open_max_probes"
-                        ),
+                        "half_open_max_probes": _nested(raw, "limits", "half_open_max_probes"),
                     },
                 }
             )

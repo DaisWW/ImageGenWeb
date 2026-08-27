@@ -265,8 +265,7 @@ class GenerationWorker:
             selected_ids: set[str] = set()
             unavailable_ids: set[str] = set()
             circuit_states = {
-                state.channel_id: state
-                for state in db.session.scalars(select(ChannelCircuitState))
+                state.channel_id: state for state in db.session.scalars(select(ChannelCircuitState))
             }
             # Give each user an initial opportunity when several users are
             # waiting, then use any remaining slots to fill their allowed
@@ -408,8 +407,7 @@ class GenerationWorker:
 
         if circuit_states is None:
             circuit_states = {
-                state.channel_id: state
-                for state in db.session.scalars(select(ChannelCircuitState))
+                state.channel_id: state for state in db.session.scalars(select(ChannelCircuitState))
             }
         if probe_active is None:
             probe_active = dict(
@@ -430,8 +428,7 @@ class GenerationWorker:
                 continue
             if (
                 self._circuit_is_half_open(state)
-                and probe_active.get(channel.identifier, 0)
-                >= channel.limits.half_open_max_probes
+                and probe_active.get(channel.identifier, 0) >= channel.limits.half_open_max_probes
             ):
                 continue
             return channel
@@ -493,7 +490,9 @@ class GenerationWorker:
 
     @classmethod
     def _circuit_is_half_open(cls, state: ChannelCircuitState | None) -> bool:
-        return bool(state and state.open_until and not cls._time_is_after(state.open_until, utcnow()))
+        return bool(
+            state and state.open_until and not cls._time_is_after(state.open_until, utcnow())
+        )
 
     @staticmethod
     def _time_is_after(value, reference) -> bool:
@@ -682,11 +681,7 @@ class GenerationWorker:
         )
         if state is None and not (item and item.circuit_probe):
             return
-        if (
-            state is not None
-            and state.open_until is not None
-            and not (item and item.circuit_probe)
-        ):
+        if state is not None and state.open_until is not None and not (item and item.circuit_probe):
             return
         was_open = bool(state and state.open_until)
         if state is not None:
@@ -720,8 +715,7 @@ class GenerationWorker:
             return True
         status = error.status_code
         return bool(
-            status is not None
-            and (status >= 500 or status in {401, 403, 404, 408, 409, 425, 429})
+            status is not None and (status >= 500 or status in {401, 403, 404, 408, 409, 425, 429})
         )
 
     def _settle_success(

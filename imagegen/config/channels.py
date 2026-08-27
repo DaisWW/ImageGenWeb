@@ -318,16 +318,12 @@ class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
             max_concurrency=bounded_int(limits_raw, "max_concurrency", 2, 1, 64),
             timeout_seconds=bounded_int(limits_raw, "timeout_seconds", 600, 30, 1800),
             estimated_seconds=bounded_int(limits_raw, "estimated_seconds", 180, 10, 1800),
-            failure_window_seconds=bounded_int(
-                limits_raw, "failure_window_seconds", 120, 10, 3600
-            ),
+            failure_window_seconds=bounded_int(limits_raw, "failure_window_seconds", 120, 10, 3600),
             failure_threshold=bounded_int(limits_raw, "failure_threshold", 3, 1, 100),
             circuit_breaker_seconds=bounded_int(
                 limits_raw, "circuit_breaker_seconds", 300, 10, 86400
             ),
-            half_open_max_probes=bounded_int(
-                limits_raw, "half_open_max_probes", 1, 1, 64
-            ),
+            half_open_max_probes=bounded_int(limits_raw, "half_open_max_probes", 1, 1, 64),
         )
         if limits.half_open_max_probes > limits.max_concurrency:
             raise ValueError(f"{label} 的恢复探测数不能大于渠道并发")
