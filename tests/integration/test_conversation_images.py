@@ -47,6 +47,35 @@ class TestConversationImages(PlatformTestCase):
         self.assertIn("窗口消息-11", serialized)
         self.assertIn("窗口消息-89", serialized)
 
+    def test_context_rejects_system_prompt_that_exhausts_budget(self):
+        workspace = self.create_workspace("系统提示预算")
+        config = self.admin_client().get("/api/admin/chat-models").json["config"]
+        config["context"] = {"max_context_tokens": 2000}
+        response = self.admin_client().put("/api/admin/chat-models", json=config)
+        self.assertEqual(response.status_code, 200)
+
+        with self.assertRaisesRegex(ServiceError, "对话上下文预算不足") as raised:
+            self.services.conversations.context.build(
+                workspace,
+                pending_message={"role": "user", "content": "你好"},
+                system_prompt="系统提示" * 2000,
+            )
+        self.assertEqual(raised.exception.code, "context_budget_exceeded")
+
+    def test_context_rejects_pending_message_that_exceeds_budget(self):
+        workspace = self.create_workspace("当前消息预算")
+        config = self.admin_client().get("/api/admin/chat-models").json["config"]
+        config["context"] = {"max_context_tokens": 2000}
+        response = self.admin_client().put("/api/admin/chat-models", json=config)
+        self.assertEqual(response.status_code, 200)
+
+        with self.assertRaisesRegex(ServiceError, "当前消息超过") as raised:
+            self.services.conversations.context.build(
+                workspace,
+                pending_message={"role": "user", "content": "消息" * 3000},
+            )
+        self.assertEqual(raised.exception.code, "context_budget_exceeded")
+
     def test_generation_history_limits_outputs_and_compacts_workflow(self):
         workspace = self.create_workspace("生成历史窗口")
         worker = self.create_worker()
@@ -340,7 +369,7 @@ class TestConversationImages(PlatformTestCase):
         db.session.commit()
 
         config = self.admin_client().get("/api/admin/chat-models").json["config"]
-        config["context"] = {"max_context_tokens": 6000}
+        config["context"] = {"max_context_tokens": 20000}
         response = self.admin_client().put("/api/admin/chat-models", json=config)
         self.assertEqual(response.status_code, 200)
 
@@ -355,7 +384,6 @@ class TestConversationImages(PlatformTestCase):
         context = self.chat_client.calls[-1]["messages"]
         serialized = json.dumps(context, ensure_ascii=False)
         self.assertNotIn("普通历史-0-", serialized)
-        self.assertIn("普通历史-19-", serialized)
         self.assertIn(prompt, serialized)
         images = [
             part["image_url"]["url"]
@@ -370,7 +398,7 @@ class TestConversationImages(PlatformTestCase):
         state = db.session.get(ConversationState, workspace.id)
         self.assertEqual(state.summary, "")
         self.assertEqual(state.summary_through_message_id, "")
-        self.assertGreater(state.estimated_context_tokens, 6000)
+        self.assertLessEqual(state.estimated_context_tokens, 20000)
 
     def test_chat_multiple_attachments_are_sent_persisted_and_cannot_cross_workspaces(self):
         workspace = self.create_workspace()

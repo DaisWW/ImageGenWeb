@@ -149,6 +149,18 @@ class ConversationSupport:
             status is None or status >= 500 or status in {408, 409, 425, 429}
         )
 
+    @staticmethod
+    def _chat_error_message(error: OpenAIChatError) -> str:
+        return {
+            "chat_timeout": "聊天模型响应超时，请重试",
+            "chat_connection_error": "聊天模型连接中断，请重试",
+            "chat_rate_limited": "聊天模型暂时繁忙，请稍后重试",
+            "chat_auth_error": "聊天模型鉴权失败，请联系管理员检查配置",
+            "chat_upstream_error": "聊天模型服务暂时异常，请稍后重试",
+            "chat_invalid_response": "聊天模型返回格式异常，请重试",
+            "context_budget_exceeded": "对话上下文已超出模型容量，请缩短消息或提高上限",
+        }.get(error.code, "聊天模型请求失败，请稍后重试")
+
     def _parse_prompt_draft_result(
         self,
         *,
@@ -534,7 +546,7 @@ class ConversationSupport:
     ) -> None:
         error_id = self._record_chat_error(workspace, model, event, error)
         raise ServiceError(
-            str(error),
+            self._chat_error_message(error),
             code=error.code,
             status_code=error.status_code,
             error_id=error_id,

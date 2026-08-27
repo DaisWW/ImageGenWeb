@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from ...config.chat_models import ChatModelRegistry
+from ...errors import ServiceError
 from ...extensions import db
 from ...image_payloads import prepare_image_bytes
 from ...models import (
@@ -42,7 +43,6 @@ MAX_GENERATION_PROMPT_CHARS = 4000
 MAX_GENERATION_OUTPUT_PROMPT_CHARS = 1600
 MAX_PROMPT_DRAFT_CONTENT_CHARS = 4500
 MAX_PROMPT_DRAFT_METADATA_CHARS = 3000
-MIN_MESSAGE_BUDGET_WHEN_SYSTEM_EXCEEDS = 6000
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,14 +108,12 @@ class ConversationContextManager:
         ]
         policy = self.registry.context
         system_tokens = self._estimate_tokens(system_prompt) if system_prompt else 0
-        # The policy covers both the fixed instructions and the conversation. Keep a
-        # small message window for deliberately tiny test/admin policies even when
-        # the fixed prompt alone is larger; normal production policies have ample room.
         context_budget = policy.max_context_tokens - system_tokens
-        if system_tokens >= policy.max_context_tokens:
-            context_budget = min(
-                policy.max_context_tokens,
-                max(MIN_MESSAGE_BUDGET_WHEN_SYSTEM_EXCEEDS, 0),
+        if context_budget <= 0:
+            raise ServiceError(
+                "对话上下文预算不足，请提高上限或精简系统提示词",
+                code="context_budget_exceeded",
+                status_code=422,
             )
         messages = self._pack_context(
             active,
@@ -437,6 +435,12 @@ class ConversationContextManager:
         max_tokens: int,
     ) -> list[dict[str, Any]]:
         pending_tokens = self._message_tokens([pending_message])
+        if pending_tokens > max_tokens:
+            raise ServiceError(
+                "当前消息超过对话上下文预算，请缩短文字或减少参考图",
+                code="context_budget_exceeded",
+                status_code=422,
+            )
         available = max(0, max_tokens - pending_tokens)
         image_token_budget = math.floor(available * HISTORY_IMAGE_TOKEN_SHARE)
         selected_images: set[str] = set()
@@ -485,7 +489,11 @@ class ConversationContextManager:
             if removable_image is not None:
                 selected_images.remove(removable_image.key)
                 continue
-            return [pending_message]
+            raise ServiceError(
+                "对话历史超过上下文预算，请缩短消息或提高上限",
+                code="context_budget_exceeded",
+                status_code=422,
+            )
 
     def _select_events(
         self,

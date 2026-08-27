@@ -145,6 +145,20 @@ class PromptDraftWorkflow(ConversationSupport):
                 "chat.prompt_draft",
                 exc,
             )
+        except ServiceError as exc:
+            if exc.code != "context_budget_exceeded":
+                raise
+            self._raise_chat_error(
+                workspace,
+                model,
+                "chat.prompt_draft",
+                OpenAIChatError(
+                    str(exc),
+                    code=exc.code,
+                    status_code=exc.status_code,
+                    details={"stage": "context"},
+                ),
+            )
         operation.update_progress("parsing", "正在解析模型结果")
         try:
             parsed, result, format_repaired = self._parse_prompt_draft_result(

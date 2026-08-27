@@ -330,6 +330,21 @@ class ConversationReplyService(ConversationSupport):
                 exc,
                 operation=operation,
             )
+        except ServiceError as exc:
+            if exc.code != "context_budget_exceeded":
+                raise
+            return self._error_reply(
+                workspace,
+                model,
+                user_message,
+                OpenAIChatError(
+                    str(exc),
+                    code=exc.code,
+                    status_code=exc.status_code,
+                    details={"stage": "context"},
+                ),
+                operation=operation,
+            )
 
         operation.ensure_active()
         operation.update_progress("parsing", "正在解析模型结果")
@@ -514,7 +529,7 @@ class ConversationReplyService(ConversationSupport):
     ) -> ConversationMessage:
         operation.ensure_active()
         error_id = self._record_chat_error(workspace, model, "chat.reply", error)
-        content = str(error)
+        content = self._chat_error_message(error)
         if error_id:
             content = f"{content}\n错误 ID：{error_id}"
         message = ConversationMessage(

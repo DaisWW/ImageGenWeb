@@ -286,12 +286,8 @@ class OpenAIChatClient:
                 response_payload = event.get("response")
                 completed = response_payload if isinstance(response_payload, dict) else {}
                 if event_type not in {"response.completed", "response.done"}:
-                    error = completed.get("error") or event.get("error")
-                    detail = (
-                        str(error.get("message", "")).strip() if isinstance(error, dict) else ""
-                    )
                     raise OpenAIChatError(
-                        detail or "聊天服务未能完成响应",
+                        "聊天模型服务暂时异常，请稍后重试",
                         code="chat_upstream_error",
                         request_id=_request_id(response, completed),
                         upstream_status=response.status_code,
@@ -416,15 +412,14 @@ class OpenAIChatClient:
             payload = response.json()
         except ValueError:
             payload = None
-        upstream = payload.get("error") if isinstance(payload, dict) else None
-        detail = str(upstream.get("message") or "").strip() if isinstance(upstream, dict) else ""
         if response.status_code == 429:
             message, code = "聊天模型暂时繁忙，请稍后重试", "chat_rate_limited"
         elif response.status_code in {401, 403}:
             message, code = "聊天模型鉴权失败，请联系管理员检查配置", "chat_auth_error"
+        elif response.status_code >= 500:
+            message, code = "聊天模型服务暂时异常，请稍后重试", "chat_upstream_error"
         else:
-            message = detail[:300] if detail else f"聊天模型请求失败（HTTP {response.status_code}）"
-            code = "chat_upstream_error"
+            message, code = "聊天模型请求失败，请稍后重试", "chat_upstream_error"
         raise OpenAIChatError(
             message,
             code=code,
