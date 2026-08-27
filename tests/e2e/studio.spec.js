@@ -390,6 +390,7 @@ test("direct generation bypasses AI conversation", { tag: "@responsive" }, async
   await page.locator("#directGenerationButton").click();
 
   await expect(page.locator("#generationForm")).toBeVisible();
+  await expect(page.getByText("系统按优先级自动调度", { exact: true })).toHaveCount(0);
   await expect(page.locator("#promptInput"))
     .toHaveValue("一张雨夜霓虹街道的电影感照片");
   await page.evaluate(() => {

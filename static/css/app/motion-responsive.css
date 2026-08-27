@@ -86,7 +86,6 @@
   .stage-metrics { display: none; }
   .composer-controls { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .mode-switch { grid-column: span 2; }
-  .channel-field { grid-column: span 1; }
   .model-field { grid-column: span 1; }
   .image-modal { height: auto; max-height: 92vh; }
   .image-dialog-layout { height: auto; max-height: 92vh; grid-template-columns: 1fr; overflow: auto; }
@@ -153,7 +152,6 @@
   .composer { padding: 10px; }
   .composer-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mode-switch { grid-column: 1 / -1; }
-  .channel-field,
   .model-field { grid-column: span 1; }
   .prompt-row { grid-template-columns: 1fr; }
   .generation-plan-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
