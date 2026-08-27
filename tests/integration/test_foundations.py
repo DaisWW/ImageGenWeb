@@ -36,6 +36,26 @@ from tests.support.platform import (
 
 
 class TestFoundations(PlatformTestCase):
+    def test_channel_sizes_are_normalized_and_validated(self):
+        config_path = Path(self.temp.name) / "sizes.yaml"
+        size_list = "sizes: [1024x1024, 1280x720]"
+        config_path.write_text(
+            CHANNEL_CONFIG.replace(
+                size_list,
+                "sizes: [ 1024X1024, 1024×1024, 1280x720 ]",
+            ),
+            encoding="utf-8",
+        )
+        channel = ChannelRegistry(config_path).get("test", require_available=False)
+        self.assertEqual(channel.capabilities.sizes, ("1024x1024", "1280x720"))
+
+        config_path.write_text(
+            CHANNEL_CONFIG.replace(size_list, "sizes: [32x1024]"),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "无效尺寸"):
+            ChannelRegistry(config_path)
+
     def test_display_amount_trims_only_redundant_fraction_zeros(self):
         self.assertEqual(display_amount("100.0000"), "100.00")
         self.assertEqual(display_amount("1.2500"), "1.25")

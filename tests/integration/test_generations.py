@@ -544,6 +544,26 @@ class TestGenerations(PlatformTestCase):
         self.assertEqual(job.size, "1280x720")
         self.assertEqual(workspace.settings["size"], "1280x720")
 
+    def test_channel_rejects_unsupported_size(self):
+        workspace = self.create_workspace()
+        with self.assertRaisesRegex(ServiceError, "不支持尺寸 1536x1024"):
+            self.submit(workspace, size="1536x1024")
+
+    def test_worker_rechecks_channel_size_support(self):
+        workspace = self.create_workspace()
+        job = self.submit(workspace, size="1280x720")
+        item = job.items[0]
+        self.channel_path.write_text(
+            CHANNEL_CONFIG.replace(
+                "sizes: [1024x1024, 1280x720, 1920x1080]",
+                "sizes: [1024x1024]",
+            ),
+            encoding="utf-8",
+        )
+        self.assertTrue(self.app.extensions["channel_registry"].reload(force=True))
+        channel = self.app.extensions["channel_registry"].get("test")
+        self.assertFalse(self.create_worker()._channel_supports_item(channel, item))
+
     def test_invalid_custom_size_is_rejected(self):
         workspace = self.create_workspace()
         for size in ("1024", "0x1024", "63x1024", "9000x1024"):

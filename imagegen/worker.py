@@ -659,6 +659,8 @@ class GenerationWorker:
             return False
         if item.job.output_format not in channel.capabilities.formats:
             return False
+        if item.job.size.strip().lower() not in channel.capabilities.sizes:
+            return False
         try:
             channel.get_model(item.job.model)
         except ValueError:

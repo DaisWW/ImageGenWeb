@@ -99,7 +99,7 @@ channels:
       max_reference_images: 8
       max_reference_image_mb: 10
       max_reference_total_mb: 40
-      sizes: [1024x1024]
+      sizes: [1024x1024, 1280x720, 1920x1080]
       formats: [png, jpeg, webp]
     limits:
       max_concurrency: 3
