@@ -117,6 +117,16 @@ class RuntimeConfigService:
                         "max_concurrency": _nested(raw, "limits", "max_concurrency"),
                         "timeout_seconds": _nested(raw, "limits", "timeout_seconds"),
                         "estimated_seconds": _nested(raw, "limits", "estimated_seconds"),
+                        "failure_window_seconds": _nested(
+                            raw, "limits", "failure_window_seconds"
+                        ),
+                        "failure_threshold": _nested(raw, "limits", "failure_threshold"),
+                        "circuit_breaker_seconds": _nested(
+                            raw, "limits", "circuit_breaker_seconds"
+                        ),
+                        "half_open_max_probes": _nested(
+                            raw, "limits", "half_open_max_probes"
+                        ),
                     },
                 }
             )
@@ -127,6 +137,7 @@ class RuntimeConfigService:
             "version": 1,
             "queue": {
                 "global_concurrency": queue.get("global_concurrency"),
+                "max_channel_attempts": queue.get("max_channel_attempts"),
                 "max_queued_per_user": queue.get("max_queued_per_user"),
                 "max_queued_global": queue.get("max_queued_global"),
                 "history_retention_days": queue.get("history_retention_days"),

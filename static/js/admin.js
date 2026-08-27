@@ -774,6 +774,10 @@
       form.elements.max_concurrency.value = channel?.limits.max_concurrency ?? 2;
       form.elements.timeout_seconds.value = channel?.limits.timeout_seconds ?? 600;
       form.elements.estimated_seconds.value = channel?.limits.estimated_seconds ?? 180;
+      form.elements.failure_window_seconds.value = channel?.limits.failure_window_seconds ?? 120;
+      form.elements.failure_threshold.value = channel?.limits.failure_threshold ?? 3;
+      form.elements.circuit_breaker_seconds.value = channel?.limits.circuit_breaker_seconds ?? 300;
+      form.elements.half_open_max_probes.value = channel?.limits.half_open_max_probes ?? 1;
       this.el.channelDialogTitle.textContent = channel ? `编辑 ${channel.label}` : "新增生图渠道";
       UI.openDialog(this.el.channelDialog);
     }
@@ -866,6 +870,10 @@
           max_concurrency: Number(form.elements.max_concurrency.value),
           timeout_seconds: Number(form.elements.timeout_seconds.value),
           estimated_seconds: Number(form.elements.estimated_seconds.value),
+          failure_window_seconds: Number(form.elements.failure_window_seconds.value),
+          failure_threshold: Number(form.elements.failure_threshold.value),
+          circuit_breaker_seconds: Number(form.elements.circuit_breaker_seconds.value),
+          half_open_max_probes: Number(form.elements.half_open_max_probes.value),
         },
       };
     }

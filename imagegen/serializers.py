@@ -261,6 +261,8 @@ def item_dict(item: GenerationItem, *, now: datetime, admin: bool = False) -> di
     if admin:
         result.update(
             provider_price_rmb=_amount(item.provider_price_rmb or 0),
+            attempted_channel_ids=list(item.attempted_channel_ids or []),
+            circuit_probe=bool(item.circuit_probe),
             upstream_status=item.upstream_status,
             upstream_request_id=item.upstream_request_id,
             error_code=item.error_code,

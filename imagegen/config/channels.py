@@ -51,6 +51,10 @@ class ChannelLimits:
     max_concurrency: int
     timeout_seconds: int
     estimated_seconds: int
+    failure_window_seconds: int
+    failure_threshold: int
+    circuit_breaker_seconds: int
+    half_open_max_probes: int
 
 
 @dataclass(frozen=True)
@@ -131,6 +135,10 @@ class Channel:
                 "max_concurrency": self.limits.max_concurrency,
                 "timeout_seconds": self.limits.timeout_seconds,
                 "estimated_seconds": self.limits.estimated_seconds,
+                "failure_window_seconds": self.limits.failure_window_seconds,
+                "failure_threshold": self.limits.failure_threshold,
+                "circuit_breaker_seconds": self.limits.circuit_breaker_seconds,
+                "half_open_max_probes": self.limits.half_open_max_probes,
             },
         }
 
@@ -138,6 +146,7 @@ class Channel:
 @dataclass(frozen=True)
 class QueueLimits:
     global_concurrency: int = 4
+    max_channel_attempts: int = 2
     max_queued_per_user: int = 20
     max_queued_global: int = 100
     history_retention_days: int = 30
@@ -146,6 +155,7 @@ class QueueLimits:
     def as_dict(self) -> dict[str, int]:
         return {
             "global_concurrency": self.global_concurrency,
+            "max_channel_attempts": self.max_channel_attempts,
             "max_queued_per_user": self.max_queued_per_user,
             "max_queued_global": self.max_queued_global,
             "history_retention_days": self.history_retention_days,
@@ -238,6 +248,7 @@ class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
             raise ValueError("queue 配置必须是对象")
         queue = QueueLimits(
             global_concurrency=bounded_int(raw, "global_concurrency", 4, 1, 64),
+            max_channel_attempts=bounded_int(raw, "max_channel_attempts", 2, 1, 10),
             max_queued_per_user=bounded_int(raw, "max_queued_per_user", 20, 1, 500),
             max_queued_global=bounded_int(raw, "max_queued_global", 100, 1, 5000),
             history_retention_days=bounded_int(raw, "history_retention_days", 30, 1, 3650),
@@ -307,7 +318,19 @@ class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
             max_concurrency=bounded_int(limits_raw, "max_concurrency", 2, 1, 64),
             timeout_seconds=bounded_int(limits_raw, "timeout_seconds", 600, 30, 1800),
             estimated_seconds=bounded_int(limits_raw, "estimated_seconds", 180, 10, 1800),
+            failure_window_seconds=bounded_int(
+                limits_raw, "failure_window_seconds", 120, 10, 3600
+            ),
+            failure_threshold=bounded_int(limits_raw, "failure_threshold", 3, 1, 100),
+            circuit_breaker_seconds=bounded_int(
+                limits_raw, "circuit_breaker_seconds", 300, 10, 86400
+            ),
+            half_open_max_probes=bounded_int(
+                limits_raw, "half_open_max_probes", 1, 1, 64
+            ),
         )
+        if limits.half_open_max_probes > limits.max_concurrency:
+            raise ValueError(f"{label} 的恢复探测数不能大于渠道并发")
         return Channel(
             identifier=identifier,
             label=label,

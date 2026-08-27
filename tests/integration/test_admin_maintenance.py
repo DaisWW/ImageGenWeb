@@ -292,19 +292,29 @@ class TestAdminAndMaintenance(PlatformTestCase):
         initial = client.get("/api/admin/channels").json["config"]
         self.assertFalse(initial["managed"])
         self.assertEqual(initial["source"], "file")
+        self.assertEqual(initial["queue"]["max_channel_attempts"], 2)
+        self.assertEqual(initial["channels"][0]["limits"]["failure_window_seconds"], 120)
+        self.assertEqual(initial["channels"][0]["limits"]["failure_threshold"], 3)
+        self.assertEqual(initial["channels"][0]["limits"]["circuit_breaker_seconds"], 300)
+        self.assertEqual(initial["channels"][0]["limits"]["half_open_max_probes"], 1)
         self.assertEqual(initial["channels"][0]["api_key_hint"], "test****cret")
         self.assertNotIn("test-key-not-secret", json.dumps(initial))
 
         initial["channels"][0]["price_rmb"] = "2.5000"
+        initial["queue"]["max_channel_attempts"] = 3
+        initial["channels"][0]["limits"]["failure_threshold"] = 4
         response = client.put("/api/admin/channels", json=initial)
         self.assertEqual(response.status_code, 200)
         saved = response.json["config"]
         self.assertTrue(saved["managed"])
         self.assertEqual(saved["source"], "database")
         self.assertEqual(saved["channels"][0]["price_rmb"], "2.5000")
+        self.assertEqual(saved["queue"]["max_channel_attempts"], 3)
+        self.assertEqual(saved["channels"][0]["limits"]["failure_threshold"], 4)
 
         channel = self.app.extensions["channel_registry"].get("test")
         self.assertEqual(channel.price_rmb, Decimal("2.5000"))
+        self.assertEqual(channel.limits.failure_threshold, 4)
         self.assertEqual(channel.api_key, "test-key-not-secret")
         stored = db.session.get(SystemState, CHANNEL_CONFIG_KEY)
         self.assertIn("api_key_encrypted", stored.value)

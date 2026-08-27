@@ -12,6 +12,7 @@ from decimal import Decimal
 
 from flask import Flask
 from sqlalchemy import func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from .config.channels import (
@@ -29,9 +30,16 @@ from .integrations.images import (
     ReferencePayload,
 )
 from .integrations.matting import LucidaMattingClient, image_has_baked_checkerboard
-from .models import GenerationItem, GenerationJob, User, WorkerState, utcnow
+from .models import (
+    ChannelCircuitState,
+    GenerationItem,
+    GenerationJob,
+    User,
+    WorkerState,
+    utcnow,
+)
 from .services import RetentionService, money
-from .storage import ImageStorage, StorageError
+from .storage import ImageStorage, InvalidImageError, StorageError
 from .worker_health import worker_heartbeat_grace_seconds
 
 LOGGER = logging.getLogger(__name__)
@@ -210,18 +218,28 @@ class GenerationWorker:
         with self.app.app_context():
             active_rows = db.session.execute(
                 select(
-                    GenerationItem.user_id, GenerationItem.channel_id, func.count(GenerationItem.id)
+                    GenerationItem.user_id,
+                    GenerationItem.channel_id,
+                    GenerationItem.circuit_probe,
+                    func.count(GenerationItem.id),
                 )
                 .where(GenerationItem.status.in_(["running", "canceling"]))
-                .group_by(GenerationItem.user_id, GenerationItem.channel_id)
+                .group_by(
+                    GenerationItem.user_id,
+                    GenerationItem.channel_id,
+                    GenerationItem.circuit_probe,
+                )
             ).all()
             user_active: dict[int, int] = {}
             channel_active: dict[str, int] = {}
+            probe_active: dict[str, int] = {}
             database_active = 0
-            for user_id, channel_id, count in active_rows:
+            for user_id, channel_id, circuit_probe, count in active_rows:
                 database_active += int(count)
                 user_active[user_id] = user_active.get(user_id, 0) + count
                 channel_active[channel_id] = channel_active.get(channel_id, 0) + count
+                if circuit_probe:
+                    probe_active[channel_id] = probe_active.get(channel_id, 0) + count
             # Futures normally mirror the database rows, but counting both
             # sources protects the global cap while a crashed or restarted
             # item is waiting for stale-claim recovery.
@@ -246,6 +264,10 @@ class GenerationWorker:
             selected: list[str] = []
             selected_ids: set[str] = set()
             unavailable_ids: set[str] = set()
+            circuit_states = {
+                state.channel_id: state
+                for state in db.session.scalars(select(ChannelCircuitState))
+            }
             # Give each user an initial opportunity when several users are
             # waiting, then use any remaining slots to fill their allowed
             # per-user concurrency.  This preserves queue fairness without
@@ -262,7 +284,12 @@ class GenerationWorker:
                         continue
                     if first_for_user and item.user_id in scheduled_users:
                         continue
-                    channel = self._select_channel_for_item(item, channel_active)
+                    channel = self._select_channel_for_item(
+                        item,
+                        channel_active,
+                        circuit_states=circuit_states,
+                        probe_active=probe_active,
+                    )
                     if channel is None and not self._has_routable_channel(item):
                         self._fail_unavailable_item(item.id)
                         unavailable_ids.add(item.id)
@@ -279,6 +306,11 @@ class GenerationWorker:
                         channel_active[channel.identifier] = (
                             channel_active.get(channel.identifier, 0) + 1
                         )
+                        state = circuit_states.get(channel.identifier)
+                        if self._circuit_is_half_open(state):
+                            probe_active[channel.identifier] = (
+                                probe_active.get(channel.identifier, 0) + 1
+                            )
             db.session.remove()
 
         for item_id in selected:
@@ -322,6 +354,11 @@ class GenerationWorker:
             db.session.rollback()
             return False
 
+        circuit_probe = self._reserve_circuit_probe(item_id, channel)
+        if circuit_probe is None:
+            db.session.rollback()
+            return False
+
         now = utcnow()
         claimed = db.session.execute(
             update(GenerationItem)
@@ -335,6 +372,7 @@ class GenerationWorker:
                 channel_id=channel.identifier,
                 channel_label=channel.label,
                 provider_price_rmb=money(channel.price_rmb),
+                circuit_probe=circuit_probe,
                 claimed_by=self.worker_id,
                 started_at=now,
                 heartbeat_at=now,
@@ -357,6 +395,9 @@ class GenerationWorker:
         self,
         item: GenerationItem,
         channel_active: dict[str, int],
+        *,
+        circuit_states: dict[str, ChannelCircuitState] | None = None,
+        probe_active: dict[str, int] | None = None,
     ) -> Channel | None:
         """Pick the first capable channel with an open slot.
 
@@ -365,8 +406,33 @@ class GenerationWorker:
         next provider when a higher-priority channel is saturated.
         """
 
+        if circuit_states is None:
+            circuit_states = {
+                state.channel_id: state
+                for state in db.session.scalars(select(ChannelCircuitState))
+            }
+        if probe_active is None:
+            probe_active = dict(
+                db.session.execute(
+                    select(GenerationItem.channel_id, func.count(GenerationItem.id))
+                    .where(
+                        GenerationItem.circuit_probe.is_(True),
+                        GenerationItem.status.in_(["running", "canceling"]),
+                    )
+                    .group_by(GenerationItem.channel_id)
+                ).all()
+            )
         for channel in self._routable_channels(item):
             if channel_active.get(channel.identifier, 0) >= channel.limits.max_concurrency:
+                continue
+            state = circuit_states.get(channel.identifier)
+            if self._circuit_is_open(state):
+                continue
+            if (
+                self._circuit_is_half_open(state)
+                and probe_active.get(channel.identifier, 0)
+                >= channel.limits.half_open_max_probes
+            ):
                 continue
             return channel
         return None
@@ -388,13 +454,54 @@ class GenerationWorker:
                 return ()
         else:
             channels = tuple(self.channels.list(include_disabled=False))
+        attempted = set(item.attempted_channel_ids or [])
         return tuple(
             channel
             for channel in channels
             if channel.configured
+            and channel.identifier not in attempted
             and channel.price_rmb <= item.job.price_per_image_rmb
             and self._channel_supports_item(channel, item)
         )
+
+    def _reserve_circuit_probe(self, item_id: str, channel: Channel) -> bool | None:
+        state = db.session.scalar(
+            select(ChannelCircuitState)
+            .where(ChannelCircuitState.channel_id == channel.identifier)
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        )
+        if state is None or state.open_until is None:
+            return False
+        if self._circuit_is_open(state):
+            return None
+        active_probes = db.session.scalar(
+            select(func.count(GenerationItem.id)).where(
+                GenerationItem.id != item_id,
+                GenerationItem.channel_id == channel.identifier,
+                GenerationItem.circuit_probe.is_(True),
+                GenerationItem.status.in_(["running", "canceling"]),
+            )
+        )
+        if int(active_probes or 0) >= channel.limits.half_open_max_probes:
+            return None
+        return True
+
+    @classmethod
+    def _circuit_is_open(cls, state: ChannelCircuitState | None) -> bool:
+        return bool(state and state.open_until and cls._time_is_after(state.open_until, utcnow()))
+
+    @classmethod
+    def _circuit_is_half_open(cls, state: ChannelCircuitState | None) -> bool:
+        return bool(state and state.open_until and not cls._time_is_after(state.open_until, utcnow()))
+
+    @staticmethod
+    def _time_is_after(value, reference) -> bool:
+        if value.tzinfo is None and reference.tzinfo is not None:
+            reference = reference.replace(tzinfo=None)
+        elif value.tzinfo is not None and reference.tzinfo is None:
+            reference = reference.replace(tzinfo=value.tzinfo)
+        return value > reference
 
     @staticmethod
     def _channel_supports_item(channel: Channel, item: GenerationItem) -> bool:
@@ -463,6 +570,15 @@ class GenerationWorker:
                     ),
                 )
                 content = result.content
+                try:
+                    self.storage.inspect(content)
+                except InvalidImageError as exc:
+                    raise ProviderError(
+                        str(exc),
+                        code="invalid_response",
+                        request_id=result.request_id,
+                    ) from exc
+                self._record_channel_success(channel, item_id)
                 if item.job.transparent_background:
                     content = self._apply_lucida_matting(
                         content,
@@ -503,6 +619,7 @@ class GenerationWorker:
                         upstream_request_id=exc.request_id,
                         started=started,
                         details=exc.details,
+                        retryable=self._provider_error_is_retryable(exc),
                     )
             except (StorageError, OSError) as exc:
                 with self._settlement_lock:
@@ -554,6 +671,58 @@ class GenerationWorker:
                 code="checkerboard_reference",
                 status_code=422,
             )
+
+    def _record_channel_success(self, channel: Channel, item_id: str) -> None:
+        item = db.session.get(GenerationItem, item_id)
+        state = db.session.scalar(
+            select(ChannelCircuitState)
+            .where(ChannelCircuitState.channel_id == channel.identifier)
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        )
+        if state is None and not (item and item.circuit_probe):
+            return
+        if (
+            state is not None
+            and state.open_until is not None
+            and not (item and item.circuit_probe)
+        ):
+            return
+        was_open = bool(state and state.open_until)
+        if state is not None:
+            state.failure_count = 0
+            state.failure_window_started_at = None
+            state.open_until = None
+        if item is not None:
+            item.circuit_probe = False
+        if was_open:
+            self.runtime_logs.record(
+                category="worker",
+                event="worker.channel_circuit_closed",
+                status="success",
+                message="生图渠道探测成功，已恢复调度",
+                source="worker",
+                item_id=item_id,
+                provider_id=channel.identifier,
+                provider_label=channel.label,
+            )
+        db.session.commit()
+
+    @staticmethod
+    def _provider_error_is_retryable(error: ProviderError) -> bool:
+        if error.code in {
+            "adapter_error",
+            "connection_error",
+            "download_error",
+            "invalid_response",
+            "timeout",
+        }:
+            return True
+        status = error.status_code
+        return bool(
+            status is not None
+            and (status >= 500 or status in {401, 403, 404, 408, 409, 425, 429})
+        )
 
     def _settle_success(
         self, item_id: str, content: bytes, request_id: str, started: float
@@ -654,6 +823,7 @@ class GenerationWorker:
         upstream_request_id: str,
         started: float,
         details: dict | None = None,
+        retryable: bool = False,
     ) -> None:
         db.session.expire_all()
         preview = db.session.get(GenerationItem, item_id, populate_existing=True)
@@ -676,20 +846,36 @@ class GenerationWorker:
             .execution_options(populate_existing=True)
             .with_for_update()
         )
+        provider_id, provider_label = self._provider_fields(item, job)
+        will_retry = False
+        circuit_opened = False
+        attempt_number = len(item.attempted_channel_ids or [])
         if item.cancel_requested_at or item.status == "canceling" or job.cancel_requested_at:
             self._mark_canceled(user, job, item, started)
         else:
-            item.status = "failed"
-            item.error_code = code[:80]
-            item.error_message = message[:1000]
-            item.upstream_status = upstream_status
-            item.upstream_request_id = upstream_request_id[:255]
-            item.completed_at = utcnow()
-            item.elapsed_seconds = Decimal(str(round(time.monotonic() - started, 3)))
-            self.billing.release(user, job, money(job.price_per_image_rmb))
+            attempted = list(item.attempted_channel_ids or [])
+            if provider_id not in {"", AUTO_CHANNEL_ID} and provider_id not in attempted:
+                attempted.append(provider_id)
+            item.attempted_channel_ids = attempted
+            item.circuit_probe = False
+            attempt_number = len(attempted)
+            if retryable:
+                circuit_opened = self._record_channel_failure(item, provider_id, provider_label)
+                will_retry = self._can_retry_item(item, attempted)
+            if will_retry:
+                self._reset_item_for_retry(item)
+                job.completed_at = None
+            else:
+                item.status = "failed"
+                item.error_code = code[:80]
+                item.error_message = message[:1000]
+                item.upstream_status = upstream_status
+                item.upstream_request_id = upstream_request_id[:255]
+                item.completed_at = utcnow()
+                item.elapsed_seconds = Decimal(str(round(time.monotonic() - started, 3)))
+                self.billing.release(user, job, money(job.price_per_image_rmb))
             self.generations.refresh_job_status(job)
         elapsed_seconds = round(time.monotonic() - started, 3)
-        provider_id, provider_label = self._provider_fields(item, job)
         self.runtime_logs.record(
             category="generation",
             event="generation.provider",
@@ -709,9 +895,112 @@ class GenerationWorker:
             http_status=upstream_status,
             upstream_request_id=upstream_request_id,
             elapsed_seconds=elapsed_seconds,
-            details={"diagnostics": details or {}},
+            details={
+                "diagnostics": details or {},
+                "attempt": attempt_number,
+                "max_attempts": self.channels.queue.max_channel_attempts,
+                "will_retry": will_retry,
+                "circuit_opened": circuit_opened,
+            },
         )
         db.session.commit()
+
+    def _record_channel_failure(
+        self,
+        item: GenerationItem,
+        provider_id: str,
+        provider_label: str,
+    ) -> bool:
+        try:
+            channel = self.channels.get(provider_id, require_available=False)
+        except ValueError:
+            return False
+        state = db.session.scalar(
+            select(ChannelCircuitState)
+            .where(ChannelCircuitState.channel_id == provider_id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        )
+        if state is None:
+            try:
+                with db.session.begin_nested():
+                    state = ChannelCircuitState(channel_id=provider_id)
+                    db.session.add(state)
+                    db.session.flush()
+            except IntegrityError:
+                state = db.session.scalar(
+                    select(ChannelCircuitState)
+                    .where(ChannelCircuitState.channel_id == provider_id)
+                    .execution_options(populate_existing=True)
+                    .with_for_update()
+                )
+                if state is None:
+                    raise
+        now = utcnow()
+        was_half_open = state.open_until is not None
+        window_expired = bool(
+            state.failure_window_started_at
+            and self._time_is_after(
+                now,
+                state.failure_window_started_at
+                + timedelta(seconds=channel.limits.failure_window_seconds),
+            )
+        )
+        if state.failure_window_started_at is None or window_expired:
+            state.failure_window_started_at = now
+            state.failure_count = 1
+        else:
+            state.failure_count += 1
+        should_open = was_half_open or state.failure_count >= channel.limits.failure_threshold
+        if not should_open:
+            return False
+        state.open_until = now + timedelta(seconds=channel.limits.circuit_breaker_seconds)
+        self.runtime_logs.record(
+            category="worker",
+            event="worker.channel_circuit_opened",
+            status="error",
+            level="warning",
+            message="生图渠道连续失败，已暂停自动调度",
+            source="worker",
+            item_id=item.id,
+            provider_id=provider_id,
+            provider_label=provider_label,
+            details={
+                "failure_count": state.failure_count,
+                "failure_threshold": channel.limits.failure_threshold,
+                "open_until": state.open_until.isoformat(),
+            },
+        )
+        return True
+
+    def _can_retry_item(self, item: GenerationItem, attempted: list[str]) -> bool:
+        if len(attempted) >= self.channels.queue.max_channel_attempts:
+            return False
+        attempted_ids = set(attempted)
+        return any(
+            channel.identifier not in attempted_ids
+            and channel.configured
+            and channel.price_rmb <= item.job.price_per_image_rmb
+            and self._channel_supports_item(channel, item)
+            for channel in self.channels.list(include_disabled=False)
+        )
+
+    @staticmethod
+    def _reset_item_for_retry(item: GenerationItem) -> None:
+        item.status = "queued"
+        item.channel_id = AUTO_CHANNEL_ID
+        item.channel_label = AUTO_CHANNEL_LABEL
+        item.provider_price_rmb = money(0)
+        item.claimed_by = None
+        item.heartbeat_at = None
+        item.started_at = None
+        item.completed_at = None
+        item.estimated_seconds = None
+        item.error_code = None
+        item.error_message = None
+        item.upstream_status = None
+        item.upstream_request_id = None
+        item.elapsed_seconds = None
 
     def _settle_canceled(self, item_id: str, started: float) -> None:
         db.session.expire_all()
