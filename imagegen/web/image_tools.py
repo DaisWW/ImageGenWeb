@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import tempfile
 import zipfile
 
 from flask import jsonify, request, send_file
@@ -140,37 +141,52 @@ def submit_generation_item_background_removal(item_id: str):
 @web.post("/api/background-removal-results/<result_id>/select")
 @login_required
 def select_background_removal_result(result_id: str):
-    run = services().background_removal.select(result_id, user_id=current_user.id)
+    run = services().background_removal.select(
+        result_id,
+        user_id=_background_removal_access_user_id(),
+    )
     return jsonify(run=background_removal_run_dict(run))
 
 
 @web.get("/api/background-removal-runs/<run_id>/download")
 @login_required
 def download_background_removal_run(run_id: str):
-    run = services().background_removal.get_run(run_id, user_id=current_user.id)
+    run = services().background_removal.get_run(
+        run_id,
+        user_id=_background_removal_access_user_id(),
+    )
     completed = [result for result in run.results if result.output_path]
     if not completed:
         raise ServiceError("暂无可下载的透明化结果", status_code=409)
-    archive = io.BytesIO()
-    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
-        for result in completed:
-            bundle.writestr(
-                f"{result.model_id}_{result.id}.png",
-                storage().read_bytes(result.output_path),
-            )
-    archive.seek(0)
-    return send_file(
-        archive,
-        mimetype="application/zip",
-        as_attachment=True,
-        download_name=f"image_{run.source_item_id}_background_removals.zip",
-    )
+    archive = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b")
+    try:
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+            for result in completed:
+                bundle.write(
+                    storage().read(result.output_path),
+                    arcname=f"{result.model_id}_{result.id}.png",
+                )
+        archive.seek(0)
+        response = send_file(
+            archive,
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=f"image_{run.source_item_id}_background_removals.zip",
+        )
+    except Exception:
+        archive.close()
+        raise
+    response.call_on_close(archive.close)
+    return response
 
 
 @web.get("/media/background-removal-results/<result_id>")
 @login_required
 def background_removal_file(result_id: str):
-    result = services().background_removal.get_result(result_id, user_id=current_user.id)
+    result = services().background_removal.get_result(
+        result_id,
+        user_id=_background_removal_access_user_id(),
+    )
     if not result.output_path:
         raise ServiceError("透明化结果不存在", status_code=404)
     return send_file(
@@ -185,7 +201,10 @@ def background_removal_file(result_id: str):
 @web.get("/media/background-removal-results/<result_id>/thumbnail")
 @login_required
 def background_removal_thumbnail(result_id: str):
-    result = services().background_removal.get_result(result_id, user_id=current_user.id)
+    result = services().background_removal.get_result(
+        result_id,
+        user_id=_background_removal_access_user_id(),
+    )
     if not result.thumbnail_path:
         raise ServiceError("透明化缩略图不存在", status_code=404)
     return send_file(
@@ -193,6 +212,10 @@ def background_removal_thumbnail(result_id: str):
         mimetype="image/webp",
         conditional=True,
     )
+
+
+def _background_removal_access_user_id() -> int | None:
+    return None if current_user.is_admin else current_user.id
 
 
 @web.post("/api/generation-items/<item_id>/slice-analysis")

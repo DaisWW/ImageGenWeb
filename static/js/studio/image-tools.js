@@ -373,6 +373,9 @@
         this.scheduleBackgroundRemovalPoll();
       } catch (error) {
         UI.toast(error.message, "error");
+        if (!error.status || error.status >= 500) {
+          this.scheduleBackgroundRemovalPoll();
+        }
       }
     },
 

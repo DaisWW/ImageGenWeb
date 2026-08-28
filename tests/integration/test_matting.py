@@ -134,7 +134,8 @@ class TestLucidaMattingClient(PlatformTestCase):
         with self.assertRaises(ServiceError) as upstream_ctx:
             upstream.remove_background(png_bytes())
         self.assertEqual(upstream_ctx.exception.code, "matting_upstream_failed")
-        self.assertIn("segmenter boom", str(upstream_ctx.exception))
+        self.assertEqual(str(upstream_ctx.exception), "透明化处理失败（HTTP 500）")
+        self.assertNotIn("segmenter boom", str(upstream_ctx.exception))
 
         opaque = LucidaMattingClient(
             base_url="http://lucida.local",

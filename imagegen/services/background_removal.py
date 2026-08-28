@@ -36,28 +36,28 @@ class BackgroundRemovalService:
             )
         )
 
-    def get_run(self, run_id: str, *, user_id: int) -> BackgroundRemovalRun:
-        run = db.session.scalar(
+    def get_run(self, run_id: str, *, user_id: int | None) -> BackgroundRemovalRun:
+        query = (
             select(BackgroundRemovalRun)
             .options(selectinload(BackgroundRemovalRun.results))
-            .where(
-                BackgroundRemovalRun.id == run_id,
-                BackgroundRemovalRun.user_id == user_id,
-            )
+            .where(BackgroundRemovalRun.id == run_id)
         )
+        if user_id is not None:
+            query = query.where(BackgroundRemovalRun.user_id == user_id)
+        run = db.session.scalar(query)
         if run is None:
             raise ServiceError("透明化对比任务不存在", status_code=404)
         return run
 
-    def get_result(self, result_id: str, *, user_id: int) -> BackgroundRemovalResult:
-        result = db.session.scalar(
+    def get_result(self, result_id: str, *, user_id: int | None) -> BackgroundRemovalResult:
+        query = (
             select(BackgroundRemovalResult)
             .join(BackgroundRemovalRun)
-            .where(
-                BackgroundRemovalResult.id == result_id,
-                BackgroundRemovalRun.user_id == user_id,
-            )
+            .where(BackgroundRemovalResult.id == result_id)
         )
+        if user_id is not None:
+            query = query.where(BackgroundRemovalRun.user_id == user_id)
+        result = db.session.scalar(query)
         if result is None:
             raise ServiceError("透明化结果不存在", status_code=404)
         return result
@@ -151,19 +151,18 @@ class BackgroundRemovalService:
         db.session.commit()
         return self.get_run(run.id, user_id=user_id)
 
-    def select(self, result_id: str, *, user_id: int) -> BackgroundRemovalRun:
-        result = db.session.scalar(
+    def select(self, result_id: str, *, user_id: int | None) -> BackgroundRemovalRun:
+        query = (
             select(BackgroundRemovalResult)
             .join(BackgroundRemovalRun)
             .options(
                 selectinload(BackgroundRemovalResult.run).selectinload(BackgroundRemovalRun.results)
             )
-            .where(
-                BackgroundRemovalResult.id == result_id,
-                BackgroundRemovalRun.user_id == user_id,
-            )
-            .with_for_update()
+            .where(BackgroundRemovalResult.id == result_id)
         )
+        if user_id is not None:
+            query = query.where(BackgroundRemovalRun.user_id == user_id)
+        result = db.session.scalar(query.with_for_update())
         if result is None:
             raise ServiceError("透明化结果不存在", status_code=404)
         if result.status != "succeeded" or not result.output_path:

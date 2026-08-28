@@ -99,9 +99,8 @@ class LucidaMattingClient:
             ) from exc
 
         if response.status_code >= 400:
-            detail = _response_detail(response)
             raise ServiceError(
-                detail or f"透明化处理失败（HTTP {response.status_code}）",
+                f"透明化处理失败（HTTP {response.status_code}）",
                 code="matting_upstream_failed",
                 status_code=502,
             )
@@ -315,17 +314,3 @@ def _in_checkerboard_border(x: int, y: int, width: int, height: int, border: int
 
 def _pixel_distance(first: tuple[int, ...], second: tuple[int, ...]) -> float:
     return sum((left - right) ** 2 for left, right in zip(first[:3], second[:3])) ** 0.5 / 441.673
-
-
-def _response_detail(response: requests.Response) -> str:
-    try:
-        payload = response.json()
-    except ValueError:
-        text = (response.text or "").strip()
-        return text[:200]
-    if isinstance(payload, dict):
-        for key in ("detail", "error", "message"):
-            value = payload.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()[:200]
-    return ""

@@ -413,12 +413,39 @@ class GenerationWorker:
                 db.session.remove()
                 return
 
+            runnable_conditions = [BackgroundRemovalResult.status == "queued"]
+            runnable_conditions.extend(
+                or_(
+                    BackgroundRemovalResult.model_id != model_id,
+                    BackgroundRemovalResult.model_max_concurrency > count,
+                )
+                for model_id, count in model_active.items()
+            )
+            ranked_candidates = (
+                select(
+                    BackgroundRemovalResult.id.label("result_id"),
+                    func.row_number()
+                    .over(
+                        partition_by=BackgroundRemovalResult.model_id,
+                        order_by=(
+                            BackgroundRemovalResult.created_at,
+                            BackgroundRemovalResult.id,
+                        ),
+                    )
+                    .label("model_position"),
+                )
+                .where(*runnable_conditions)
+                .subquery()
+            )
             candidates = list(
                 db.session.scalars(
                     select(BackgroundRemovalResult)
-                    .where(BackgroundRemovalResult.status == "queued")
+                    .join(
+                        ranked_candidates,
+                        ranked_candidates.c.result_id == BackgroundRemovalResult.id,
+                    )
+                    .where(ranked_candidates.c.model_position <= available)
                     .order_by(BackgroundRemovalResult.created_at, BackgroundRemovalResult.id)
-                    .limit(100)
                 )
             )
             selected: list[str] = []

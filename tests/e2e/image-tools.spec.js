@@ -206,6 +206,7 @@ test("background removal compares parallel model results and selects the best", 
     releaseCompleted = resolve;
   });
   let selectedResultId = null;
+  let transientPollFailures = 0;
 
   await page.route("**/api/generations*", async (route) => {
     const url = new URL(route.request().url());
@@ -228,6 +229,11 @@ test("background removal compares parallel model results and selects the best", 
     }
     if (!submitted) {
       await route.fulfill({ json: { models, run: null } });
+      return;
+    }
+    if (transientPollFailures === 0) {
+      transientPollFailures += 1;
+      await route.fulfill({ status: 503, json: { error: "临时不可用" } });
       return;
     }
     await completedAvailable;
@@ -266,6 +272,7 @@ test("background removal compares parallel model results and selects the best", 
   releaseCompleted();
   await expect(page.locator("#backgroundRemovalResultSummary")).toHaveText("2 / 2 个完成");
   await expect(page.locator("#backgroundRemovalStatus")).toHaveText("已完成");
+  expect(transientPollFailures).toBe(1);
   await page.locator(`[data-background-removal-result="${alternateResultId}"]`).click();
   await expect(page.locator("#backgroundRemovalPreviewLabel")).toHaveText("备选模型");
   await expect(page.locator("#backgroundRemovalPreviewImage")).toHaveAttribute("src", alternateUrl);

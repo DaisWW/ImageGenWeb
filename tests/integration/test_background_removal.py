@@ -233,6 +233,22 @@ class TestBackgroundRemoval(PlatformTestCase):
             self.app.extensions["image_storage"].read_bytes(item.output_path),
         )
 
+        admin_client = self.admin_client()
+        admin_selected = admin_client.post(
+            f"/api/background-removal-results/{first['id']}/select"
+        )
+        admin_result_file = admin_client.get(second["image_url"])
+        admin_archive = admin_client.get(
+            f"/api/background-removal-runs/{current['id']}/download"
+        )
+        self.assertEqual(admin_selected.status_code, 200)
+        self.assertEqual(admin_result_file.status_code, 200)
+        self.assertEqual(admin_archive.status_code, 200)
+        self.assertTrue(admin_result_file.data)
+        self.assertTrue(admin_archive.data)
+        admin_result_file.close()
+        admin_archive.close()
+
         other = self.services.users.create(
             username="other-artist",
             password="StrongPass123!",
@@ -325,3 +341,81 @@ class TestBackgroundRemoval(PlatformTestCase):
         self.assertEqual(len(queued), 1)
         self.assertEqual(sum(result.model_id == "lucida" for result in running), 1)
         self.assertEqual(len(worker._background_removal_futures), 2)
+
+    def test_scheduler_does_not_starve_runnable_model_behind_blocked_backlog(self):
+        self.app.config["BACKGROUND_REMOVAL_CONCURRENCY"] = 2
+        _workspace, job, _item = self._completed_item("透明化队列公平性")
+        config_version = self.app.extensions["matting_model_registry"].version
+        created_at = utcnow() - timedelta(hours=1)
+
+        def add_result(*, position, model_id, status, offset_seconds, max_concurrency):
+            item = GenerationItem(
+                job_id=job.id,
+                user_id=self.user.id,
+                channel_id="test",
+                channel_label="测试渠道",
+                position=position,
+                status="succeeded",
+            )
+            run = BackgroundRemovalRun(
+                source_item=item,
+                user_id=self.user.id,
+                status=status,
+            )
+            result = BackgroundRemovalResult(
+                run=run,
+                model_id=model_id,
+                model_label=model_id,
+                model_config_version=config_version,
+                model_base_url=f"http://{model_id}.test",
+                upstream_model=f"{model_id}-v1",
+                model_timeout_seconds=30,
+                model_max_concurrency=max_concurrency,
+                status=status,
+                claimed_by="busy-worker" if status == "running" else None,
+                heartbeat_at=utcnow() if status == "running" else None,
+                created_at=created_at + timedelta(seconds=offset_seconds),
+            )
+            db.session.add(result)
+            return result
+
+        add_result(
+            position=1000,
+            model_id="lucida",
+            status="running",
+            offset_seconds=0,
+            max_concurrency=1,
+        )
+        for index in range(101):
+            add_result(
+                position=1001 + index,
+                model_id="lucida",
+                status="queued",
+                offset_seconds=index + 1,
+                max_concurrency=1,
+            )
+        alternate = add_result(
+            position=1102,
+            model_id="alternate",
+            status="queued",
+            offset_seconds=102,
+            max_concurrency=2,
+        )
+        db.session.commit()
+
+        worker = self.create_worker()
+        holding = HoldingExecutor()
+        worker._executor = lambda: holding
+
+        worker._schedule_background_removals()
+
+        db.session.expire_all()
+        self.assertEqual(db.session.get(BackgroundRemovalResult, alternate.id).status, "running")
+        self.assertEqual(len(worker._background_removal_futures), 1)
+        queued_lucida = db.session.scalar(
+            select(func.count(BackgroundRemovalResult.id)).where(
+                BackgroundRemovalResult.model_id == "lucida",
+                BackgroundRemovalResult.status == "queued",
+            )
+        )
+        self.assertEqual(queued_lucida, 101)
