@@ -50,6 +50,8 @@ async function mockConfiguredImageChannel(page) {
         default_model: "e2e-image",
         price_rmb: "0.0300",
         active_count: 0,
+        queued_count: 0,
+        occupied_count: 0,
         available_slots: 2,
         has_capacity: true,
         capabilities: {
@@ -69,6 +71,8 @@ async function mockConfiguredImageChannel(page) {
         default_model: "e2e-image",
         price_rmb: "0.0800",
         active_count: 0,
+        queued_count: 0,
+        occupied_count: 0,
         available_slots: 2,
         has_capacity: true,
         capabilities: {

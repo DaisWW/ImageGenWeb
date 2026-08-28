@@ -392,6 +392,8 @@ test("direct generation bypasses AI conversation", { tag: "@responsive" }, async
   await expect(page.locator("#generationForm")).toBeVisible();
   await expect(page.locator("#channelSelect")).toBeVisible();
   await expect(page.locator("#channelSelect option")).toHaveCount(2);
+  await expect(page.locator("#channelSelect option[value='e2e']")).toContainText("0 / 2");
+  await expect(page.locator("#batchCount")).toHaveAttribute("max", "2");
   await page.locator("#channelSelect").selectOption("lucen");
   await expect(page.locator("#channelSelect")).toHaveValue("lucen");
   await expect(page.locator("#promptInput"))

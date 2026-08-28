@@ -23,7 +23,6 @@ from tests.support.platform import (
     png_bytes,
 )
 
-
 MULTI_CHANNEL_CONFIG = """\
 version: 1
 queue:
@@ -179,6 +178,48 @@ class TestChannelSelection(PlatformTestCase):
             2,
         )
 
+    def test_submission_rejects_a_batch_larger_than_available_channel_slots(self):
+        first_workspace = self.create_workspace("占用一个刀哥槽位")
+        first = self.submit(first_workspace, channel_id="current")
+        worker = self.create_worker()
+        worker._thread_pool = HoldingExecutor()
+        worker._schedule_available()
+
+        second_workspace = self.create_workspace("批量超过空闲槽位")
+        with self.assertRaises(ServiceError) as raised:
+            self.submit(second_workspace, channel_id="current", batch_count=2)
+
+        self.assertEqual(raised.exception.code, "channel_busy")
+        self.assertIn("仅剩 1 个空闲槽位", str(raised.exception))
+        db.session.expire_all()
+        self.assertEqual(
+            db.session.scalar(
+                select(func.count(GenerationAttempt.id)).where(
+                    GenerationAttempt.item_id == first.items[0].id,
+                    GenerationAttempt.status == "running",
+                )
+            ),
+            1,
+        )
+
+    def test_submission_counts_queued_items_against_channel_slots(self):
+        first_workspace = self.create_workspace("预留刀哥槽位")
+        self.submit(first_workspace, channel_id="current", batch_count=2)
+
+        second_workspace = self.create_workspace("避免隐性排队")
+        with self.assertRaises(ServiceError) as raised:
+            self.submit(second_workspace, channel_id="current")
+
+        self.assertEqual(raised.exception.code, "channel_busy")
+        payload = {
+            channel["id"]: channel for channel in self.services.generations.public_channels()
+        }
+        self.assertEqual(payload["current"]["active_count"], 0)
+        self.assertEqual(payload["current"]["queued_count"], 2)
+        self.assertEqual(payload["current"]["occupied_count"], 2)
+        self.assertEqual(payload["current"]["available_slots"], 0)
+        self.assertFalse(payload["current"]["has_capacity"])
+
     def test_worker_executes_only_the_selected_channel(self):
         workspace = self.create_workspace()
         job = self.submit(workspace, channel_id="lucen")
@@ -213,9 +254,7 @@ class TestChannelSelection(PlatformTestCase):
         job = self.submit(workspace, channel_id="current")
         worker = self.create_worker()
         worker.providers = SelectiveProviderFactory(
-            {
-                "current": ProviderError("刀哥暂时不可用", code="upstream_error", status_code=502)
-            }
+            {"current": ProviderError("刀哥暂时不可用", code="upstream_error", status_code=502)}
         )
 
         attempt_id = worker._claim(job.items[0].id)
@@ -271,10 +310,11 @@ class TestChannelSelection(PlatformTestCase):
         self.assertIsNotNone(attempt_id)
 
         payload = {
-            channel["id"]: channel
-            for channel in self.services.generations.public_channels()
+            channel["id"]: channel for channel in self.services.generations.public_channels()
         }
         self.assertEqual(payload["current"]["active_count"], 1)
+        self.assertEqual(payload["current"]["queued_count"], 0)
+        self.assertEqual(payload["current"]["occupied_count"], 1)
         self.assertEqual(payload["current"]["available_slots"], 1)
         self.assertTrue(payload["current"]["has_capacity"])
         self.assertEqual(payload["lucen"]["active_count"], 0)
@@ -284,9 +324,7 @@ class TestChannelSelection(PlatformTestCase):
         user_response = self.user_client().get("/api/channels")
         self.assertEqual(user_response.status_code, 200)
         current = next(
-            channel
-            for channel in user_response.json["channels"]
-            if channel["id"] == "current"
+            channel for channel in user_response.json["channels"] if channel["id"] == "current"
         )
         self.assertEqual(current["active_count"], 0)
         self.assertEqual(current["available_slots"], 2)

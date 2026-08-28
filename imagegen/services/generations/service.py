@@ -74,7 +74,7 @@ class GenerationService:
             raise ServiceError("工作站不存在", status_code=404)
         self._ensure_workspace_generation_idle(workspace.id)
         self._ensure_queue_capacity(user_id, requested_count)
-        self._ensure_channel_capacity(channel)
+        self._ensure_channel_capacity(channel, requested_count)
 
         reserved = money(channel.price_rmb * requested_count)
         self.billing.reserve(user, reserved)
@@ -304,15 +304,26 @@ class GenerationService:
                 .group_by(GenerationAttempt.channel_id)
             ).all()
         )
+        queued_counts = dict(
+            db.session.execute(
+                select(GenerationItem.channel_id, func.count(GenerationItem.id))
+                .where(GenerationItem.status == "queued")
+                .group_by(GenerationItem.channel_id)
+            ).all()
+        )
         result = []
         for channel in self.channels.list(include_disabled=False):
             maximum = channel.limits.max_concurrency
             active = int(counts.get(channel.identifier, 0))
+            queued = int(queued_counts.get(channel.identifier, 0))
+            occupied = active + queued
             payload = channel.public_dict()
             payload.update(
                 active_count=active,
-                available_slots=max(0, maximum - active),
-                has_capacity=active < maximum,
+                queued_count=queued,
+                occupied_count=occupied,
+                available_slots=max(0, maximum - occupied),
+                has_capacity=occupied < maximum,
             )
             result.append(payload)
         return result
@@ -371,7 +382,7 @@ class GenerationService:
         if global_queued + requested_count > queue.max_queued_global:
             raise ServiceError("系统排队图片已达到上限", code="queue_full", status_code=429)
 
-    def _ensure_channel_capacity(self, channel: Channel) -> None:
+    def _ensure_channel_capacity(self, channel: Channel, requested_count: int) -> None:
         now = utcnow()
         active = db.session.scalar(
             select(func.count(GenerationAttempt.id)).where(
@@ -385,9 +396,22 @@ class GenerationService:
                 ),
             )
         )
-        if int(active or 0) >= channel.limits.max_concurrency:
+        queued = db.session.scalar(
+            select(func.count(GenerationItem.id)).where(
+                GenerationItem.channel_id == channel.identifier,
+                GenerationItem.status == "queued",
+            )
+        )
+        occupied = int(active or 0) + int(queued or 0)
+        available = max(0, channel.limits.max_concurrency - occupied)
+        if requested_count > available:
+            detail = (
+                "当前没有空闲槽位，请选择其他渠道"
+                if available == 0
+                else f"当前仅剩 {available} 个空闲槽位，请减少生成张数或选择其他渠道"
+            )
             raise ServiceError(
-                f"{channel.label} 当前没有空闲槽位，请选择其他渠道",
+                f"{channel.label}{detail}",
                 code="channel_busy",
                 status_code=409,
             )

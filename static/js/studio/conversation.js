@@ -813,7 +813,9 @@
       const generationSubmission = this.generationSubmissions.get(this.activeWorkspace?.id);
       const submissionBusy = Boolean(generationSubmission);
       const selectedChannel = this.currentChannel();
-      const channelBusy = Boolean(selectedChannel && !this.currentChannelHasCapacity());
+      const channelBusy = Boolean(
+        selectedChannel && !this.currentChannelHasCapacity(this.generationCount()),
+      );
       const canvasConflictPending = Boolean(
         this.canvasConflict && !this.canvasConflict.resolution,
       );
@@ -877,7 +879,9 @@
       const generateTitle = submissionBusy
         ? "取消生成"
         : channelBusy
-          ? `${selectedChannel.label} 当前没有空闲槽位，请选择其他渠道`
+          ? this.currentChannelAvailableSlots()
+            ? `${selectedChannel.label} 当前仅剩 ${this.currentChannelAvailableSlots()} 个空闲槽位`
+            : `${selectedChannel.label} 当前没有空闲槽位，请选择其他渠道`
           : !selectedChannel ? "请选择已配置的生图渠道" : "";
       setAttribute(this.el.generateButton, "title", generateTitle);
       setDisabled(this.el.generationBackButton, submissionBusy);
