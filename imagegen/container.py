@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from .config.service import RuntimeConfigService
 from .services import (
     AuthService,
+    BackgroundRemovalService,
     BillingService,
     ConversationService,
     GenerationService,
@@ -19,6 +20,7 @@ from .services import (
 @dataclass(frozen=True, slots=True)
 class ApplicationServices:
     auth: AuthService
+    background_removal: BackgroundRemovalService
     billing: BillingService
     users: UserService
     workspaces: WorkspaceService

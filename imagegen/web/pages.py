@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 from ..errors import ServiceError
 from ..extensions import db
+from ..integrations.matting import LucidaMattingClient  # noqa: F401  # legacy patch hook
 from ..models import WalletLedger, WorkerState
 from ..serializers import ledger_dict, user_dict
 from ..services import AuthService
@@ -25,6 +26,7 @@ from .shared import (
 from .shared import (
     chat_models as chat_model_registry,
 )
+from .shared import matting_models as matting_model_registry
 
 
 def _public_chat_models() -> list[dict]:
@@ -46,12 +48,21 @@ def health():
     except Exception:
         storage_status = "unavailable"
     matting = "disabled"
-    matting_client = current_app.extensions.get("lucida_matting_client")
-    if matting_client is not None and matting_client.enabled:
-        try:
-            matting_client.healthcheck()
+    configured_matting = [model for model in matting_model_registry().list() if model.configured]
+    if configured_matting:
+        adapter_states = []
+        factory = services().background_removal.adapter_factory
+        for model in configured_matting:
+            try:
+                factory.healthcheck(model)
+                adapter_states.append(True)
+            except Exception:
+                adapter_states.append(False)
+        if all(adapter_states):
             matting = "ready"
-        except Exception:
+        elif any(adapter_states):
+            matting = "degraded"
+        else:
             matting = "unavailable"
     worker = "unavailable"
     title = ""
@@ -72,7 +83,7 @@ def health():
         except Exception:
             db.session.rollback()
             database = "unavailable"
-    ok = database == storage_status == worker == "ready" and matting != "unavailable"
+    ok = database == storage_status == worker == "ready"
     return jsonify(
         ok=ok,
         database=database,

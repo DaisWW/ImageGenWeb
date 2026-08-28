@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import io
+import tempfile
 import zipfile
 
-from flask import jsonify, send_file
+from flask import jsonify, request, send_file
 from flask_login import current_user, login_required
 from sqlalchemy import select
 
 from ..errors import ServiceError
 from ..extensions import db
 from ..models import Asset
-from ..serializers import library_image_dict, workspace_dict
+from ..serializers import background_removal_run_dict, library_image_dict, workspace_dict
 from ..services.image_slicing import (
     analyze_image,
     crop_pngs,
@@ -102,6 +103,119 @@ def review_generation_item(item_id: str):
         model_id=str(data.get("model_id", "")),
     )
     return jsonify(review=review)
+
+
+@web.get("/api/background-removal-models")
+@login_required
+def background_removal_models():
+    return jsonify(models=services().background_removal.public_models())
+
+
+@web.get("/api/generation-items/<item_id>/background-removal")
+@login_required
+def generation_item_background_removal(item_id: str):
+    item = accessible_item(item_id)
+    run = services().background_removal.get_for_item(item.id, user_id=item.user_id)
+    return jsonify(
+        models=services().background_removal.public_models(),
+        run=background_removal_run_dict(run),
+    )
+
+
+@web.post("/api/generation-items/<item_id>/background-removal")
+@login_required
+def submit_generation_item_background_removal(item_id: str):
+    item = accessible_item(item_id)
+    data = json_body()
+    raw_model_ids = data.get("model_ids")
+    if not isinstance(raw_model_ids, list):
+        raise ServiceError("透明化模型列表格式无效")
+    run = services().background_removal.submit(
+        item.id,
+        user_id=item.user_id,
+        model_ids=tuple(str(model_id).strip() for model_id in raw_model_ids),
+    )
+    return jsonify(run=background_removal_run_dict(run)), 202
+
+
+@web.post("/api/background-removal-results/<result_id>/select")
+@login_required
+def select_background_removal_result(result_id: str):
+    run = services().background_removal.select(
+        result_id,
+        user_id=_background_removal_access_user_id(),
+    )
+    return jsonify(run=background_removal_run_dict(run))
+
+
+@web.get("/api/background-removal-runs/<run_id>/download")
+@login_required
+def download_background_removal_run(run_id: str):
+    run = services().background_removal.get_run(
+        run_id,
+        user_id=_background_removal_access_user_id(),
+    )
+    completed = [result for result in run.results if result.output_path]
+    if not completed:
+        raise ServiceError("暂无可下载的透明化结果", status_code=409)
+    archive = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b")
+    try:
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+            for result in completed:
+                bundle.write(
+                    storage().read(result.output_path),
+                    arcname=f"{result.model_id}_{result.id}.png",
+                )
+        archive.seek(0)
+        response = send_file(
+            archive,
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=f"image_{run.source_item_id}_background_removals.zip",
+        )
+    except Exception:
+        archive.close()
+        raise
+    response.call_on_close(archive.close)
+    return response
+
+
+@web.get("/media/background-removal-results/<result_id>")
+@login_required
+def background_removal_file(result_id: str):
+    result = services().background_removal.get_result(
+        result_id,
+        user_id=_background_removal_access_user_id(),
+    )
+    if not result.output_path:
+        raise ServiceError("透明化结果不存在", status_code=404)
+    return send_file(
+        storage().read(result.output_path),
+        mimetype=result.output_mime_type or "image/png",
+        as_attachment=request.args.get("download") == "1",
+        download_name=f"image_{result.run.source_item_id}_{result.model_id}.png",
+        conditional=True,
+    )
+
+
+@web.get("/media/background-removal-results/<result_id>/thumbnail")
+@login_required
+def background_removal_thumbnail(result_id: str):
+    result = services().background_removal.get_result(
+        result_id,
+        user_id=_background_removal_access_user_id(),
+    )
+    if not result.thumbnail_path:
+        raise ServiceError("透明化缩略图不存在", status_code=404)
+    return send_file(
+        storage().read(result.thumbnail_path),
+        mimetype="image/webp",
+        conditional=True,
+    )
+
+
+def _background_removal_access_user_id() -> int | None:
+    return None if current_user.is_admin else current_user.id
 
 
 @web.post("/api/generation-items/<item_id>/slice-analysis")

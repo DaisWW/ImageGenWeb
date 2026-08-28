@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import math
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -16,6 +17,8 @@ from .config.channels import (
 )
 from .models import (
     Asset,
+    BackgroundRemovalResult,
+    BackgroundRemovalRun,
     ConversationMessage,
     GenerationItem,
     GenerationJob,
@@ -47,6 +50,59 @@ def user_dict(user: User, *, include_private: bool = True) -> dict[str, Any]:
             last_login_at=_iso(user.last_login_at),
         )
     return result
+
+
+def background_removal_run_dict(run: BackgroundRemovalRun | None) -> dict[str, Any] | None:
+    if run is None:
+        return None
+    results = [background_removal_result_dict(result) for result in run.results]
+    selected = next((result["id"] for result in results if result["selected"]), None)
+    return {
+        "id": run.id,
+        "source_item_id": run.source_item_id,
+        "status": run.status,
+        "created_at": _iso(run.created_at),
+        "updated_at": _iso(run.updated_at),
+        "completed_at": _iso(run.completed_at),
+        "selected_result_id": selected,
+        "results": results,
+    }
+
+
+def background_removal_result_dict(result: BackgroundRemovalResult) -> dict[str, Any]:
+    return {
+        "id": result.id,
+        "model_id": result.model_id,
+        "model_label": result.model_label,
+        "adapter_id": result.adapter_id,
+        "options": copy.deepcopy(result.adapter_options or {}),
+        "status": result.status,
+        "selected": result.selected,
+        "started_at": _iso(result.started_at),
+        "completed_at": _iso(result.completed_at),
+        "elapsed_seconds": (
+            float(result.elapsed_seconds) if result.elapsed_seconds is not None else None
+        ),
+        "error": result.error_message,
+        "width": result.output_width,
+        "height": result.output_height,
+        "bytes": result.output_byte_count,
+        "image_url": (
+            url_for("web.background_removal_file", result_id=result.id)
+            if result.output_path
+            else None
+        ),
+        "thumbnail_url": (
+            url_for("web.background_removal_thumbnail", result_id=result.id)
+            if result.thumbnail_path
+            else None
+        ),
+        "download_url": (
+            url_for("web.background_removal_file", result_id=result.id, download=1)
+            if result.output_path
+            else None
+        ),
+    }
 
 
 def workspace_dict(workspace: Workspace, assets: list[Asset] | None = None) -> dict[str, Any]:

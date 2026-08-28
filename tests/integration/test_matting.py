@@ -24,6 +24,10 @@ class FakeMattingResponse:
         self.status_code = status_code
         self._payload = payload
         self.text = text
+        self.closed = False
+
+    def close(self):
+        self.closed = True
 
     def json(self):
         if self._payload is None:
@@ -91,7 +95,7 @@ class TestLucidaMattingClient(PlatformTestCase):
             session=ready_session,
         ).healthcheck()
         self.assertEqual(ready_session.calls[0]["url"], "http://lucida.local:8756/ready")
-        self.assertEqual(ready_session.calls[0]["timeout"], (2, 5))
+        self.assertEqual(ready_session.calls[0]["timeout"], (1, 1))
 
         for session in (
             RecordingMattingSession(response=FakeMattingResponse(status_code=503)),
@@ -134,7 +138,8 @@ class TestLucidaMattingClient(PlatformTestCase):
         with self.assertRaises(ServiceError) as upstream_ctx:
             upstream.remove_background(png_bytes())
         self.assertEqual(upstream_ctx.exception.code, "matting_upstream_failed")
-        self.assertIn("segmenter boom", str(upstream_ctx.exception))
+        self.assertEqual(str(upstream_ctx.exception), "透明化处理失败（HTTP 500）")
+        self.assertNotIn("segmenter boom", str(upstream_ctx.exception))
 
         opaque = LucidaMattingClient(
             base_url="http://lucida.local",

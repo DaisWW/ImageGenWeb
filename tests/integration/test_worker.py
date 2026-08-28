@@ -14,7 +14,6 @@ from imagegen.extensions import db
 from imagegen.integrations.images import (
     ProviderResult,
 )
-from imagegen.integrations.matting import LucidaMattingClient
 from imagegen.models import (
     GenerationAttempt,
     GenerationItem,
@@ -31,9 +30,7 @@ from tests.support.platform import (
     FakeProviderFactory,
     HoldingExecutor,
     PlatformTestCase,
-    checkerboard_png_bytes,
     png_bytes,
-    transparent_icon_png_bytes,
 )
 
 
@@ -43,14 +40,10 @@ class TestWorker(PlatformTestCase):
         job = self.submit(workspace, transparent_background=True)
         worker = self.create_worker()
         worker.providers = FakeProviderFactory()
-        self.app.extensions["lucida_matting_client"] = LucidaMattingClient(
-            base_url="http://lucida.test",
-            session=_StaticMattingSession(transparent_icon_png_bytes()),
-        )
         channel = self.app.extensions["channel_registry"].get("test")
         self.assertTrue(worker._claim(job.items[0].id, channel))
         worker._process_item(job.items[0].id)
-        self.assertTrue(worker.providers.adapter.request.transparent_background)
+        self.assertFalse(worker.providers.adapter.request.transparent_background)
         self.assertTrue(worker.providers.adapter.request.idempotency_key)
 
         db.session.expire_all()
@@ -62,7 +55,8 @@ class TestWorker(PlatformTestCase):
         self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
         self.assertTrue(self.app.extensions["image_storage"].read(item.output_path).is_file())
         with Image.open(self.app.extensions["image_storage"].read(item.output_path)) as image:
-            self.assertEqual(image.convert("RGBA").getchannel("A").getextrema()[0], 0)
+            self.assertEqual(image.convert("RGBA").getchannel("A").getextrema(), (255, 255))
+        self.assertFalse(item.job.transparent_background)
 
         charge_count = db.session.scalar(
             select(func.count(WalletLedger.id)).where(
@@ -81,11 +75,11 @@ class TestWorker(PlatformTestCase):
         self.assertEqual(attempt.status, "succeeded")
         self.assertTrue(attempt.provider_completed)
 
-    def test_transparent_img2img_rejects_baked_checkerboard_reference_before_provider(self):
+    def test_legacy_transparent_flag_does_not_reject_img2img_reference(self):
         workspace = self.create_workspace()
         reference = self.services.workspaces.add_assets(
             workspace,
-            [("checkerboard.png", checkerboard_png_bytes())],
+            [("reference.png", png_bytes())],
         )[0]
         job = self.submit(
             workspace,
@@ -103,33 +97,12 @@ class TestWorker(PlatformTestCase):
         db.session.expire_all()
         item = db.session.get(GenerationItem, job.items[0].id)
         user = db.session.get(User, self.user.id)
-        self.assertEqual(item.status, "failed")
-        self.assertEqual(item.error_code, "checkerboard_reference")
-        self.assertEqual(user.balance_rmb, Decimal("20.0000"))
+        self.assertEqual(item.status, "succeeded")
+        self.assertIsNone(item.error_code)
+        self.assertEqual(user.balance_rmb, Decimal("18.7500"))
         self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
-        self.assertEqual(worker.providers.adapter.requests, [])
-
-    def test_transparent_worker_rejects_checkerboard_left_in_matting_result(self):
-        workspace = self.create_workspace()
-        job = self.submit(workspace, transparent_background=True)
-        worker = self.create_worker()
-        worker.providers = FakeProviderFactory()
-        self.app.extensions["lucida_matting_client"] = LucidaMattingClient(
-            base_url="http://lucida.test",
-            session=_StaticMattingSession(checkerboard_png_bytes(transparent_center=True)),
-        )
-        channel = self.app.extensions["channel_registry"].get("test")
-        self.assertTrue(worker._claim(job.items[0].id, channel))
-
-        worker._process_item(job.items[0].id)
-
-        db.session.expire_all()
-        item = db.session.get(GenerationItem, job.items[0].id)
-        user = db.session.get(User, self.user.id)
-        self.assertEqual(item.status, "failed")
-        self.assertEqual(item.error_code, "matting_checkerboard_result")
-        self.assertEqual(user.balance_rmb, Decimal("20.0000"))
-        self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
+        self.assertEqual(len(worker.providers.adapter.requests), 1)
+        self.assertFalse(worker.providers.adapter.request.transparent_background)
 
     def test_worker_sends_each_item_effective_prompt(self):
         workspace = self.create_workspace("逐图提示词")
@@ -375,25 +348,33 @@ class TestWorker(PlatformTestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json["storage"], "unavailable")
 
-    def test_comprehensive_health_requires_enabled_matting(self):
+    def test_comprehensive_health_reports_optional_matting_without_failing_readiness(self):
         state = db.session.get(WorkerState, 1)
         state.worker_id = "health-matting-worker"
         state.heartbeat_at = utcnow()
         db.session.commit()
-        session = _StaticMattingSession(transparent_icon_png_bytes())
-        self.app.extensions["lucida_matting_client"] = LucidaMattingClient(
-            base_url="http://lucida.test",
-            session=session,
+        self.matting_path.write_text(
+            self.matting_path.read_text(encoding="utf-8").replace(
+                'base_url: ""',
+                "base_url: http://lucida.test",
+            ),
+            encoding="utf-8",
         )
+        self.assertTrue(self.app.extensions["matting_model_registry"].reload(force=True))
 
-        ready = self.app.test_client().get("/health")
+        with patch("imagegen.web.pages.LucidaMattingClient.healthcheck") as healthcheck:
+            ready = self.app.test_client().get("/health")
         self.assertEqual(ready.status_code, 200)
         self.assertEqual(ready.json["matting"], "ready")
-        self.assertEqual(session.calls[-1]["url"], "http://lucida.test/ready")
+        healthcheck.assert_called_once_with()
 
-        session.health_status = 503
-        unavailable = self.app.test_client().get("/health")
-        self.assertEqual(unavailable.status_code, 503)
+        with patch(
+            "imagegen.web.pages.LucidaMattingClient.healthcheck",
+            side_effect=RuntimeError("matting unavailable"),
+        ):
+            unavailable = self.app.test_client().get("/health")
+        self.assertEqual(unavailable.status_code, 200)
+        self.assertTrue(unavailable.json["ok"])
         self.assertEqual(unavailable.json["matting"], "unavailable")
 
     def test_worker_periodic_recovery_skips_live_future_and_recovers_abandoned_claim(self):
@@ -514,24 +495,16 @@ class TestWorker(PlatformTestCase):
         )
         self.assertEqual(log.error_code, "storage_unavailable")
 
-    def test_worker_pauses_transparent_queue_until_lucida_recovers(self):
-        workspace = self.create_workspace("Lucida 故障预检")
+    def test_generation_queue_does_not_depend_on_matting_availability(self):
+        workspace = self.create_workspace("透明化服务独立")
         job = self.submit(workspace, transparent_background=True)
         worker = self.create_worker()
         worker._thread_pool = HoldingExecutor()
 
         worker._schedule_available()
         db.session.expire_all()
-        self.assertEqual(db.session.get(GenerationItem, job.items[0].id).status, "queued")
-
-        self.app.extensions["lucida_matting_client"] = LucidaMattingClient(
-            base_url="http://lucida.test",
-            session=_StaticMattingSession(transparent_icon_png_bytes()),
-        )
-        worker._dependency_next_check["lucida"] = 0
-        worker._schedule_available()
-        db.session.expire_all()
         self.assertEqual(db.session.get(GenerationItem, job.items[0].id).status, "running")
+        self.assertFalse(db.session.get(GenerationJob, job.id).transparent_background)
 
     def test_worker_schedules_with_its_own_application_context(self):
         workspace = self.create_workspace()
@@ -603,34 +576,3 @@ class TestWorker(PlatformTestCase):
         self.record_generation_durations([600], model="other-model")
 
         self.assertEqual(self.services.generations.estimate_seconds(job, channel), Decimal("100"))
-
-
-class _StaticMattingSession:
-    def __init__(self, content: bytes):
-        self.content = content
-        self.calls = []
-        self.health_status = 200
-
-    def get(self, url, **kwargs):
-        self.calls.append({"url": url, **kwargs})
-
-        class _Response:
-            status_code = self.health_status
-
-        return _Response()
-
-    def post(self, url, **kwargs):
-        self.calls.append({"url": url, **kwargs})
-        content = self.content
-
-        class _Response:
-            status_code = 200
-            text = ""
-
-            def __init__(self, body: bytes):
-                self.content = body
-
-            def json(self):
-                raise ValueError("no json")
-
-        return _Response(content)

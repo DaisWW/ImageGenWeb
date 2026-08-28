@@ -125,6 +125,19 @@ models:
 """
 
 
+MATTING_CONFIG = """\
+version: 1
+models:
+  - id: lucida
+    label: Lucida
+    enabled: true
+    base_url: ""
+    model: lucida
+    timeout_seconds: 30
+    max_concurrency: 1
+"""
+
+
 class FakeAdapter:
     def __init__(self, *, fail: bool = False, vary: bool = False):
         self.fail = fail
@@ -549,6 +562,8 @@ class PlatformTestCase(unittest.TestCase):
         self.channel_path.write_text(CHANNEL_CONFIG, encoding="utf-8")
         self.chat_path = root / "chat_models.yaml"
         self.chat_path.write_text(CHAT_CONFIG, encoding="utf-8")
+        self.matting_path = root / "matting_models.yaml"
+        self.matting_path.write_text(MATTING_CONFIG, encoding="utf-8")
         os.environ["TEST_IMAGE_KEY"] = "test-key-not-secret"
         os.environ["TEST_CHAT_KEY"] = "test-chat-key-not-secret"
         database_url = os.environ.get("TEST_DATABASE_URL", "").strip()
@@ -560,6 +575,7 @@ class PlatformTestCase(unittest.TestCase):
                 or f"sqlite:///{(root / 'test.db').as_posix()}",
                 "CHANNEL_CONFIG_PATH": str(self.channel_path),
                 "CHAT_MODEL_CONFIG_PATH": str(self.chat_path),
+                "MATTING_MODEL_CONFIG_PATH": str(self.matting_path),
                 "IMAGE_STORAGE_PATH": str(root / "files"),
                 "WTF_CSRF_ENABLED": False,
                 "AUTO_CREATE_DB": True,

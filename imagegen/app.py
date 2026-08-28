@@ -13,6 +13,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from .config import (
     ChannelRegistry,
     ChatModelRegistry,
+    MattingModelRegistry,
     RuntimeConfigRepository,
     RuntimeConfigService,
     SecretCipher,
@@ -20,11 +21,12 @@ from .config import (
 from .container import ApplicationServices
 from .errors import ServiceError
 from .extensions import compress, csrf, db, login_manager
-from .integrations.matting import LucidaMattingClient
+from .integrations.background_removal import MattingAdapterFactory
 from .models import GenerationQueueState, User, WorkerState
 from .serializers import display_amount
 from .services import (
     AuthService,
+    BackgroundRemovalService,
     BillingService,
     ConversationService,
     GenerationService,
@@ -67,14 +69,18 @@ def create_app(config: dict | None = None) -> Flask:
             "CHAT_MODEL_CONFIG_PATH",
             str(BASE_DIR / "config" / "chat_models.yaml"),
         ),
+        MATTING_MODEL_CONFIG_PATH=os.environ.get(
+            "MATTING_MODEL_CONFIG_PATH",
+            str(BASE_DIR / "config" / "matting_models.yaml"),
+        ),
         IMAGE_STORAGE_PATH=os.environ.get("IMAGE_STORAGE_PATH", str(data_dir / "files")),
-        LUCIDA_MATTING_URL=os.environ.get("LUCIDA_MATTING_URL", "").strip(),
-        LUCIDA_MATTING_MODEL=os.environ.get("LUCIDA_MATTING_MODEL", "lucida").strip() or "lucida",
-        LUCIDA_MATTING_TIMEOUT_SECONDS=_env_float(
-            "LUCIDA_MATTING_TIMEOUT_SECONDS",
-            default=120.0,
-            minimum=1.0,
-            maximum=1800.0,
+        BACKGROUND_REMOVAL_CONCURRENCY=int(
+            _env_float(
+                "BACKGROUND_REMOVAL_CONCURRENCY",
+                default=2.0,
+                minimum=1.0,
+                maximum=8.0,
+            )
         ),
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
@@ -129,10 +135,17 @@ def create_app(config: dict | None = None) -> Flask:
             repository.load_chat_models,
             repository.chat_revision,
         )
+        matting_models = MattingModelRegistry(
+            app.config["MATTING_MODEL_CONFIG_PATH"],
+            repository.load_matting_models,
+            repository.matting_revision,
+        )
 
-    configuration = RuntimeConfigService(repository, channels, chat_models)
+    configuration = RuntimeConfigService(repository, channels, chat_models, matting_models)
+    matting_adapters = MattingAdapterFactory()
     services = ApplicationServices(
         auth=auth,
+        background_removal=BackgroundRemovalService(matting_models, storage, matting_adapters),
         billing=billing,
         users=users,
         workspaces=workspaces,
@@ -150,13 +163,10 @@ def create_app(config: dict | None = None) -> Flask:
     )
     app.extensions["channel_registry"] = channels
     app.extensions["chat_model_registry"] = chat_models
+    app.extensions["matting_model_registry"] = matting_models
+    app.extensions["matting_adapter_factory"] = matting_adapters
     app.extensions["image_storage"] = storage
     app.extensions["imagegen_services"] = services
-    app.extensions["lucida_matting_client"] = LucidaMattingClient(
-        base_url=str(app.config.get("LUCIDA_MATTING_URL", "") or ""),
-        model=str(app.config.get("LUCIDA_MATTING_MODEL", "lucida") or "lucida"),
-        timeout_seconds=float(app.config.get("LUCIDA_MATTING_TIMEOUT_SECONDS", 120.0) or 120.0),
-    )
     app.register_blueprint(web)
     _register_handlers(app)
 

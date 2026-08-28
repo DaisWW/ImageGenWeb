@@ -324,6 +324,11 @@ class GenerationItem(TimestampMixin, db.Model):
         cascade="all, delete-orphan",
         order_by="GenerationAttempt.attempt_number",
     )
+    background_removal_run: Mapped[BackgroundRemovalRun | None] = relationship(
+        back_populates="source_item",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
 
 
 class GenerationAttempt(db.Model):
@@ -361,6 +366,98 @@ class GenerationAttempt(db.Model):
 
     item: Mapped[GenerationItem] = relationship(back_populates="attempts")
     user: Mapped[User] = relationship()
+
+
+class BackgroundRemovalRun(TimestampMixin, db.Model):
+    __tablename__ = "background_removal_runs"
+    __table_args__ = (
+        UniqueConstraint("source_item_id", name="uq_background_removal_run_source_item"),
+        Index("ix_background_removal_runs_user_updated", "user_id", "updated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(db.String(32), primary_key=True, default=new_public_id)
+    source_item_id: Mapped[str] = mapped_column(
+        ForeignKey("generation_items.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(db.String(20), default="queued", index=True)
+    completed_at: Mapped[datetime | None]
+
+    source_item: Mapped[GenerationItem] = relationship(back_populates="background_removal_run")
+    user: Mapped[User] = relationship()
+    results: Mapped[list[BackgroundRemovalResult]] = relationship(
+        back_populates="run",
+        cascade="all, delete-orphan",
+        order_by="BackgroundRemovalResult.created_at",
+    )
+
+
+class BackgroundRemovalResult(TimestampMixin, db.Model):
+    __tablename__ = "background_removal_results"
+    __table_args__ = (
+        UniqueConstraint("run_id", "model_id", name="uq_background_removal_run_model"),
+        Index("ix_background_removal_results_queue", "status", "created_at"),
+        Index("ix_background_removal_results_model_status", "model_id", "status"),
+        Index(
+            "uq_background_removal_results_run_selected",
+            "run_id",
+            unique=True,
+            sqlite_where=text("selected = 1"),
+            postgresql_where=text("selected"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(db.String(32), primary_key=True, default=new_public_id)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("background_removal_runs.id", ondelete="CASCADE"), index=True
+    )
+    model_id: Mapped[str] = mapped_column(db.String(64), index=True)
+    model_label: Mapped[str] = mapped_column(db.String(100))
+    model_config_version: Mapped[str] = mapped_column(db.String(64))
+    model_base_url: Mapped[str] = mapped_column(db.String(500))
+    upstream_model: Mapped[str] = mapped_column(db.String(150))
+    model_timeout_seconds: Mapped[int]
+    model_max_concurrency: Mapped[int]
+    adapter_id: Mapped[str] = mapped_column(
+        db.String(40), default="lucida", server_default="lucida", nullable=False
+    )
+    adapter_options: Mapped[dict] = mapped_column(
+        MutableDict.as_mutable(JSON_TYPE), default=dict, server_default="{}", nullable=False
+    )
+    status: Mapped[str] = mapped_column(db.String(20), default="queued", index=True)
+    selected: Mapped[bool] = mapped_column(default=False, nullable=False)
+    claimed_by: Mapped[str | None] = mapped_column(db.String(100))
+    heartbeat_at: Mapped[datetime | None]
+    started_at: Mapped[datetime | None]
+    completed_at: Mapped[datetime | None]
+    elapsed_seconds: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    error_code: Mapped[str | None] = mapped_column(db.String(80))
+    error_message: Mapped[str | None] = mapped_column(db.String(1000))
+    output_path: Mapped[str | None] = mapped_column(db.String(500), unique=True)
+    thumbnail_path: Mapped[str | None] = mapped_column(db.String(500), unique=True)
+    output_mime_type: Mapped[str | None] = mapped_column(db.String(50))
+    output_byte_count: Mapped[int | None]
+    output_width: Mapped[int | None]
+    output_height: Mapped[int | None]
+
+    run: Mapped[BackgroundRemovalRun] = relationship(back_populates="results")
+
+    @property
+    def options(self) -> dict:
+        """Compatibility alias for callers that use the shorter snapshot name."""
+        return self.adapter_options
+
+    @options.setter
+    def options(self, value: dict) -> None:
+        self.adapter_options = value
+
+    @property
+    def adapter(self) -> str:
+        return self.adapter_id
+
+    @property
+    def backend(self) -> str:
+        return self.adapter_id
 
 
 class WalletLedger(db.Model):

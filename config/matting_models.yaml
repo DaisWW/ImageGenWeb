@@ -1,0 +1,72 @@
+version: 1
+
+models:
+  - id: lucida
+    label: Lucida
+    enabled: true
+    base_url: ""
+    base_url_env: LUCIDA_MATTING_URL
+    model: lucida
+    model_env: LUCIDA_MATTING_MODEL
+    timeout_seconds: 120
+    timeout_seconds_env: LUCIDA_MATTING_TIMEOUT_SECONDS
+    max_concurrency: 1
+    adapter_id: lucida
+
+  - id: chroma-two-pass
+    label: 本地绿幕·双通道
+    enabled: true
+    adapter_id: two_pass_chroma
+    model: balanced
+    options:
+      profile: balanced
+    timeout_seconds: 120
+    max_concurrency: 1
+
+  - id: chroma-balanced
+    label: 本地绿幕·平衡
+    enabled: true
+    adapter_id: chroma_key
+    model: balanced
+    options:
+      profile: balanced
+    timeout_seconds: 120
+    max_concurrency: 1
+
+  - id: chroma-clean
+    label: 本地绿幕·干净边缘
+    enabled: false
+    adapter_id: chroma_key
+    model: clean
+    options:
+      profile: clean
+    timeout_seconds: 120
+    max_concurrency: 1
+
+  - id: chroma-soft
+    label: 本地绿幕·保留粒子
+    enabled: false
+    adapter_id: chroma_key
+    model: soft
+    options:
+      profile: soft
+    timeout_seconds: 120
+    max_concurrency: 1
+
+  # Optional rembg/BiRefNet/RMBG/InSPyReNet compatible HTTP service.
+  # Keep disabled until the matching service and endpoint are deployed.
+  - id: generic-matting-http
+    label: 外部透明化 HTTP
+    enabled: false
+    adapter_id: generic_http
+    base_url: ""
+    base_url_env: MATTING_HTTP_URL
+    model: default
+    model_env: MATTING_HTTP_MODEL
+    options:
+      health_path: /health
+      remove_path: /remove
+      model_param: model
+    timeout_seconds: 120
+    timeout_seconds_env: MATTING_HTTP_TIMEOUT_SECONDS
+    max_concurrency: 1

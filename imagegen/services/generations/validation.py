@@ -50,8 +50,6 @@ class GenerationRequestValidator:
             raise ServiceError(f"{channel.label} 不支持格式 {request.output_format}")
         if request.quality not in GENERATION_QUALITIES:
             raise ServiceError("生成质量无效")
-        if request.transparent_background and request.output_format != "png":
-            raise ServiceError("透明背景仅支持 PNG 格式")
         if not 0 <= request.compression <= 100:
             raise ServiceError("压缩质量必须在 0 到 100 之间")
         if not 1 <= request.batch_count <= runtime.max_batch_images:
