@@ -1428,15 +1428,35 @@ class GenerationWorker:
         self.generations.refresh_job_status(job)
 
     def _fail_unavailable_item(self, item_id: str) -> None:
-        item = db.session.get(GenerationItem, item_id)
-        if item is None or item.status != "queued":
+        preview = db.session.get(GenerationItem, item_id, populate_existing=True)
+        if preview is None:
+            db.session.rollback()
             return
-        user = self.billing.lock_user(item.user_id)
+        user = self.billing.lock_user(preview.user_id)
+        item = db.session.scalar(
+            select(GenerationItem)
+            .where(GenerationItem.id == item_id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        )
+        if item is None:
+            db.session.rollback()
+            return
         job = db.session.scalar(
             select(GenerationJob)
             .options(selectinload(GenerationJob.items))
             .where(GenerationJob.id == item.job_id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
         )
+        if (
+            job is None
+            or item.status != "queued"
+            or item.cancel_requested_at is not None
+            or job.cancel_requested_at is not None
+        ):
+            db.session.rollback()
+            return
         item.status = "failed"
         item.error_code = "channel_unavailable"
         item.error_message = "渠道已禁用或 API Key 未配置"

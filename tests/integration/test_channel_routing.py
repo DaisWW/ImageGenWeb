@@ -4,6 +4,7 @@ import os
 import threading
 from datetime import timedelta
 from decimal import Decimal
+from unittest.mock import Mock
 
 from sqlalchemy import event, func, insert, select
 
@@ -365,6 +366,47 @@ class TestChannelRouting(PlatformTestCase):
         self.assertEqual(attempts[1].claimed_by, worker.worker_id)
         self.assertEqual(item.status, "running")
         self.assertEqual(item.channel_id, "lucen")
+
+    def test_channel_unavailable_does_not_override_cancel_that_wins_user_lock(self):
+        workspace = self.create_workspace()
+        job = self.submit(workspace, channel_id="", batch_count=1)
+        item_id = job.items[0].id
+        worker = self.create_worker()
+        original_billing = worker.billing
+        billing_proxy = Mock(wraps=original_billing)
+        cancellation_count = 0
+
+        def cancel_before_worker_lock(user_id):
+            nonlocal cancellation_count
+            cancellation_count += 1
+            self.services.generations.cancel(job.id, user_id=self.user.id)
+            return original_billing.lock_user(user_id)
+
+        billing_proxy.lock_user.side_effect = cancel_before_worker_lock
+        worker.billing = billing_proxy
+        try:
+            worker._fail_unavailable_item(item_id)
+        finally:
+            worker.billing = original_billing
+
+        db.session.expire_all()
+        item = db.session.get(GenerationItem, item_id)
+        saved_job = db.session.get(GenerationJob, job.id)
+        user = db.session.get(User, self.user.id)
+        unavailable_logs = db.session.scalar(
+            select(func.count(RuntimeLog.id)).where(
+                RuntimeLog.item_id == item_id,
+                RuntimeLog.event == "generation.channel_unavailable",
+            )
+        )
+        self.assertEqual(cancellation_count, 1)
+        self.assertEqual(item.status, "canceled")
+        self.assertIsNone(item.error_code)
+        self.assertEqual(saved_job.status, "canceled")
+        self.assertEqual(saved_job.reserved_rmb, Decimal("0.0000"))
+        self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
+        self.assertEqual(unavailable_logs, 0)
+        billing_proxy.release.assert_not_called()
 
     def test_uncertain_provider_error_stops_without_switching_channel(
         self,
