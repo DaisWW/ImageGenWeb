@@ -35,23 +35,32 @@ _STOP_WORDS = {
 
 
 def query_terms(value: str, *, limit: int = 64) -> tuple[str, ...]:
+    if limit <= 0:
+        return ()
+
+    tokens = [
+        token
+        for token in _WORD_PATTERN.findall(str(value or "").lower())
+        if len(token) >= 2 and token not in _STOP_WORDS
+    ]
     result: list[str] = []
-    for token in _WORD_PATTERN.findall(str(value or "").lower()):
-        if token in _STOP_WORDS:
+    for token in tokens:
+        if token not in result:
+            result.append(token)
+        if len(result) >= limit:
+            return tuple(result)
+
+    for token in tokens:
+        if token[0] < "\u4e00" or len(token) <= 4:
             continue
-        candidates = [token]
-        if token[0] >= "\u4e00" and len(token) > 4:
-            candidates.extend(
-                token[index : index + width]
-                for width in (2, 3, 4)
-                for index in range(len(token) - width + 1)
-            )
-        for candidate in candidates:
-            if len(candidate) < 2 or candidate in _STOP_WORDS or candidate in result:
-                continue
-            result.append(candidate)
-            if len(result) >= limit:
-                return tuple(result)
+        for width in (2, 3, 4):
+            for index in range(len(token) - width + 1):
+                candidate = token[index : index + width]
+                if candidate in _STOP_WORDS or candidate in result:
+                    continue
+                result.append(candidate)
+                if len(result) >= limit:
+                    return tuple(result)
     return tuple(result)
 
 

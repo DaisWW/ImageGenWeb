@@ -9,9 +9,22 @@ from imagegen.services.creative import (
     GALLERY_ATLAS,
     creative_direction_prompt,
 )
+from imagegen.services.creative.matching import query_terms
 
 
 class TestCreativeCatalog(unittest.TestCase):
+    def test_query_terms_preserves_original_chinese_tokens_before_ngrams(self):
+        long_token = "超长中文检索词甲乙丙丁戊己庚辛壬癸子丑寅卯辰酉"
+
+        terms = query_terms(f"{long_token} 海报", limit=8)
+
+        self.assertEqual(terms[:2], (long_token, "海报"))
+
+    def test_query_terms_returns_no_terms_for_nonpositive_limit(self):
+        for limit in (0, -1):
+            with self.subTest(limit=limit):
+                self.assertEqual(query_terms("运动鞋海报", limit=limit), ())
+
     def test_case_catalog_loads_both_pinned_sources(self):
         self.assertEqual(len(CASE_CATALOG.cases), 679)
         self.assertIn("awesome:60b6e1d3", CASE_CATALOG.revision)
