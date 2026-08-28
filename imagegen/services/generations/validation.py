@@ -46,8 +46,6 @@ class GenerationRequestValidator:
         if not prompt or len(prompt) > runtime.max_prompt_characters:
             raise ServiceError(f"提示词长度必须在 1 到 {runtime.max_prompt_characters} 个字符之间")
         normalized_size = normalize_image_size(request.size)
-        if normalized_size not in channel.capabilities.sizes:
-            raise ServiceError(f"{channel.label} 不支持尺寸 {normalized_size}")
         if request.output_format not in channel.capabilities.formats:
             raise ServiceError(f"{channel.label} 不支持格式 {request.output_format}")
         if request.quality not in GENERATION_QUALITIES:

@@ -110,7 +110,6 @@ class RuntimeConfigService:
                         "max_reference_total_mb": _nested(
                             raw, "capabilities", "max_reference_total_mb"
                         ),
-                        "sizes": _strings(raw.get("capabilities"), "sizes"),
                         "formats": _strings(raw.get("capabilities"), "formats"),
                     },
                     "limits": {

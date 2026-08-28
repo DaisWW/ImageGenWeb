@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import re
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -17,9 +16,6 @@ from .secrets import api_key_hint
 SUPPORTED_ADAPTERS = {"openai_images"}
 SUPPORTED_MODES = {"text2img", "img2img"}
 SUPPORTED_FORMATS = {"png", "jpeg", "webp"}
-_CHANNEL_SIZE_PATTERN = re.compile(r"^([1-9]\d{1,4})x([1-9]\d{1,4})$")
-_CHANNEL_SIZE_MIN = 64
-_CHANNEL_SIZE_MAX = 8192
 
 # A queued item uses these sentinel values until the Worker assigns a concrete
 # provider.  They are intentionally outside the normal administrator channel
@@ -36,7 +32,6 @@ class ChannelCapabilities:
     max_reference_images: int
     max_reference_image_mb: int
     max_reference_total_mb: int
-    sizes: tuple[str, ...]
     formats: tuple[str, ...]
 
     def public_dict(self) -> dict[str, Any]:
@@ -45,7 +40,6 @@ class ChannelCapabilities:
             "max_reference_images": self.max_reference_images,
             "max_reference_image_mb": self.max_reference_image_mb,
             "max_reference_total_mb": self.max_reference_total_mb,
-            "sizes": list(self.sizes),
             "formats": list(self.formats),
         }
 
@@ -296,7 +290,6 @@ class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
         if not modes or not set(modes) <= SUPPORTED_MODES:
             raise ValueError(f"{label} 的 modes 仅支持 text2img/img2img")
         formats = _string_tuple(capabilities_raw.get("formats", ["png"]), f"{label}.formats")
-        sizes = _size_tuple(capabilities_raw.get("sizes", ["1024x1024"]), f"{label}.sizes")
         if not set(formats) <= SUPPORTED_FORMATS:
             raise ValueError(f"{label} 包含不支持的输出格式")
 
@@ -309,7 +302,6 @@ class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
             max_reference_total_mb=bounded_int(
                 capabilities_raw, "max_reference_total_mb", 40, 1, 100
             ),
-            sizes=sizes,
             formats=formats,
         )
         if "img2img" in modes and capabilities.max_reference_images < 1:
@@ -421,17 +413,3 @@ def _string_tuple(raw: Any, field_name: str) -> tuple[str, ...]:
     if not isinstance(raw, list) or not all(isinstance(item, str) and item.strip() for item in raw):
         raise ValueError(f"{field_name} 必须是非空字符串列表")
     return tuple(dict.fromkeys(item.strip().lower() for item in raw))
-
-
-def _size_tuple(raw: Any, field_name: str) -> tuple[str, ...]:
-    if not isinstance(raw, list) or not all(isinstance(item, str) and item.strip() for item in raw):
-        raise ValueError(f"{field_name} 必须是非空字符串列表")
-    sizes = tuple(dict.fromkeys(item.strip().lower().replace("×", "x") for item in raw))
-    for size in sizes:
-        match = _CHANNEL_SIZE_PATTERN.fullmatch(size)
-        if not match or any(
-            not _CHANNEL_SIZE_MIN <= int(dimension) <= _CHANNEL_SIZE_MAX
-            for dimension in match.groups()
-        ):
-            raise ValueError(f"{field_name} 包含无效尺寸：{size}")
-    return sizes

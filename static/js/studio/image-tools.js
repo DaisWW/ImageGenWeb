@@ -403,13 +403,9 @@
         prepare: () => {
           this.activeWorkspace.settings.prompt_draft_id = "";
           this.el.creativeDirectionSelect.value = "game_ui";
-          const squareSize = channel.capabilities.sizes
-            .map((value) => this.normalizeSize(value))
-            .find((value) => {
-              const [width, height] = value.split("x").map(Number);
-              return width === height;
-            });
-          if (squareSize) this.el.sizeInput.value = squareSize;
+          const currentSize = this.normalizeSize(this.el.sizeInput.value);
+          this.el.sizeInput.value = currentSize;
+          if (!this.validateSizeInput(false)) this.el.sizeInput.value = "1024x1024";
           this.el.formatSelect.value = "png";
           this.el.transparentBackground.checked = true;
           this.updateTransparentBackgroundState();

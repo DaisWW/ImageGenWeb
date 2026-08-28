@@ -145,7 +145,11 @@
         "id",
         "label",
       );
-      this.fillSizeSuggestions(channel.capabilities.sizes, settings.size);
+      this.el.sizeInput.value = this.normalizeSize(settings.size)
+        || this.normalizeSize(this.el.sizeInput.value)
+        || "1024x1024";
+      this.el.sizeInput.disabled = false;
+      this.el.sizeInput.setCustomValidity("");
       this.fillSelect(this.el.formatSelect, channel.capabilities.formats, settings.output_format, null, null, {
         png: "PNG", jpeg: "JPEG", webp: "WebP",
       });
@@ -187,20 +191,6 @@
       const ids = normalized.map((value) => idKey ? value[idKey] : value);
       select.value = ids.includes(preferred) ? preferred : (ids[0] || "");
       select.disabled = !ids.length;
-    },
-
-    fillSizeSuggestions(values, preferred) {
-      const suggestions = (values || []).map((value) => this.normalizeSize(value)).filter(Boolean);
-      this.el.sizeOptions.replaceChildren(
-        ...suggestions.map((value) => {
-          const option = document.createElement("option");
-          option.value = value;
-          return option;
-        }),
-      );
-      this.el.sizeInput.value = this.normalizeSize(preferred) || suggestions[0] || "1024x1024";
-      this.el.sizeInput.disabled = false;
-      this.el.sizeInput.setCustomValidity("");
     },
 
     normalizeSize(value) {
@@ -251,12 +241,29 @@
     canvasRequestTargetSize(request) {
       if (!request) return "";
       if (request.width && request.height) return `${request.width}x${request.height}`;
-      const sizes = this.currentChannel()?.capabilities?.sizes || [];
-      return sizes.map((value) => this.normalizeSize(value)).find((size) => {
-        const match = IMAGE_SIZE_PATTERN.exec(size);
-        return match && this.canvasRatio(Number(match[1]), Number(match[2]))
-          === request.aspect_ratio;
-      }) || "";
+      const match = String(request.aspect_ratio || "").match(/^([1-9]\d{0,3}):([1-9]\d{0,3})$/);
+      if (!match) return "";
+      const ratioWidth = Number(match[1]);
+      const ratioHeight = Number(match[2]);
+      const minimumScale = Math.ceil(Math.max(
+        IMAGE_DIMENSION_MIN / ratioWidth,
+        IMAGE_DIMENSION_MIN / ratioHeight,
+      ));
+      const maximumScale = Math.floor(Math.min(
+        IMAGE_DIMENSION_MAX / ratioWidth,
+        IMAGE_DIMENSION_MAX / ratioHeight,
+      ));
+      if (minimumScale > maximumScale) return "";
+      const current = IMAGE_SIZE_PATTERN.exec(this.normalizeSize(this.el?.sizeInput?.value));
+      const currentLongSide = current
+        ? Math.max(Number(current[1]), Number(current[2]))
+        : 1024;
+      const preferredScale = Math.round(currentLongSide / Math.max(ratioWidth, ratioHeight));
+      const scale = Math.min(
+        maximumScale,
+        Math.max(minimumScale, preferredScale || minimumScale),
+      );
+      return `${ratioWidth * scale}x${ratioHeight * scale}`;
     },
 
     canvasRequestConflicts(request, size) {
@@ -307,14 +314,14 @@
       setText(this.el.canvasConflictMessage, resolvedText);
       setText(
         this.el.canvasConflictApply,
-        targetSize ? `应用 ${targetSize.replace("x", "×")}` : "无可用对话尺寸",
+        targetSize ? `应用 ${targetSize.replace("x", "×")}` : "手动填写尺寸",
       );
     },
 
     applyCanvasRequest() {
       const targetSize = this.canvasRequestTargetSize(this.canvasConflict?.request);
       if (!targetSize) {
-        UI.toast("当前渠道没有可直接应用的对话画幅，请手动填写尺寸", "info");
+        UI.toast("对话只提供宽高比，请手动填写具体尺寸", "info");
         return;
       }
       this.el.sizeInput.value = targetSize;

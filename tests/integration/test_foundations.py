@@ -36,25 +36,18 @@ from tests.support.platform import (
 
 
 class TestFoundations(PlatformTestCase):
-    def test_channel_sizes_are_normalized_and_validated(self):
+    def test_channel_config_does_not_require_or_validate_size_lists(self):
         config_path = Path(self.temp.name) / "sizes.yaml"
-        size_list = "sizes: [1024x1024, 1280x720, 1920x1080]"
         config_path.write_text(
             CHANNEL_CONFIG.replace(
-                size_list,
-                "sizes: [ 1024X1024, 1024×1024, 1280x720 ]",
+                "formats: [png, jpeg, webp]",
+                "sizes: [32x1024]\n      formats: [png, jpeg, webp]",
             ),
             encoding="utf-8",
         )
         channel = ChannelRegistry(config_path).get("test", require_available=False)
-        self.assertEqual(channel.capabilities.sizes, ("1024x1024", "1280x720"))
-
-        config_path.write_text(
-            CHANNEL_CONFIG.replace(size_list, "sizes: [32x1024]"),
-            encoding="utf-8",
-        )
-        with self.assertRaisesRegex(ValueError, "无效尺寸"):
-            ChannelRegistry(config_path)
+        self.assertEqual(channel.capabilities.formats, ("png", "jpeg", "webp"))
+        self.assertNotIn("sizes", channel.public_dict()["capabilities"])
 
     def test_display_amount_trims_only_redundant_fraction_zeros(self):
         self.assertEqual(display_amount("100.0000"), "100.00")

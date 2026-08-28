@@ -54,7 +54,6 @@ async function mockConfiguredImageChannel(page) {
           max_reference_images: 2,
           max_reference_image_mb: 10,
           max_reference_total_mb: 40,
-          sizes: ["1024x1024"],
           formats: ["png", "jpeg", "webp"],
         },
         limits: { max_concurrency: 2 },

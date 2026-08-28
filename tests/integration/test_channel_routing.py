@@ -53,7 +53,6 @@ channels:
       max_reference_images: 8
       max_reference_image_mb: 10
       max_reference_total_mb: 40
-      sizes: [1024x1024]
       formats: [png, jpeg, webp]
     limits:
       max_concurrency: 2
@@ -79,7 +78,6 @@ channels:
       max_reference_images: 8
       max_reference_image_mb: 10
       max_reference_total_mb: 40
-      sizes: [1024x1024]
       formats: [png, jpeg, webp]
     limits:
       max_concurrency: 4
@@ -105,6 +103,18 @@ class SelectiveProviderFactory:
         failure = self.failures.get(channel.identifier)
         if failure is not None:
             raise failure
+        return ProviderResult(content=png_bytes(), request_id=f"request-{channel.identifier}")
+
+
+class RecordingSizeProviderFactory:
+    def __init__(self):
+        self.requests: list[tuple[str, str]] = []
+
+    def for_channel(self, _channel):
+        return self
+
+    def generate(self, channel, request):
+        self.requests.append((channel.identifier, request.size))
         return ProviderResult(content=png_bytes(), request_id=f"request-{channel.identifier}")
 
 
@@ -136,6 +146,27 @@ class TestChannelRouting(PlatformTestCase):
         self.assertEqual(job.workflow["channel_routing"]["mode"], "selected")
         self.assertEqual(job.workflow["channel_routing"]["candidate_ids"], ["lucen"])
         self.assertEqual(workspace.settings["channel_id"], "lucen")
+
+    def test_selected_channels_receive_their_requested_custom_sizes(self):
+        worker = self.create_worker()
+        provider = RecordingSizeProviderFactory()
+        worker.providers = provider
+
+        for channel_id, size in (("current", "1536x1024"), ("lucen", "1024x1536")):
+            with self.subTest(channel_id=channel_id):
+                workspace = self.create_workspace(channel_id)
+                job = self.submit(workspace, channel_id=channel_id, size=size)
+                item = job.items[0]
+                self.assertTrue(worker._claim(item.id))
+                worker._process_item(item.id)
+                db.session.expire_all()
+                saved_item = db.session.get(GenerationItem, item.id)
+                self.assertEqual((saved_item.output_width, saved_item.output_height), (64, 48))
+
+        self.assertEqual(
+            provider.requests,
+            [("current", "1536x1024"), ("lucen", "1024x1536")],
+        )
 
     def test_selected_channel_capacity_does_not_fall_back_to_another_channel(self):
         workspace = self.create_workspace()

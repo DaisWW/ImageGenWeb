@@ -92,7 +92,6 @@
       const modelIds = new Set();
       const modes = new Set();
       const formats = new Set();
-      const sizes = new Set();
       let maxReferenceImages = 0;
       let maxReferenceImageMb = 0;
       let maxReferenceTotalMb = 0;
@@ -105,7 +104,6 @@
         });
         (channel.capabilities?.modes || []).forEach((mode) => modes.add(mode));
         (channel.capabilities?.formats || []).forEach((format) => formats.add(format));
-        (channel.capabilities?.sizes || []).forEach((size) => sizes.add(size));
         maxReferenceImages = Math.max(
           maxReferenceImages,
           Number(channel.capabilities?.max_reference_images || 0),
@@ -128,7 +126,6 @@
         capabilities: {
           modes: [...modes],
           formats: [...formats],
-          sizes: [...sizes],
           max_reference_images: maxReferenceImages,
           max_reference_image_mb: maxReferenceImageMb,
           max_reference_total_mb: maxReferenceTotalMb,

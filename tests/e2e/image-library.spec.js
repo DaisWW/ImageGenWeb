@@ -224,7 +224,6 @@ test("many padding images stay inside the generation drawer", {
           max_reference_images: images.length,
           max_reference_image_mb: 10,
           max_reference_total_mb: 40,
-          sizes: ["1024x1024"],
           formats: ["png"],
         },
         limits: { max_concurrency: 2 },
