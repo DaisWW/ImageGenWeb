@@ -38,7 +38,7 @@ from tests.support.platform import (
 class TestFoundations(PlatformTestCase):
     def test_channel_sizes_are_normalized_and_validated(self):
         config_path = Path(self.temp.name) / "sizes.yaml"
-        size_list = "sizes: [1024x1024, 1280x720]"
+        size_list = "sizes: [1024x1024, 1280x720, 1920x1080]"
         config_path.write_text(
             CHANNEL_CONFIG.replace(
                 size_list,
