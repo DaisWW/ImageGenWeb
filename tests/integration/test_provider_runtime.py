@@ -349,7 +349,9 @@ class TestProviderAndRuntime(PlatformTestCase):
         self.assertEqual(result.input_tokens, 4)
         self.assertEqual(result.output_tokens, 2)
         self.assertEqual(result.request_body_bytes, len(request_body))
-        self.assertEqual(result.first_output_seconds, 0.0)
+        self.assertIsNotNone(result.first_output_seconds)
+        self.assertGreaterEqual(result.first_output_seconds, 0.0)
+        self.assertLessEqual(result.first_output_seconds, result.elapsed_seconds)
         self.assertTrue(session.responses == [])
 
         override_session = RecordingChatSession()
