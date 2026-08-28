@@ -812,6 +812,8 @@
       const messageSending = this.chatOperationAwaitingMessageAcceptance(operation);
       const generationSubmission = this.generationSubmissions.get(this.activeWorkspace?.id);
       const submissionBusy = Boolean(generationSubmission);
+      const selectedChannel = this.currentChannel();
+      const channelBusy = Boolean(selectedChannel && !this.currentChannelHasCapacity());
       const canvasConflictPending = Boolean(
         this.canvasConflict && !this.canvasConflict.resolution,
       );
@@ -853,7 +855,7 @@
         this.el.generateButton,
         submissionBusy
           ? false
-          : locked || referenceUploading || !this.currentChannel() || canvasConflictPending,
+          : locked || referenceUploading || !selectedChannel || channelBusy || canvasConflictPending,
       );
       this.setActionIcon(
         this.el.generateButton,
@@ -872,7 +874,11 @@
         this.el.canvasConflictKeep,
         locked || !this.canvasConflict || this.canvasConflict.resolution === "panel",
       );
-      const generateTitle = submissionBusy ? "取消生成" : "";
+      const generateTitle = submissionBusy
+        ? "取消生成"
+        : channelBusy
+          ? `${selectedChannel.label} 当前没有空闲槽位，请选择其他渠道`
+          : !selectedChannel ? "请选择已配置的生图渠道" : "";
       setAttribute(this.el.generateButton, "title", generateTitle);
       setDisabled(this.el.generationBackButton, submissionBusy);
       setDisabled(

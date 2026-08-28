@@ -219,6 +219,9 @@ test("many padding images stay inside the generation drawer", {
         models: [{ id: "e2e-many-reference-model", label: "GPT Image 2" }],
         default_model: "e2e-many-reference-model",
         price_rmb: "0.0300",
+        active_count: 0,
+        available_slots: 2,
+        has_capacity: true,
         capabilities: {
           modes: ["text2img", "img2img"],
           max_reference_images: images.length,

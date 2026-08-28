@@ -7,7 +7,7 @@ from decimal import Decimal
 from flask_login import UserMixin
 from sqlalchemy import CheckConstraint, ForeignKey, Index, Numeric, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.mutable import MutableDict, MutableList
+from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
@@ -15,7 +15,6 @@ from .extensions import db
 
 MONEY_TYPE = Numeric(14, 4)
 JSON_TYPE = JSON().with_variant(JSONB(), "postgresql")
-JSON_LIST_TYPE = JSON().with_variant(JSONB(), "postgresql")
 
 
 def utcnow() -> datetime:
@@ -290,10 +289,6 @@ class GenerationItem(TimestampMixin, db.Model):
     channel_id: Mapped[str] = mapped_column(db.String(64), index=True)
     channel_label: Mapped[str] = mapped_column(db.String(100), default="", nullable=False)
     provider_price_rmb: Mapped[Decimal] = mapped_column(MONEY_TYPE, default=Decimal("0"))
-    attempted_channel_ids: Mapped[list[str]] = mapped_column(
-        MutableList.as_mutable(JSON_LIST_TYPE), default=list, nullable=False
-    )
-    circuit_probe: Mapped[bool] = mapped_column(default=False, nullable=False)
     position: Mapped[int]
     prompt: Mapped[str] = mapped_column(db.Text, default="", nullable=False)
     status: Mapped[str] = mapped_column(db.String(20), default="queued", index=True)
@@ -346,7 +341,6 @@ class GenerationAttempt(db.Model):
     attempt_number: Mapped[int]
     idempotency_key: Mapped[str] = mapped_column(db.String(64))
     status: Mapped[str] = mapped_column(db.String(24), default="running", nullable=False)
-    circuit_probe: Mapped[bool] = mapped_column(default=False, nullable=False)
     provider_completed: Mapped[bool] = mapped_column(default=False, nullable=False)
     claimed_by: Mapped[str | None] = mapped_column(db.String(100))
     heartbeat_at: Mapped[datetime | None]
@@ -450,16 +444,6 @@ class GenerationQueueState(db.Model):
     __tablename__ = "generation_queue_state"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow, nullable=False)
-
-
-class ChannelCircuitState(db.Model):
-    __tablename__ = "channel_circuit_states"
-
-    channel_id: Mapped[str] = mapped_column(db.String(64), primary_key=True)
-    failure_count: Mapped[int] = mapped_column(default=0, nullable=False)
-    failure_window_started_at: Mapped[datetime | None]
-    open_until: Mapped[datetime | None] = mapped_column(index=True)
     updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow, nullable=False)
 
 

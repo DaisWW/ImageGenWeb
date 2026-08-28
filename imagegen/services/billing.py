@@ -7,7 +7,6 @@ from typing import Iterable
 
 from sqlalchemy import case, func, select
 
-from ..config.channels import AUTO_CHANNEL_ID, MIXED_CHANNEL_ID
 from ..errors import ServiceError
 from ..extensions import db
 from ..models import AuditLog, GenerationItem, GenerationJob, User, WalletLedger, utcnow
@@ -157,20 +156,8 @@ class BillingService:
             is not None
         ):
             return
-        # Routed jobs reserve the highest eligible channel price per image.
-        # Release that reservation, then charge the concrete provider price
-        # recorded on the item.  Older jobs have a zero provider price and
-        # naturally fall back to the historical job-level price.
         reservation = money(job.price_per_image_rmb)
-        # A configured provider may legitimately be free (price 0).  Use the
-        # reservation fallback only for legacy/unassigned rows, not via a
-        # truthiness check that would turn Decimal("0") into the max price.
-        assigned_provider = (
-            bool(item.channel_label)
-            and item.channel_id not in {AUTO_CHANNEL_ID, MIXED_CHANNEL_ID}
-            and item.provider_price_rmb is not None
-        )
-        price = money(item.provider_price_rmb) if assigned_provider else reservation
+        price = money(item.provider_price_rmb)
         self.release(user, job, reservation)
         if user.balance_rmb < price:
             raise ServiceError("结算时余额不足", code="billing_invariant", status_code=500)

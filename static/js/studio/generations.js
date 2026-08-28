@@ -17,28 +17,11 @@
     updatePrice() {
       const count = this.generationCount();
       const unit = "张";
-      const candidates = this.generationRoutingCandidates({
-        channel_id: this.el.channelSelect?.value || "__auto__",
-        model: this.el.modelSelect?.value || "",
-        mode: this.el.modeSwitch?.dataset.mode || "",
-        size: this.el.sizeInput?.value || "",
-        output_format: this.el.formatSelect?.value || "",
-      });
-      const price = candidates.length
-        ? Math.max(...candidates.map((channel) => Number(channel.price_rmb || 0)))
-        : 0;
+      const price = Number(this.currentChannel()?.price_rmb || 0);
       const strategy = this.el.generationStrategy?.value || "sample";
       const suffix = strategy === "explore" ? "探索方案" : strategy === "series" ? "系列图片" : unit;
       this.el.priceEstimateLabel.textContent = `${count} ${suffix}预计总价`;
       this.el.priceEstimate.textContent = UI.money(price * count);
-      this.channels.forEach((channel) => {
-        const option = [...this.el.channelSelect.options]
-          .find((item) => item.value === channel.id);
-        if (option) {
-          const unitPrice = UI.money(channel.price_rmb);
-          option.textContent = `${channel.label} · ${unitPrice}/${unit}${channel.configured ? "" : " · 未配置"}`;
-        }
-      });
     },
 
     async submitGeneration(event) {
@@ -81,8 +64,13 @@
           this.loadRuntimeSettings(false, requestOptions),
         ]);
         if (operation.canceled || this.activeWorkspace?.id !== workspace.id) return;
-        if (!this.currentChannel()) {
+        const channel = this.currentChannel();
+        if (!channel) {
           UI.toast("暂无可用渠道", "error");
+          return;
+        }
+        if (!this.currentChannelHasCapacity()) {
+          UI.toast(`${channel.label} 当前没有空闲槽位，请选择其他渠道`, "error");
           return;
         }
         if (!this.validateSizeInput(true)) return;
@@ -125,7 +113,7 @@
           UI.toast("垫图生图至少选择一张垫图", "error");
           return;
         }
-        if (!this.generationRoutingCandidates(settings, workspace.id).length) {
+        if (!this.generationChannelSupportsSettings(settings, workspace.id)) {
           UI.toast("所选渠道不支持当前模型、模式、格式或垫图数量", "error");
           return;
         }

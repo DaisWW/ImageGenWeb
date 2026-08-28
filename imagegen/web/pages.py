@@ -158,9 +158,7 @@ def studio():
         max_workspaces=runtime.max_workspaces_per_user,
         runtime_settings=runtime.client_dict(),
         history_retention_days=channel_registry().queue.history_retention_days,
-        channels=[
-            channel.public_dict() for channel in channel_registry().list(include_disabled=False)
-        ],
+        channels=application_services.generations.public_channels(),
         chat_models=_public_chat_models(),
         creative_directions=creative_direction_dicts(),
         gallery_categories=gallery_category_dicts(),
@@ -211,7 +209,7 @@ def channels():
     registry = channel_registry()
     return jsonify(
         version=registry.version[:12],
-        channels=[channel.public_dict() for channel in registry.list(include_disabled=False)],
+        channels=services().generations.public_channels(),
     )
 
 

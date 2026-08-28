@@ -3,21 +3,15 @@ from __future__ import annotations
 from datetime import timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from ...config.channels import (
-    AUTO_CHANNEL_ID,
-    AUTO_CHANNEL_LABEL,
-    MIXED_CHANNEL_ID,
-    MIXED_CHANNEL_LABEL,
-    Channel,
-    ChannelRegistry,
-)
+from ...config.channels import Channel, ChannelRegistry
 from ...errors import ServiceError
 from ...extensions import db
 from ...models import (
+    GenerationAttempt,
     GenerationItem,
     GenerationJob,
     GenerationQueueState,
@@ -55,7 +49,7 @@ class GenerationService:
         request: SubmitGeneration,
     ) -> GenerationJob:
         references = self.validator.load_references(workspace, request.reference_ids)
-        routing_channels, selected_model, normalized_size = self._resolve_routing(
+        channel, selected_model, normalized_size = self._resolve_request(
             request,
             workspace.kind,
             references,
@@ -80,29 +74,16 @@ class GenerationService:
             raise ServiceError("工作站不存在", status_code=404)
         self._ensure_workspace_generation_idle(workspace.id)
         self._ensure_queue_capacity(user_id, requested_count)
+        self._ensure_channel_capacity(channel)
 
-        # Reserve the most expensive eligible provider up front.  A routed
-        # item later records its concrete provider price and settlement charges
-        # that amount while releasing the full per-item reservation.
-        reservation_unit_price = max(channel.price_rmb for channel in routing_channels)
-        primary_channel = routing_channels[0]
-        requested_channel_id = str(request.channel_id or "").strip()
-        user_selected_channel = requested_channel_id not in {"", AUTO_CHANNEL_ID}
-        reserved = money(reservation_unit_price * requested_count)
+        reserved = money(channel.price_rmb * requested_count)
         self.billing.reserve(user, reserved)
         workflow = sanitize_workflow(request.workflow)
-        workflow["channel_routing"] = {
-            "mode": "selected" if user_selected_channel else "priority",
-            "candidate_ids": [channel.identifier for channel in routing_channels],
-            "candidate_labels": [channel.label for channel in routing_channels],
-        }
         job = GenerationJob(
             user_id=user.id,
             workspace_id=workspace.id,
-            # Keep a useful summary for legacy consumers.  The item-level
-            # channel is authoritative once the Worker has routed it.
-            channel_id=primary_channel.identifier,
-            channel_label=primary_channel.label,
+            channel_id=channel.identifier,
+            channel_label=channel.label,
             channel_config_version=self.channels.version,
             kind=workspace.kind,
             mode=request.mode,
@@ -115,7 +96,7 @@ class GenerationService:
             compression=request.compression,
             transparent_background=request.transparent_background,
             requested_count=requested_count,
-            price_per_image_rmb=money(reservation_unit_price),
+            price_per_image_rmb=money(channel.price_rmb),
             reserved_rmb=reserved,
             charged_rmb=money(0),
             status="queued",
@@ -139,17 +120,13 @@ class GenerationService:
                 GenerationItem(
                     job_id=job.id,
                     user_id=user.id,
-                    channel_id=(
-                        primary_channel.identifier if user_selected_channel else AUTO_CHANNEL_ID
-                    ),
-                    channel_label=(
-                        primary_channel.label if user_selected_channel else AUTO_CHANNEL_LABEL
-                    ),
+                    channel_id=channel.identifier,
+                    channel_label=channel.label,
                     position=position,
                     prompt=item_prompts[position],
                     status="queued",
                     charged_rmb=money(0),
-                    provider_price_rmb=money(0),
+                    provider_price_rmb=money(channel.price_rmb),
                 )
             )
         workspace.settings = sanitize_workspace_settings(
@@ -157,9 +134,7 @@ class GenerationService:
                 **(workspace.settings or {}),
                 "mode": request.mode,
                 "prompt": request.prompt,
-                "channel_id": (
-                    primary_channel.identifier if user_selected_channel else AUTO_CHANNEL_ID
-                ),
+                "channel_id": channel.identifier,
                 "model": selected_model.identifier,
                 "size": normalized_size,
                 "output_format": request.output_format,
@@ -176,94 +151,32 @@ class GenerationService:
         db.session.commit()
         return self.get_job(job.id, user_id=user.id)
 
-    def _resolve_routing(
+    def _resolve_request(
         self,
         request: SubmitGeneration,
         workspace_kind: str,
         references: list,
-    ) -> tuple[list[Channel], object, str]:
-        """Return the configured channels that can execute this request.
-
-        Channel selection is deliberately deferred to the Worker so queued
-        items can use a lower-priority provider when the preferred provider is
-        full.  Submission still validates every eligible provider and chooses
-        one model shared by the largest number of providers.
-        """
-
+    ) -> tuple[Channel, object, str]:
         requested_channel_id = str(request.channel_id or "").strip()
-        if requested_channel_id and requested_channel_id != AUTO_CHANNEL_ID:
-            try:
-                configured = [self.channels.get(requested_channel_id)]
-            except ValueError as exc:
-                raise ServiceError(str(exc)) from exc
-        else:
-            configured = [
-                channel
-                for channel in self.channels.list(include_disabled=False)
-                if channel.configured
-            ]
-        if not configured:
+        if not requested_channel_id:
             raise ServiceError(
-                "暂无可用生图渠道",
-                code="channel_unavailable",
-                status_code=503,
+                "请选择生图渠道",
+                code="channel_required",
+                status_code=422,
             )
-
+        try:
+            channel = self.channels.get(requested_channel_id)
+        except ValueError as exc:
+            raise ServiceError(str(exc)) from exc
         requested_model = str(request.model or "").strip()
-        model_ids: list[str] = []
-        if requested_model:
-            model_ids = [requested_model]
-        else:
-            # Prefer a model shared by the largest number of channels.  Ties
-            # retain the configured priority order so the first provider stays
-            # deterministic.
-            for channel in configured:
-                for model in channel.models:
-                    if model.enabled and model.identifier not in model_ids:
-                        model_ids.append(model.identifier)
-
-        first_error: ServiceError | None = None
-        best: tuple[list[Channel], object, str] | None = None
-        for model_id in model_ids:
-            candidates: list[Channel] = []
-            normalized_size = ""
-            model = None
-            for channel in configured:
-                try:
-                    selected = channel.get_model(model_id)
-                    normalized = self.validator.validate_request(
-                        channel,
-                        request,
-                        workspace_kind,
-                    )
-                    self.validator.validate_references(channel, request.mode, references)
-                except ValueError as exc:
-                    if first_error is None:
-                        first_error = ServiceError(str(exc))
-                    continue
-                except ServiceError as exc:
-                    if first_error is None:
-                        first_error = exc
-                    continue
-                if model is None:
-                    model = selected
-                    normalized_size = normalized
-                candidates.append(channel)
-            if not candidates or model is None:
-                continue
-            trial = (candidates, model, normalized_size)
-            if best is None or len(candidates) > len(best[0]):
-                best = trial
-
-        if best is not None:
-            return best
-        if first_error is not None:
-            raise first_error
-        raise ServiceError(
-            "没有渠道支持当前生成请求",
-            code="channel_unavailable",
-            status_code=422,
-        )
+        model_id = requested_model or channel.default_model.identifier
+        try:
+            selected_model = channel.get_model(model_id)
+        except ValueError as exc:
+            raise ServiceError(str(exc)) from exc
+        normalized_size = self.validator.validate_request(channel, request, workspace_kind)
+        self.validator.validate_references(channel, request.mode, references)
+        return channel, selected_model, normalized_size
 
     def cancel(
         self,
@@ -375,6 +288,35 @@ class GenerationService:
             int(counts.get("queued", 0)),
         )
 
+    def public_channels(self) -> list[dict[str, object]]:
+        now = utcnow()
+        active_filter = or_(
+            GenerationAttempt.status == "running",
+            and_(
+                GenerationAttempt.status == "unknown",
+                GenerationAttempt.capacity_expires_at > now,
+            ),
+        )
+        counts = dict(
+            db.session.execute(
+                select(GenerationAttempt.channel_id, func.count(GenerationAttempt.id))
+                .where(active_filter)
+                .group_by(GenerationAttempt.channel_id)
+            ).all()
+        )
+        result = []
+        for channel in self.channels.list(include_disabled=False):
+            maximum = channel.limits.max_concurrency
+            active = int(counts.get(channel.identifier, 0))
+            payload = channel.public_dict()
+            payload.update(
+                active_count=active,
+                available_slots=max(0, maximum - active),
+                has_capacity=active < maximum,
+            )
+            result.append(payload)
+        return result
+
     def queue_positions(self) -> dict[str, int]:
         queued_ids = list(
             db.session.scalars(
@@ -428,6 +370,27 @@ class GenerationService:
             raise ServiceError("当前账户排队图片已达到上限", code="queue_full", status_code=429)
         if global_queued + requested_count > queue.max_queued_global:
             raise ServiceError("系统排队图片已达到上限", code="queue_full", status_code=429)
+
+    def _ensure_channel_capacity(self, channel: Channel) -> None:
+        now = utcnow()
+        active = db.session.scalar(
+            select(func.count(GenerationAttempt.id)).where(
+                GenerationAttempt.channel_id == channel.identifier,
+                or_(
+                    GenerationAttempt.status == "running",
+                    and_(
+                        GenerationAttempt.status == "unknown",
+                        GenerationAttempt.capacity_expires_at > now,
+                    ),
+                ),
+            )
+        )
+        if int(active or 0) >= channel.limits.max_concurrency:
+            raise ServiceError(
+                f"{channel.label} 当前没有空闲槽位，请选择其他渠道",
+                code="channel_busy",
+                status_code=409,
+            )
 
     def _lock_job_and_owner(
         self,
@@ -494,23 +457,3 @@ class GenerationService:
             ),
             default=utcnow(),
         )
-
-    @staticmethod
-    def refresh_job_channel_summary(job: GenerationJob) -> None:
-        """Keep the legacy job-level channel fields useful for routed jobs."""
-
-        assigned = []
-        seen: set[str] = set()
-        for item in job.items:
-            identifier = str(item.channel_id or "").strip()
-            if not identifier or identifier == AUTO_CHANNEL_ID or identifier in seen:
-                continue
-            seen.add(identifier)
-            assigned.append((identifier, str(item.channel_label or "").strip()))
-        if not assigned:
-            return
-        if len(assigned) == 1:
-            job.channel_id, job.channel_label = assigned[0]
-            return
-        job.channel_id = MIXED_CHANNEL_ID
-        job.channel_label = MIXED_CHANNEL_LABEL
