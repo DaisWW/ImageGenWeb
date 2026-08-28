@@ -19,7 +19,7 @@ from imagegen.services.creative import (
     creative_direction_dicts,
     gallery_category_dicts,
 )
-from imagegen.services.prompt_drafts import PromptDraftStreamPreview
+from imagegen.services.prompt_drafts import PromptDraftReview, PromptDraftStreamPreview
 from tests.support.platform import (
     PlatformTestCase,
     png_bytes,
@@ -375,6 +375,30 @@ class TestPromptDrafts(PlatformTestCase):
             "用户已锁定 Gallery 类别 `watercolor`",
             self.chat_client.calls[-1]["system"],
         )
+
+    def test_prompt_draft_rejects_incompatible_locked_gallery_and_direction(self):
+        review = PromptDraftReview(
+            translate_to_english=False,
+            workspace_prompt="",
+            creative_direction_id="poster",
+            gallery_category_id="watercolor",
+        )
+
+        with self.assertRaises(ServiceError) as raised:
+            review.parse(
+                json.dumps(
+                    {
+                        "status": "ready",
+                        "summary_zh": "海报",
+                        "prompt": "poster",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+
+        self.assertEqual(raised.exception.code, "creative_catalog_conflict")
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("重新选择", str(raised.exception))
 
     def test_game_ui_draft_keeps_template_case_refs_and_production_spec(self):
         workspace = self.create_workspace("游戏 HUD")

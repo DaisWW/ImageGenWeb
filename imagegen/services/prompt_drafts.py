@@ -558,7 +558,11 @@ def _direction_id(value: Any, fallback: str, gallery_category_id: str = "auto") 
         gallery_category.identifier,
         direction_id,
     ):
-        return gallery_category.direction_ids[0] if gallery_category.direction_ids else "other"
+        raise ServiceError(
+            "锁定的 Gallery 类别与创作方向不兼容，请重新选择",
+            code="creative_catalog_conflict",
+            status_code=409,
+        )
     return direction_id
 
 
