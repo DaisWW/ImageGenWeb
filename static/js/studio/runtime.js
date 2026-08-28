@@ -55,7 +55,6 @@
         const initialized = Boolean(this.channelVersion);
         const changed = initialized && this.channelVersion !== data.version;
         this.channelVersion = data.version;
-        if (initialized && !changed) return;
         const previous = this.collectSettings();
         const savedChannelId = String(this.activeWorkspace?.settings?.channel_id || "").trim();
         const settingsPending = this.saveTimer !== null

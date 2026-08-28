@@ -7,13 +7,7 @@ from typing import Any
 
 from flask import url_for
 
-from .config.channels import (
-    AUTO_CHANNEL_ID,
-    AUTO_CHANNEL_LABEL,
-    MIXED_CHANNEL_ID,
-    MIXED_CHANNEL_LABEL,
-    ChannelRegistry,
-)
+from .config.channels import ChannelRegistry
 from .models import (
     Asset,
     BackgroundRemovalResult,
@@ -230,7 +224,7 @@ def job_dict(
 ) -> dict[str, Any]:
     now = utcnow()
     item_results = [item_dict(item, now=now, admin=admin) for item in job.items]
-    channel_id, channel_label, channel_entries = _job_channel_summary(job, channels)
+    channel_id, channel_label, channel_entries = _job_channel_summary(job)
     status = _job_status_dict(
         job,
         channels,
@@ -314,8 +308,6 @@ def item_dict(item: GenerationItem, *, now: datetime, admin: bool = False) -> di
     if admin:
         result.update(
             provider_price_rmb=_amount(item.provider_price_rmb or 0),
-            attempted_channel_ids=list(item.attempted_channel_ids or []),
-            circuit_probe=bool(item.circuit_probe),
             upstream_status=item.upstream_status,
             upstream_request_id=item.upstream_request_id,
             error_code=item.error_code,
@@ -343,36 +335,37 @@ def item_dict(item: GenerationItem, *, now: datetime, admin: bool = False) -> di
 
 def _job_channel_summary(
     job: GenerationJob,
-    channels: ChannelRegistry,
 ) -> tuple[str, str, list[dict[str, Any]]]:
     counts: dict[str, dict[str, Any]] = {}
     for item in job.items:
         identifier = str(item.channel_id or "").strip()
-        if not identifier or identifier == AUTO_CHANNEL_ID:
+        if not identifier or _is_legacy_channel_marker(identifier):
             continue
         entry = counts.setdefault(
             identifier,
             {
                 "id": identifier,
-                "label": str(item.channel_label or "").strip(),
+                "label": str(item.channel_label or identifier).strip(),
                 "count": 0,
             },
         )
         entry["count"] += 1
-        if not entry["label"]:
-            try:
-                entry["label"] = channels.get(identifier, require_available=False).label
-            except ValueError:
-                entry["label"] = identifier
 
     entries = list(counts.values())
     if len(entries) == 1:
         return entries[0]["id"], entries[0]["label"], entries
     if len(entries) > 1:
-        return MIXED_CHANNEL_ID, MIXED_CHANNEL_LABEL, entries
-    if any(str(item.channel_id or "").strip() == AUTO_CHANNEL_ID for item in job.items):
-        return AUTO_CHANNEL_ID, AUTO_CHANNEL_LABEL, []
-    return job.channel_id, job.channel_label, entries
+        return "", "多渠道", entries
+
+    identifier = str(job.channel_id or "").strip()
+    if identifier and not _is_legacy_channel_marker(identifier):
+        label = str(job.channel_label or identifier).strip()
+        return identifier, label, [{"id": identifier, "label": label, "count": len(job.items)}]
+    return "", "", []
+
+
+def _is_legacy_channel_marker(identifier: str) -> bool:
+    return identifier.startswith("__") and identifier.endswith("__")
 
 
 def ledger_dict(entry: WalletLedger) -> dict[str, Any]:
@@ -421,35 +414,11 @@ def _job_estimated_end(
         if generation_concurrency is not None
         else job.user.generation_concurrency
     )
-    routing = job.workflow.get("channel_routing") if isinstance(job.workflow, dict) else None
-    candidate_ids = (
-        {
-            str(identifier).strip()
-            for identifier in routing.get("candidate_ids", [])
-            if str(identifier).strip()
-        }
-        if isinstance(routing, dict) and isinstance(routing.get("candidate_ids"), list)
-        else set()
-    )
-    routed_ids = {
-        str(item.channel_id or "").strip()
-        for item in job.items
-        if str(item.channel_id or "").strip() not in {"", AUTO_CHANNEL_ID}
-    }
-    provider_ids = candidate_ids or routed_ids
-    routed_channels = []
-    for identifier in provider_ids:
-        try:
-            channel = channels.get(identifier, require_available=False)
-            if channel.configured:
-                routed_channels.append(channel)
-        except ValueError:
-            continue
-    if not routed_channels:
-        routed_channels = [
-            channel for channel in channels.list(include_disabled=False) if channel.configured
-        ]
-    provider_slots = sum(channel.limits.max_concurrency for channel in routed_channels)
+    try:
+        channel = channels.get(job.channel_id, require_available=False)
+        provider_slots = channel.limits.max_concurrency
+    except ValueError:
+        provider_slots = 1
     slots = max(1, min(provider_slots or 1, concurrency))
     waves = math.ceil(queued / slots)
     return base + timedelta(seconds=waves * typical)

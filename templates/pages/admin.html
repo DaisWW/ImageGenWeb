@@ -53,7 +53,7 @@
         </div>
       </div>
       <div class="inline-alert" id="configError" hidden></div>
-      <div class="table-wrap"><table><thead><tr><th>渠道</th><th>状态</th><th>优先级</th><th>单价</th><th>模型</th><th>并发</th><th>能力</th><th class="actions-cell">操作</th></tr></thead><tbody id="channelTableBody"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>渠道</th><th>状态</th><th>单价</th><th>模型</th><th>并发</th><th>能力</th><th class="actions-cell">操作</th></tr></thead><tbody id="channelTableBody"></tbody></table></div>
     </div>
     <div class="admin-config-section">
       <div class="view-toolbar">
@@ -189,7 +189,6 @@
     <div class="form-grid two-columns">
       <label class="field"><span>渠道 ID</span><input name="id" maxlength="64" pattern="[A-Za-z0-9_-]+" required></label>
       <label class="field"><span>显示名称</span><input name="label" maxlength="100" required></label>
-      <label class="field"><span>调度优先级（越小越优先）</span><input name="priority" type="number" min="1" max="10000" required></label>
     </div>
     <label class="check-line"><input type="checkbox" name="enabled" checked><span>启用渠道</span></label>
     <label class="field"><span>API 地址</span><input type="url" name="base_url" maxlength="500" required></label>
@@ -224,12 +223,6 @@
         <label class="field"><span>超时秒数</span><input type="number" name="timeout_seconds" min="30" max="1800" required></label>
         <label class="field"><span>预计秒数</span><input type="number" name="estimated_seconds" min="10" max="1800" required></label>
       </div>
-      <div class="form-grid four-columns">
-        <label class="field"><span>失败窗口秒数</span><input type="number" name="failure_window_seconds" min="10" max="3600" required></label>
-        <label class="field"><span>熔断失败次数</span><input type="number" name="failure_threshold" min="1" max="100" required></label>
-        <label class="field"><span>熔断秒数</span><input type="number" name="circuit_breaker_seconds" min="10" max="86400" required></label>
-        <label class="field"><span>恢复探测数</span><input type="number" name="half_open_max_probes" min="1" max="64" required></label>
-      </div>
     </fieldset>
     <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="channelDialog">取消</button><button class="button primary" type="submit"><i data-lucide="save"></i>保存渠道</button></div>
   </form>
@@ -240,7 +233,6 @@
     <div class="modal-header"><div><span class="eyebrow">Queue</span><h2>队列设置</h2></div><button class="icon-button" type="button" data-close-dialog="queueDialog" aria-label="关闭"><i data-lucide="x"></i></button></div>
     <div class="form-grid two-columns">
       <label class="field"><span>全局并发</span><input type="number" name="global_concurrency" min="1" max="64" required></label>
-      <label class="field"><span>单图最多渠道尝试</span><input type="number" name="max_channel_attempts" min="1" max="10" required></label>
       <label class="field"><span>单用户排队上限</span><input type="number" name="max_queued_per_user" min="1" max="500" required></label>
       <label class="field"><span>全局排队上限</span><input type="number" name="max_queued_global" min="1" max="5000" required></label>
       <label class="field"><span>记录保留天数</span><input type="number" name="history_retention_days" min="1" max="3650" required></label>

@@ -6,9 +6,9 @@ from sqlalchemy import select
 
 from ..errors import ServiceError
 from ..extensions import db
-from ..models import BackgroundRemovalResult, GenerationItem
+from ..models import BackgroundRemovalResult, GenerationItem, GenerationJob
 from ..validation import as_bool
-from .channels import AUTO_CHANNEL_ID, MIXED_CHANNEL_ID, ChannelRegistry, ChannelSnapshot
+from .channels import ChannelRegistry, ChannelSnapshot
 from .chat_models import DEFAULT_WORKSPACE_PROMPTS, ChatModelRegistry
 from .matting_models import MattingModelRegistry, MattingModelSnapshot
 from .repository import RuntimeConfigRepository
@@ -119,7 +119,6 @@ class RuntimeConfigService:
                 {
                     "id": identifier,
                     "label": str(raw.get("label", "")).strip(),
-                    "priority": raw.get("priority", old.priority if old else 100),
                     "enabled": as_bool(raw.get("enabled", True)),
                     "adapter": "openai_images",
                     "base_url": str(raw.get("base_url", "")).strip(),
@@ -143,12 +142,6 @@ class RuntimeConfigService:
                         "max_concurrency": _nested(raw, "limits", "max_concurrency"),
                         "timeout_seconds": _nested(raw, "limits", "timeout_seconds"),
                         "estimated_seconds": _nested(raw, "limits", "estimated_seconds"),
-                        "failure_window_seconds": _nested(raw, "limits", "failure_window_seconds"),
-                        "failure_threshold": _nested(raw, "limits", "failure_threshold"),
-                        "circuit_breaker_seconds": _nested(
-                            raw, "limits", "circuit_breaker_seconds"
-                        ),
-                        "half_open_max_probes": _nested(raw, "limits", "half_open_max_probes"),
                     },
                 }
             )
@@ -159,7 +152,6 @@ class RuntimeConfigService:
             "version": 1,
             "queue": {
                 "global_concurrency": queue.get("global_concurrency"),
-                "max_channel_attempts": queue.get("max_channel_attempts"),
                 "max_queued_per_user": queue.get("max_queued_per_user"),
                 "max_queued_global": queue.get("max_queued_global"),
                 "history_retention_days": queue.get("history_retention_days"),
@@ -260,19 +252,23 @@ class RuntimeConfigService:
 
     @staticmethod
     def _guard_active_channels(snapshot: ChannelSnapshot) -> None:
-        active_ids = set(
-            db.session.scalars(
-                select(GenerationItem.channel_id)
-                .where(GenerationItem.status.in_(ACTIVE_GENERATION_STATUSES))
-                .distinct()
-            )
-        )
-        active_ids.difference_update({AUTO_CHANNEL_ID, MIXED_CHANNEL_ID})
-        unavailable = [
-            identifier
-            for identifier in active_ids
-            if identifier not in snapshot.channels or not snapshot.channels[identifier].configured
-        ]
+        active_rows = db.session.execute(
+            select(GenerationItem.channel_id, GenerationJob.channel_id)
+            .join(GenerationJob, GenerationJob.id == GenerationItem.job_id)
+            .where(GenerationItem.status.in_(ACTIVE_GENERATION_STATUSES))
+            .distinct()
+        ).all()
+        unavailable: set[str] = set()
+        for item_identifier, job_identifier in active_rows:
+            item_id = str(item_identifier or "").strip()
+            job_id = str(job_identifier or "").strip()
+            if item_id in snapshot.channels:
+                if not snapshot.channels[item_id].configured:
+                    unavailable.add(item_id)
+            elif job_id not in snapshot.channels and item_id:
+                # Legacy routed rows may carry a sentinel item channel while
+                # the job still records its concrete primary channel.
+                unavailable.add(item_id)
         if unavailable:
             raise ServiceError(
                 f"渠道 {', '.join(sorted(unavailable))} 仍有生成任务，暂时不能停用或删除",

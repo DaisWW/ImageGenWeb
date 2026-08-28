@@ -456,9 +456,9 @@ class TestWorker(PlatformTestCase):
         self.assertEqual(replacement_attempt.status, "running")
         self.assertEqual(replacement_attempt.claimed_by, worker.worker_id)
 
-    def test_worker_keeps_excess_images_queued_at_user_and_channel_limits(self):
+    def test_worker_respects_user_concurrency_for_a_selected_channel(self):
         workspace = self.create_workspace()
-        job = self.submit(workspace, batch_count=4)
+        job = self.submit(workspace, batch_count=3)
         worker = self.create_worker()
         self.assertIs(worker.billing, self.services.billing)
         self.assertIs(worker.generations, self.services.generations)
@@ -468,7 +468,7 @@ class TestWorker(PlatformTestCase):
         db.session.expire_all()
         statuses = [item.status for item in db.session.get(GenerationJob, job.id).items]
         self.assertEqual(statuses.count("running"), 2)
-        self.assertEqual(statuses.count("queued"), 2)
+        self.assertEqual(statuses.count("queued"), 1)
 
         db.session.get(User, self.user.id).generation_concurrency = 4
         db.session.commit()
@@ -476,7 +476,7 @@ class TestWorker(PlatformTestCase):
         db.session.expire_all()
         statuses = [item.status for item in db.session.get(GenerationJob, job.id).items]
         self.assertEqual(statuses.count("running"), 3)
-        self.assertEqual(statuses.count("queued"), 1)
+        self.assertEqual(statuses.count("queued"), 0)
 
     def test_worker_pauses_queue_before_provider_when_storage_is_unavailable(self):
         workspace = self.create_workspace("存储故障预检")

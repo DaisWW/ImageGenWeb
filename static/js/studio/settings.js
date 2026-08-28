@@ -84,6 +84,9 @@
         .normalizeCount("sample", settings.batch_count);
       const preferred = this.channels.find((channel) => (
         channel.id === settings.channel_id && channel.configured
+      )) || this.channels.find((channel) => (
+        channel.configured
+        && (channel.has_capacity === undefined || channel.has_capacity === true)
       )) || this.channels.find((channel) => channel.configured) || this.channels[0];
       this.renderChannelOptions(preferred?.id);
       this.applyChannel(settings, false);
@@ -122,13 +125,28 @@
       const options = this.channels.map((channel) => {
         const option = document.createElement("option");
         option.value = channel.id;
-        option.textContent = `${channel.label}${channel.configured ? "" : " · 未配置"}`;
-        option.disabled = !channel.configured;
+        const maximum = Number(channel.limits?.max_concurrency || 0);
+        const active = Number(channel.active_count);
+        const occupancy = maximum > 0
+          ? ` · ${Number.isFinite(active) ? Math.max(0, active) : 0} / ${maximum}`
+          : "";
+        const unitPrice = UI.money(channel.price_rmb);
+        const unavailable = channel.configured === false;
+        const full = channel.has_capacity === false;
+        const status = unavailable ? " · 未配置" : full ? " · 已满" : "";
+        option.textContent = `${channel.label}${occupancy} · ${unitPrice}/张${status}`;
+        option.title = full
+          ? `${channel.label} 当前没有空闲槽位`
+          : unavailable ? `${channel.label} 尚未配置 API Key` : option.textContent;
+        option.disabled = unavailable || full;
         return option;
       });
       this.el.channelSelect.replaceChildren(...options);
       const selected = this.channels.find((channel) => (
         channel.id === selectedId && channel.configured
+      )) || this.channels.find((channel) => (
+        channel.configured
+        && (channel.has_capacity === undefined || channel.has_capacity === true)
       )) || this.channels.find((channel) => channel.configured);
       this.el.channelSelect.value = selected?.id || "";
       this.el.channelSelect.disabled = !selected;
