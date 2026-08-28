@@ -86,6 +86,7 @@ def normalize_generation_strategy(value: object) -> str:
 
 def _exploration_variants(value: object, count: int) -> list[dict[str, object]]:
     variants: list[dict[str, object]] = []
+    seen: set[tuple[str, tuple[str, ...]]] = set()
     if isinstance(value, list):
         for item in value[:MAX_EXPLORATION_IMAGES]:
             if not isinstance(item, dict):
@@ -97,7 +98,9 @@ def _exploration_variants(value: object, count: int) -> list[dict[str, object]]:
                 if isinstance(raw_delta, list)
                 else []
             )
-            if label and delta:
+            key = (label.casefold(), tuple(entry.casefold() for entry in delta))
+            if label and delta and key not in seen:
+                seen.add(key)
                 variants.append({"label": label, "delta": delta})
             if len(variants) >= count:
                 break

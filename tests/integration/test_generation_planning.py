@@ -65,6 +65,41 @@ class TestGenerationPlanning(unittest.TestCase):
         )
         self.assertTrue(all("受控探索方案" in prompt for prompt in plan.prompts))
 
+    def test_explore_deduplicates_normalized_variants_and_requires_enough_unique_ones(self):
+        draft = {
+            "language": "zh",
+            "exploration_plan": [
+                {"label": " 中心层级 ", "delta": [" 主体采用中心构图 "]},
+                {"label": "中心层级", "delta": ["主体采用中心构图"]},
+                {"label": "非对称留白", "delta": ["右侧保留呼吸空间"]},
+            ],
+        }
+
+        plan = GenerationPlan.build(
+            strategy="explore",
+            prompt="一张产品海报",
+            count=2,
+            draft=draft,
+            series_anchor=None,
+            max_prompt_characters=8000,
+        )
+
+        self.assertEqual(
+            [item["label"] for item in plan.metadata["variant_plan"]],
+            ["中心层级", "非对称留白"],
+        )
+        self.assertEqual(len(set(plan.prompts)), 2)
+
+        with self.assertRaisesRegex(ServiceError, "没有足够的探索方案"):
+            GenerationPlan.build(
+                strategy="explore",
+                prompt="一张产品海报",
+                count=3,
+                draft=draft,
+                series_anchor=None,
+                max_prompt_characters=8000,
+            )
+
     def test_explore_requires_two_to_four_images_and_a_reviewed_draft(self):
         for count in (1, 5):
             with self.subTest(count=count), self.assertRaises(ServiceError):
