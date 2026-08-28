@@ -292,14 +292,21 @@ test("background removal compares parallel model results and selects the best", 
     .toHaveText("最佳");
   expect(selectedResultId).toBe(alternateResultId);
 
+  await page.locator(`[data-background-removal-result="${lucidaResultId}"]`).click();
+  await expect(page.locator("#backgroundRemovalPreviewImage")).toHaveAttribute("src", lucidaUrl);
+
   const layout = await page.evaluate(() => {
     const dialog = document.getElementById("backgroundRemovalDialog");
     const preview = document.getElementById("backgroundRemovalPreviewPane");
+    const previewFrame = document.getElementById("backgroundRemovalPreview");
+    const previewImage = document.getElementById("backgroundRemovalPreviewImage");
     const results = dialog.querySelector(".background-removal-results-pane");
     const selectBest = document.getElementById("backgroundRemovalSelectBest");
     const downloadAll = document.getElementById("backgroundRemovalDownloadAll");
     const box = dialog.getBoundingClientRect();
     const previewBox = preview.getBoundingClientRect();
+    const previewFrameBox = previewFrame.getBoundingClientRect();
+    const previewImageBox = previewImage.getBoundingClientRect();
     const resultsBox = results.getBoundingClientRect();
     const selectBox = selectBest.getBoundingClientRect();
     const downloadBox = downloadAll.getBoundingClientRect();
@@ -312,6 +319,10 @@ test("background removal compares parallel model results and selects the best", 
         && box.top >= 0 && box.bottom <= window.innerHeight,
       noHorizontalOverflow: dialog.scrollWidth <= dialog.clientWidth + 1,
       panesDoNotOverlap: !overlaps(previewBox, resultsBox),
+      previewImageFits: previewImageBox.left >= previewFrameBox.left - 1
+        && previewImageBox.right <= previewFrameBox.right + 1
+        && previewImageBox.top >= previewFrameBox.top - 1
+        && previewImageBox.bottom <= previewFrameBox.bottom + 1,
       actionsDoNotOverlap: !overlaps(selectBox, downloadBox),
       modelLabelsFit: [...document.querySelectorAll(".background-removal-model-option")]
         .every((option) => option.scrollWidth <= option.clientWidth + 1),
@@ -321,6 +332,7 @@ test("background removal compares parallel model results and selects the best", 
     dialogFitsViewport: true,
     noHorizontalOverflow: true,
     panesDoNotOverlap: true,
+    previewImageFits: true,
     actionsDoNotOverlap: true,
     modelLabelsFit: true,
   });
