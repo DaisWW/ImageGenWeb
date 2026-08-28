@@ -69,8 +69,15 @@
           UI.toast("暂无可用渠道", "error");
           return;
         }
-        if (!this.currentChannelHasCapacity()) {
-          UI.toast(`${channel.label} 当前没有空闲槽位，请选择其他渠道`, "error");
+        const requestedCount = this.generationCount();
+        if (!this.currentChannelHasCapacity(requestedCount)) {
+          const availableSlots = this.currentChannelAvailableSlots();
+          UI.toast(
+            availableSlots
+              ? `${channel.label} 当前仅剩 ${availableSlots} 个空闲槽位，请减少生成张数或选择其他渠道`
+              : `${channel.label} 当前没有空闲槽位，请选择其他渠道`,
+            "error",
+          );
           return;
         }
         if (!this.validateSizeInput(true)) return;

@@ -126,9 +126,9 @@
         const option = document.createElement("option");
         option.value = channel.id;
         const maximum = Number(channel.limits?.max_concurrency || 0);
-        const active = Number(channel.active_count);
+        const occupied = Number(channel.occupied_count ?? channel.active_count);
         const occupancy = maximum > 0
-          ? ` · ${Number.isFinite(active) ? Math.max(0, active) : 0} / ${maximum}`
+          ? ` · ${Number.isFinite(occupied) ? Math.max(0, occupied) : 0} / ${maximum}`
           : "";
         const unitPrice = UI.money(channel.price_rmb);
         const unavailable = channel.configured === false;
@@ -200,6 +200,7 @@
       this.ensureSeriesAnchorSelection(selection);
       this.trimReferenceSelection(selection, this.generationReferenceLimit());
       this.el.generateButton.disabled = false;
+      this.normalizeGenerationCount?.(true);
       this.renderReferences();
       this.updatePrice();
       this.updateInteractionState();
@@ -404,7 +405,12 @@
     },
 
     generationStrategyPolicy() {
-      return new GenerationStrategyPolicy(this.limits.max_batch_images);
+      const runtimeMaximum = Number(this.limits.max_batch_images);
+      const availableSlots = Number(this.currentChannel?.()?.available_slots);
+      const maximum = Number.isFinite(availableSlots)
+        ? Math.min(runtimeMaximum, Math.max(1, availableSlots))
+        : runtimeMaximum;
+      return new GenerationStrategyPolicy(maximum);
     },
 
     generationCount() {

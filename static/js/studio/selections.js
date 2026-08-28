@@ -51,6 +51,12 @@
       if (!referencesResolved || !referencesWithinRuntimeLimits || !sizeIsValid) return false;
       if ((mode === "img2img" && referenceCount === 0)
         || (mode === "text2img" && referenceCount > 0)) return false;
+      const requestedCount = Math.max(1, Number(settings.batch_count) || 1);
+      const availableSlots = Number(channel.available_slots);
+      if (channel.has_capacity === false
+        || (Number.isFinite(availableSlots) && requestedCount > Math.max(0, availableSlots))) {
+        return false;
+      }
       if (modelId && !(channel.models || []).some((model) => model.id === modelId)) return false;
       if (mode && !(channel.capabilities?.modes || []).includes(mode)) return false;
       if (outputFormat && !(channel.capabilities?.formats || []).includes(outputFormat)) return false;
@@ -73,11 +79,18 @@
       )) || null;
     },
 
-    currentChannelHasCapacity() {
+    currentChannelAvailableSlots() {
       const channel = this.currentChannel();
-      return Boolean(channel && (
-        channel.has_capacity === undefined || channel.has_capacity === true
-      ));
+      if (!channel) return 0;
+      const available = Number(channel.available_slots);
+      if (Number.isFinite(available)) return Math.max(0, available);
+      return channel.has_capacity === false ? 0 : Number(this.limits?.max_batch_images || 1);
+    },
+
+    currentChannelHasCapacity(requestedCount = 1) {
+      const channel = this.currentChannel();
+      if (!channel || channel.has_capacity === false) return false;
+      return this.currentChannelAvailableSlots() >= Math.max(1, Number(requestedCount) || 1);
     },
 
     renderCreativeDirectionOptions(selectedId = "auto") {
