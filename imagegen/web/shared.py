@@ -8,7 +8,7 @@ from flask_login import current_user, login_required
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from ..config import ChannelRegistry, ChatModelRegistry
+from ..config import ChannelRegistry, ChatModelRegistry, MattingModelRegistry
 from ..container import ApplicationServices
 from ..errors import ServiceError
 from ..extensions import db
@@ -28,6 +28,10 @@ def channels() -> ChannelRegistry:
 
 def chat_models() -> ChatModelRegistry:
     return current_app.extensions["chat_model_registry"]
+
+
+def matting_models() -> MattingModelRegistry:
+    return current_app.extensions["matting_model_registry"]
 
 
 def storage() -> ImageStorage:

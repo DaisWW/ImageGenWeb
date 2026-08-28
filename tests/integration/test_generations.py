@@ -493,27 +493,28 @@ class TestGenerations(PlatformTestCase):
             [asset.id for asset in reversed(assets)],
         )
 
-    def test_transparent_background_is_validated_persisted_and_serialized(self):
+    def test_legacy_transparent_background_input_is_ignored(self):
         workspace = self.create_workspace()
-        with self.assertRaisesRegex(ServiceError, "透明背景仅支持 PNG 格式"):
-            self.submit(
-                workspace,
-                output_format="jpeg",
-                transparent_background=True,
-            )
+        legacy_job = self.submit(
+            workspace,
+            output_format="jpeg",
+            transparent_background=True,
+        )
+        self.assertFalse(legacy_job.transparent_background)
 
+        webp_workspace = self.create_workspace("透明 WebP")
         client = self.user_client()
-        draft = self.create_ready_prompt_draft(workspace, prompt="极简云朵图标")
+        draft = self.create_ready_prompt_draft(webp_workspace, prompt="极简云朵图标")
         response = client.post(
             "/api/generations",
             json={
-                "workspace_id": workspace.id,
+                "workspace_id": webp_workspace.id,
                 "channel_id": "test",
                 "model": "model-b",
                 "mode": "text2img",
                 "prompt": "极简云朵图标",
                 "size": "1024x1024",
-                "output_format": "png",
+                "output_format": "webp",
                 "compression": 90,
                 "batch_count": 1,
                 "reference_ids": [],
@@ -524,18 +525,11 @@ class TestGenerations(PlatformTestCase):
         )
 
         self.assertEqual(response.status_code, 202)
-        self.assertTrue(response.json["job"]["transparent_background"])
-        db.session.refresh(workspace)
-        self.assertTrue(workspace.settings["transparent_background"])
+        self.assertFalse(response.json["job"]["transparent_background"])
+        db.session.refresh(webp_workspace)
+        self.assertNotIn("transparent_background", webp_workspace.settings)
         saved_job = db.session.get(GenerationJob, response.json["job"]["id"])
-        self.assertTrue(saved_job.transparent_background)
-
-        with self.assertRaisesRegex(ServiceError, "透明背景仅支持 PNG 格式"):
-            self.submit(
-                self.create_workspace("透明 WebP"),
-                output_format="webp",
-                transparent_background=True,
-            )
+        self.assertFalse(saved_job.transparent_background)
 
     def test_custom_size_is_accepted_and_normalized(self):
         workspace = self.create_workspace()

@@ -1,5 +1,6 @@
 from ..errors import ServiceError
 from .auth import AuthService
+from .background_removal import BackgroundRemovalService
 from .billing import BillingService, SpendingSummary
 from .common import money
 from .conversations import ConversationService
@@ -18,6 +19,7 @@ from .workspaces import WorkspaceService
 
 __all__ = [
     "AuthService",
+    "BackgroundRemovalService",
     "BillingService",
     "ConversationService",
     "GenerationService",

@@ -166,6 +166,7 @@ function Initialize-EnvironmentFile {
     Set-EnvValue $lines "LUCIDA_MATTING_URL" "http://lucida:8000" -ReplaceBlank | Out-Null
     Set-EnvValue $lines "LUCIDA_MATTING_MODEL" "lucida" -ReplaceBlank | Out-Null
     Set-EnvValue $lines "LUCIDA_MATTING_TIMEOUT_SECONDS" "120" -ReplaceBlank | Out-Null
+    Set-EnvValue $lines "BACKGROUND_REMOVAL_CONCURRENCY" "2" -ReplaceBlank | Out-Null
     Set-EnvValue $lines "LUCIDA_TORCH_INDEX_URL" "https://download.pytorch.org/whl/cu124" -ReplaceBlank | Out-Null
     Set-EnvValue $lines "LUCIDA_MODEL_PATH" "./.tmp-lucida-src/lucida-main/.model/lucida" -ReplaceBlank | Out-Null
     Set-EnvValue $lines "IMAGEGEN_PORT" ([string]$Port) | Out-Null
@@ -572,7 +573,7 @@ try {
     } else {
         Write-Host "本机地址：http://127.0.0.1:$Port"
     }
-    Write-Host "透明背景：勾选后自动经 Lucida 后处理（LUCIDA_MATTING_URL=http://lucida:8000）"
+    Write-Host "背景透明化：在图片详情页选择 Lucida 或其他已配置模型并行比较（LUCIDA_MATTING_URL=http://lucida:8000）"
     if ($httpsProxyEnabled) {
         Write-Host "HTTPS 反向代理：https://${httpsHost}:${httpsPort}" -ForegroundColor Green
     }

@@ -111,12 +111,6 @@
               <button type="button" class="mode-button active" data-mode="text2img" aria-pressed="true"><i data-lucide="type"></i>文生图</button>
               <button type="button" class="mode-button" data-mode="img2img" aria-pressed="false"><i data-lucide="images"></i>垫图生图</button>
             </div>
-            <label class="toggle-line generation-toggle transparent-background-control" id="transparentBackgroundControl" title="生成后由 Lucida 自动抠成真实透明 PNG（不请求上游原生透明）">
-              <span class="transparent-background-swatch" aria-hidden="true"></span>
-              <span class="transparent-background-copy"><strong>透明背景</strong><small>真实透明 PNG</small></span>
-              <input type="checkbox" id="transparentBackground">
-              <span class="toggle-track"><span></span></span>
-            </label>
             <label class="compact-field channel-field"><span>渠道</span><select id="channelSelect" required></select></label>
             <label class="compact-field model-field"><span>模型</span><select id="modelSelect" required></select></label>
             <label class="compact-field"><span>尺寸</span><input id="sizeInput" list="sizeOptions" maxlength="20" placeholder="1024x1024" autocomplete="off" required><datalist id="sizeOptions"></datalist></label>
@@ -229,6 +223,7 @@
       <div class="detail-actions">
         <button class="button secondary ui-kit-action" type="button" id="detailUiKit" title="把完整游戏界面作为结构和风格参考，先拆解组件树，再逐个重建可开发的原子资源。"><i data-lucide="component"></i>重建开发 UI Kit</button>
         <button class="button secondary" type="button" id="detailSlice" title="识别规则排列的图集网格；确认行列和切片后，可下载或存入图库。"><i data-lucide="grid-2x2"></i>规则切图</button>
+        <button class="button secondary" type="button" id="detailBackgroundRemoval" title="使用一个或多个模型生成透明背景候选并比较结果。"><i data-lucide="wand-sparkles"></i>背景透明化</button>
         <button class="button secondary" type="button" id="detailSaveLibrary" title="将当前生成图保存到工作站图库，便于以后作为参考图复用。"><i data-lucide="bookmark-plus"></i>存入图库</button>
         <button class="button secondary" type="button" id="detailRunReview" title="让 AI 按提示词和硬门槛检查当前图片，并给出单点修正建议。"><i data-lucide="scan-search"></i>AI 验收</button>
         <button class="button secondary" type="button" id="detailApplyReview" title="把当前图作为参考并载入验收建议，继续生成精修版本。" hidden><i data-lucide="wrench"></i>按建议继续</button>
@@ -278,6 +273,48 @@
         <button class="button primary" type="button" id="sliceDownload"><i data-lucide="file-archive"></i>下载 ZIP</button>
       </div>
     </aside>
+  </div>
+</dialog>
+
+<dialog class="modal background-removal-modal" id="backgroundRemovalDialog">
+  <div class="background-removal-dialog">
+    <header class="background-removal-header">
+      <div><span class="eyebrow">Background Removal</span><h2>背景透明化</h2></div>
+      <span class="background-removal-status" id="backgroundRemovalStatus">未处理</span>
+      <button class="icon-button" type="button" data-close-dialog="backgroundRemovalDialog" aria-label="关闭"><i data-lucide="x"></i></button>
+    </header>
+    <section class="background-removal-models">
+      <div class="background-removal-section-heading"><strong>处理模型</strong><span id="backgroundRemovalModelSummary">已选择 0 个</span></div>
+      <div class="background-removal-model-list" id="backgroundRemovalModelList"></div>
+      <button class="button primary" type="button" id="backgroundRemovalStart"><i data-lucide="play"></i>开始处理</button>
+    </section>
+    <div class="background-removal-workspace">
+      <section class="background-removal-preview-pane" id="backgroundRemovalPreviewPane" data-background="checker">
+        <div class="background-removal-preview-toolbar">
+          <strong id="backgroundRemovalPreviewLabel">结果预览</strong>
+          <div class="background-removal-background-switch" role="group" aria-label="预览背景">
+            <button class="icon-button active" type="button" data-background-removal-background="checker" title="棋盘格背景" aria-label="棋盘格背景"><i data-lucide="grid-2x2"></i></button>
+            <button class="icon-button" type="button" data-background-removal-background="white" title="白色背景" aria-label="白色背景"><i data-lucide="sun"></i></button>
+            <button class="icon-button" type="button" data-background-removal-background="black" title="黑色背景" aria-label="黑色背景"><i data-lucide="moon"></i></button>
+          </div>
+        </div>
+        <div class="background-removal-preview" id="backgroundRemovalPreview">
+          <div class="background-removal-preview-empty" id="backgroundRemovalPreviewEmpty"><i data-lucide="image"></i><span>等待透明化结果</span></div>
+          <img id="backgroundRemovalPreviewImage" alt="透明化结果预览" decoding="async" hidden>
+        </div>
+      </section>
+      <aside class="background-removal-results-pane">
+        <div class="background-removal-section-heading"><strong>候选结果</strong><span id="backgroundRemovalResultSummary">0 个结果</span></div>
+        <div class="background-removal-result-list" id="backgroundRemovalResultList"></div>
+      </aside>
+    </div>
+    <footer class="background-removal-actions">
+      <span id="backgroundRemovalSelectionSummary">尚未选择最佳结果</span>
+      <div>
+        <button class="button secondary" type="button" id="backgroundRemovalSelectBest" disabled><i data-lucide="check"></i>设为最佳</button>
+        <a class="button primary" id="backgroundRemovalDownloadAll" aria-disabled="true"><i data-lucide="file-archive"></i>下载全部</a>
+      </div>
+    </footer>
   </div>
 </dialog>
 

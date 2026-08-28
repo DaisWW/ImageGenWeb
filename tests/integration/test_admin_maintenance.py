@@ -10,10 +10,12 @@ from unittest.mock import ANY, call, patch
 
 from sqlalchemy import event, func, select
 
-from imagegen.config.repository import CHANNEL_CONFIG_KEY, CHAT_CONFIG_KEY
+from imagegen.config.repository import CHANNEL_CONFIG_KEY, CHAT_CONFIG_KEY, MATTING_CONFIG_KEY
 from imagegen.extensions import db
 from imagegen.models import (
     AuditLog,
+    BackgroundRemovalResult,
+    GenerationItem,
     GenerationJob,
     RuntimeLog,
     SystemState,
@@ -357,6 +359,88 @@ class TestAdminAndMaintenance(PlatformTestCase):
         self.assertEqual(model.review_reasoning_effort, "low")
         stored = db.session.get(SystemState, CHAT_CONFIG_KEY)
         self.assertNotIn("replacement-chat-key", stored.value)
+
+    def test_admin_matting_config_preserves_order_without_recommendation_metadata(self):
+        client = self.admin_client()
+        config = client.get("/api/admin/matting-models").json["config"]
+        self.assertEqual([model["id"] for model in config["models"]], ["lucida"])
+        self.assertNotIn("recommended", config["models"][0])
+        config["models"][0]["base_url"] = "http://lucida.test"
+        config["models"].append(
+            {
+                "id": "alternate",
+                "label": "备选模型",
+                "enabled": True,
+                "base_url": "http://alternate.test",
+                "model": "alternate-v1",
+                "timeout_seconds": 45,
+                "max_concurrency": 2,
+            }
+        )
+
+        response = client.put("/api/admin/matting-models", json=config)
+
+        self.assertEqual(response.status_code, 200)
+        saved = response.json["config"]
+        self.assertTrue(saved["managed"])
+        self.assertEqual(saved["source"], "database")
+        self.assertEqual([model["id"] for model in saved["models"]], ["lucida", "alternate"])
+        self.assertTrue(all("recommended" not in model for model in saved["models"]))
+        self.assertEqual(
+            [model.identifier for model in self.app.extensions["matting_model_registry"].list()],
+            ["lucida", "alternate"],
+        )
+        self.assertIsNotNone(db.session.get(SystemState, MATTING_CONFIG_KEY))
+
+    def test_admin_cannot_disable_or_delete_matting_model_with_active_results(self):
+        client = self.admin_client()
+        config = client.get("/api/admin/matting-models").json["config"]
+        config["models"][0]["base_url"] = "http://lucida.test"
+        config["models"].append(
+            {
+                "id": "alternate",
+                "label": "备选模型",
+                "enabled": True,
+                "base_url": "http://alternate.test",
+                "model": "alternate-v1",
+                "timeout_seconds": 45,
+                "max_concurrency": 1,
+            }
+        )
+        saved = client.put("/api/admin/matting-models", json=config).json["config"]
+        workspace = self.create_workspace("透明化配置保护")
+        job = self.submit(workspace)
+        worker = self.create_worker()
+        worker.providers = FakeProviderFactory()
+        channel = self.app.extensions["channel_registry"].get("test")
+        item_id = job.items[0].id
+        self.assertTrue(worker._claim(item_id, channel))
+        worker._process_item(item_id)
+        db.session.expire_all()
+        item = db.session.get(GenerationItem, item_id)
+        run = self.services.background_removal.submit(
+            item.id,
+            user_id=self.user.id,
+            model_ids=("lucida",),
+        )
+        result_id = run.results[0].id
+
+        without_lucida = json.loads(json.dumps(saved))
+        without_lucida["models"] = [
+            model for model in without_lucida["models"] if model["id"] != "lucida"
+        ]
+        queued = client.put("/api/admin/matting-models", json=without_lucida)
+        self.assertEqual(queued.status_code, 409)
+        self.assertEqual(queued.json["code"], "matting_model_in_use")
+
+        result = db.session.get(BackgroundRemovalResult, result_id)
+        result.status = "running"
+        db.session.commit()
+        disabled_lucida = json.loads(json.dumps(saved))
+        disabled_lucida["models"][0]["enabled"] = False
+        running = client.put("/api/admin/matting-models", json=disabled_lucida)
+        self.assertEqual(running.status_code, 409)
+        self.assertEqual(running.json["code"], "matting_model_in_use")
 
     def test_invalid_hot_reload_keeps_previous_channel_snapshot(self):
         registry = self.app.extensions["channel_registry"]

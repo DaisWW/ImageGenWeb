@@ -133,6 +133,21 @@ class ImageStorage:
         relative = directory / f"{item_id}.{inspected.extension}"
         return self._save_with_thumbnail(relative, content, inspected)
 
+    def save_background_removal(
+        self,
+        *,
+        user_id: int,
+        workspace_id: str,
+        job_id: str,
+        result_id: str,
+        content: bytes,
+    ) -> StoredOutput:
+        inspected = self.inspect(content)
+        directory = Path("users") / str(user_id) / "workspaces" / workspace_id / "generations"
+        directory = directory / job_id / "background-removals"
+        relative = directory / f"{result_id}.{inspected.extension}"
+        return self._save_with_thumbnail(relative, content, inspected)
+
     def _save_with_thumbnail(
         self,
         relative: Path,

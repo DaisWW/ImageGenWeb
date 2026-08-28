@@ -13,6 +13,7 @@ test("image detail actions explain their purpose", async ({ studioPage: page }) 
   expect(titles).toEqual({
     detailUiKit: "把完整游戏界面作为结构和风格参考，先拆解组件树，再逐个重建可开发的原子资源。",
     detailSlice: "识别规则排列的图集网格；确认行列和切片后，可下载或存入图库。",
+    detailBackgroundRemoval: "使用一个或多个模型生成透明背景候选并比较结果。",
     detailSaveLibrary: "将当前生成图保存到工作站图库，便于以后作为参考图复用。",
     detailRunReview: "让 AI 按提示词和硬门槛检查当前图片，并给出单点修正建议。",
     detailApplyReview: "把当前图作为参考并载入验收建议，继续生成精修版本。",
@@ -62,6 +63,259 @@ test("image detail actions explain their purpose", async ({ studioPage: page }) 
       text: "当前系列基准",
       title: "当前图已是系列固定参考；后续生成会优先保持主体、风格和构图一致。",
     },
+  });
+});
+
+test("background removal compares parallel model results and selects the best", {
+  tag: "@responsive",
+}, async ({ studioPage: page }) => {
+  const workspaceId = await page.locator("#workspaceList .workspace-item.active")
+    .getAttribute("data-workspace-id");
+  const createdAt = new Date().toISOString();
+  const itemId = "e2e-background-removal-item";
+  const runId = "e2e-background-removal-run";
+  const lucidaResultId = "e2e-background-removal-lucida";
+  const alternateResultId = "e2e-background-removal-alternate";
+  const sourceUrl = "/static/assets/starter-ocean-sky-reference.png";
+  const lucidaUrl = "/static/assets/brand-mark-v2.png";
+  const alternateUrl = "/static/assets/starter-ocean-sky-reference.png";
+  const completedJob = {
+    id: "e2e-background-removal-job",
+    workspace_id: workspaceId,
+    status: "succeeded",
+    progress_percent: 100,
+    queue_position: null,
+    queue_total: 0,
+    estimated_end_at: null,
+    is_over_estimate: false,
+    kind: "image",
+    channel_id: "e2e",
+    channel: "E2E 渠道",
+    mode: "text2img",
+    prompt: "带纯色背景的商品图标",
+    model: "e2e-image",
+    size: "1024x1024",
+    quality: "high",
+    workflow: { generation_stage: "final" },
+    output_format: "png",
+    compression: 90,
+    transparent_background: false,
+    requested_count: 1,
+    price_per_image_rmb: "0.0300",
+    charged_rmb: "0.0300",
+    reserved_rmb: "0.0000",
+    created_at: createdAt,
+    started_at: createdAt,
+    completed_at: createdAt,
+    succeeded_count: 1,
+    failed_count: 0,
+    canceled_count: 0,
+    can_cancel: false,
+    references: [],
+    items: [{
+      id: itemId,
+      position: 0,
+      status: "succeeded",
+      progress_percent: 100,
+      started_at: createdAt,
+      completed_at: createdAt,
+      estimated_seconds: 1,
+      estimated_end_at: createdAt,
+      elapsed_seconds: 1.1,
+      charged_rmb: "0.0300",
+      error: null,
+      width: 512,
+      height: 512,
+      bytes: 2048,
+      image_url: sourceUrl,
+      thumbnail_url: sourceUrl,
+      download_url: sourceUrl,
+      review: {},
+    }],
+  };
+  const models = [
+    {
+      id: "lucida",
+      label: "Lucida",
+      enabled: true,
+      configured: true,
+      model: "lucida",
+      max_concurrency: 1,
+    },
+    {
+      id: "alternate",
+      label: "备选模型",
+      enabled: true,
+      configured: true,
+      model: "alternate-v1",
+      max_concurrency: 2,
+    },
+  ];
+  const lucidaResult = {
+    id: lucidaResultId,
+    model_id: "lucida",
+    model_label: "Lucida",
+    status: "succeeded",
+    selected: false,
+    elapsed_seconds: 0.8,
+    error: null,
+    image_url: lucidaUrl,
+    thumbnail_url: lucidaUrl,
+    download_url: `/api/background-removal-results/${lucidaResultId}/download`,
+  };
+  const alternateRunning = {
+    id: alternateResultId,
+    model_id: "alternate",
+    model_label: "备选模型",
+    status: "running",
+    selected: false,
+    elapsed_seconds: null,
+    error: null,
+    image_url: null,
+    thumbnail_url: null,
+    download_url: null,
+  };
+  const alternateResult = {
+    ...alternateRunning,
+    status: "succeeded",
+    elapsed_seconds: 1.6,
+    image_url: alternateUrl,
+    thumbnail_url: alternateUrl,
+    download_url: `/api/background-removal-results/${alternateResultId}/download`,
+  };
+  const runningRun = {
+    id: runId,
+    status: "running",
+    selected_result_id: null,
+    results: [lucidaResult, alternateRunning],
+  };
+  const completedRun = {
+    ...runningRun,
+    status: "succeeded",
+    results: [lucidaResult, alternateResult],
+  };
+  const selectedRun = {
+    ...completedRun,
+    selected_result_id: alternateResultId,
+    results: [lucidaResult, { ...alternateResult, selected: true }],
+  };
+  let submittedModelIds = null;
+  let submitted = false;
+  let releaseCompleted;
+  const completedAvailable = new Promise((resolve) => {
+    releaseCompleted = resolve;
+  });
+  let selectedResultId = null;
+
+  await page.route("**/api/generations*", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/api/generations/active") {
+      await route.fulfill({ json: { jobs: [] } });
+      return;
+    }
+    if (url.pathname === "/api/generations") {
+      await route.fulfill({ json: { jobs: [completedJob], queue_total: 0 } });
+      return;
+    }
+    await route.continue();
+  });
+  await page.route(`**/api/generation-items/${itemId}/background-removal`, async (route) => {
+    if (route.request().method() === "POST") {
+      submittedModelIds = route.request().postDataJSON().model_ids;
+      submitted = true;
+      await route.fulfill({ status: 202, json: { run: runningRun } });
+      return;
+    }
+    if (!submitted) {
+      await route.fulfill({ json: { models, run: null } });
+      return;
+    }
+    await completedAvailable;
+    await route.fulfill({ json: { models, run: completedRun } });
+  });
+  await page.route(`**/api/background-removal-results/${alternateResultId}/select`, async (route) => {
+    selectedResultId = alternateResultId;
+    await route.fulfill({ json: { run: selectedRun } });
+  });
+
+  await page.reload();
+  await page.locator(`[data-item-id="${itemId}"]`).click();
+  await page.locator("#detailBackgroundRemoval").click();
+  await expect(page.locator("#backgroundRemovalDialog")).toBeVisible();
+  const modelOptions = page.locator("#backgroundRemovalModelList .background-removal-model-option");
+  await expect(modelOptions).toHaveCount(2);
+  await expect(modelOptions.nth(0)).toContainText("Lucida");
+  await expect(modelOptions.nth(0)).not.toContainText("推荐");
+  await expect(modelOptions.nth(0).locator("input")).toBeChecked();
+  await expect(modelOptions.nth(1).locator("input")).not.toBeChecked();
+  await modelOptions.nth(1).locator("input").check();
+  await expect(page.locator("#backgroundRemovalModelSummary")).toHaveText("已选择 2 个");
+
+  await page.locator("#backgroundRemovalStart").click();
+  await expect(page.locator("#backgroundRemovalResultSummary")).toHaveText("1 / 2 个完成");
+  expect(submittedModelIds).toEqual(["lucida", "alternate"]);
+  await expect(page.locator("#backgroundRemovalPreviewLabel")).toHaveText("Lucida");
+  await expect(page.locator("#backgroundRemovalPreviewImage")).toHaveAttribute("src", lucidaUrl);
+  await expect(page.locator("#backgroundRemovalResultList")).toContainText("处理中");
+
+  await page.getByRole("button", { name: "白色背景" }).click();
+  await expect(page.locator("#backgroundRemovalPreviewPane")).toHaveAttribute("data-background", "white");
+  await page.getByRole("button", { name: "黑色背景" }).click();
+  await expect(page.locator("#backgroundRemovalPreviewPane")).toHaveAttribute("data-background", "black");
+
+  releaseCompleted();
+  await expect(page.locator("#backgroundRemovalResultSummary")).toHaveText("2 / 2 个完成");
+  await expect(page.locator("#backgroundRemovalStatus")).toHaveText("已完成");
+  await page.locator(`[data-background-removal-result="${alternateResultId}"]`).click();
+  await expect(page.locator("#backgroundRemovalPreviewLabel")).toHaveText("备选模型");
+  await expect(page.locator("#backgroundRemovalPreviewImage")).toHaveAttribute("src", alternateUrl);
+  await expect(page.getByTitle("下载 备选模型 结果")).toHaveAttribute(
+    "href",
+    `/api/background-removal-results/${alternateResultId}/download`,
+  );
+  await expect(page.locator("#backgroundRemovalDownloadAll")).toHaveAttribute(
+    "href",
+    `/api/background-removal-runs/${runId}/download`,
+  );
+
+  await page.locator("#backgroundRemovalSelectBest").click();
+  await expect(page.locator("#backgroundRemovalSelectionSummary"))
+    .toHaveText("最佳结果：备选模型");
+  await expect(page.locator("#backgroundRemovalResultList .background-removal-best"))
+    .toHaveText("最佳");
+  expect(selectedResultId).toBe(alternateResultId);
+
+  const layout = await page.evaluate(() => {
+    const dialog = document.getElementById("backgroundRemovalDialog");
+    const preview = document.getElementById("backgroundRemovalPreviewPane");
+    const results = dialog.querySelector(".background-removal-results-pane");
+    const selectBest = document.getElementById("backgroundRemovalSelectBest");
+    const downloadAll = document.getElementById("backgroundRemovalDownloadAll");
+    const box = dialog.getBoundingClientRect();
+    const previewBox = preview.getBoundingClientRect();
+    const resultsBox = results.getBoundingClientRect();
+    const selectBox = selectBest.getBoundingClientRect();
+    const downloadBox = downloadAll.getBoundingClientRect();
+    const overlaps = (first, second) => (
+      first.left < second.right && first.right > second.left
+      && first.top < second.bottom && first.bottom > second.top
+    );
+    return {
+      dialogFitsViewport: box.left >= 0 && box.right <= window.innerWidth
+        && box.top >= 0 && box.bottom <= window.innerHeight,
+      noHorizontalOverflow: dialog.scrollWidth <= dialog.clientWidth + 1,
+      panesDoNotOverlap: !overlaps(previewBox, resultsBox),
+      actionsDoNotOverlap: !overlaps(selectBox, downloadBox),
+      modelLabelsFit: [...document.querySelectorAll(".background-removal-model-option")]
+        .every((option) => option.scrollWidth <= option.clientWidth + 1),
+    };
+  });
+  expect(layout).toEqual({
+    dialogFitsViewport: true,
+    noHorizontalOverflow: true,
+    panesDoNotOverlap: true,
+    actionsDoNotOverlap: true,
+    modelLabelsFit: true,
   });
 });
 
@@ -486,7 +740,7 @@ test("image detail keeps its reference through multi-turn refinement", {
   await expect(page.locator("#creativeDirectionSelect")).toHaveValue("game_ui");
   await expect(page.locator("#formatSelect")).toHaveValue("png");
   await expect(page.locator("#sizeInput")).toHaveValue("1024x1024");
-  await expect(page.locator("#transparentBackground")).toBeChecked();
+  await expect(page.locator("#transparentBackground")).toHaveCount(0);
   await expect(page.locator("#batchCount")).toHaveValue("1");
 
   await page.locator(`[data-item-id="${itemId}"]`).click();

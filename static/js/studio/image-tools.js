@@ -12,8 +12,15 @@
   const UI_KIT_RECONSTRUCTION_PROMPT = [
     "我要把参考图重建为可直接开发使用的游戏 UI Kit。不要抠取、分割或复制原图像素，也不要直接生成整屏、组件展示板或图集。",
     "请先把参考界面整理成“模块 → 原子资源”组件树，明确区分：可九宫格拉伸的空面板/边框、独立图标/装饰、状态条轨道/填充/开关状态，以及必须由引擎渲染的文字和动态数值。",
-    "本轮只做组件拆解，并用一个选择问题让我选定一个原子资源；未选定前不要给最终生图提示词。选定后每次只为一个无文字、无动态数值、真实透明背景的独立素材整理提示词。",
+    "本轮只做组件拆解，并用一个选择问题让我选定一个原子资源；未选定前不要给最终生图提示词。选定后每次只为一个无文字、无动态数值的独立素材整理提示词，并要求主体完整、轮廓清晰，使用纯色且与主体反差明显的均匀背景，便于后续透明化。",
   ].join("\n\n");
+  const BACKGROUND_REMOVAL_STATUS = {
+    queued: "排队中",
+    running: "处理中",
+    succeeded: "已完成",
+    partial: "部分完成",
+    failed: "处理失败",
+  };
 
   Object.assign(StudioApp.prototype, {
     refreshDetailSeriesAnchorState(job = null, item = null) {
@@ -86,6 +93,287 @@
       this.el.detailDownload.href = item.download_url;
       this.refreshDetailSeriesAnchorState(job, item);
       UI.openDialog(this.el.imageDialog);
+    },
+
+    async openBackgroundRemovalTool() {
+      const job = this.jobs.find((entry) => entry.id === this.detailJobId);
+      const item = job?.items.find((entry) => entry.id === this.detailItemId);
+      if (!item?.image_url || this.el.detailBackgroundRemoval.disabled) return;
+      this.el.detailBackgroundRemoval.disabled = true;
+      this.backgroundRemovalItemId = item.id;
+      this.backgroundRemovalModels = [];
+      this.backgroundRemovalRun = null;
+      this.backgroundRemovalActiveResultId = null;
+      this.backgroundRemovalSubmitting = false;
+      this.renderBackgroundRemovalModels();
+      this.renderBackgroundRemovalRun();
+      UI.closeDialog(this.el.imageDialog);
+      UI.openDialog(this.el.backgroundRemovalDialog);
+      try {
+        const data = await UI.api(
+          `/api/generation-items/${item.id}/background-removal`,
+        );
+        if (this.backgroundRemovalItemId !== item.id) return;
+        this.backgroundRemovalModels = data.models || [];
+        this.backgroundRemovalRun = data.run || null;
+        const existingModelIds = new Set(
+          (this.backgroundRemovalRun?.results || []).map((result) => result.model_id),
+        );
+        this.renderBackgroundRemovalModels(existingModelIds);
+        this.chooseBackgroundRemovalPreview();
+        this.renderBackgroundRemovalRun();
+        this.scheduleBackgroundRemovalPoll();
+      } catch (error) {
+        if (this.backgroundRemovalItemId !== item.id) return;
+        UI.closeDialog(this.el.backgroundRemovalDialog);
+        UI.openDialog(this.el.imageDialog);
+        UI.toast(error.message, "error");
+      } finally {
+        this.el.detailBackgroundRemoval.disabled = false;
+      }
+    },
+
+    renderBackgroundRemovalModels(selectedIds = null) {
+      const selected = selectedIds instanceof Set
+        ? selectedIds
+        : new Set(this.checkedBackgroundRemovalModelIds());
+      if (!selected.size && this.backgroundRemovalModels[0]) {
+        selected.add(this.backgroundRemovalModels[0].id);
+      }
+      this.el.backgroundRemovalModelList.replaceChildren(
+        ...this.backgroundRemovalModels.map((model) => {
+          const label = document.createElement("label");
+          label.className = "background-removal-model-option";
+          const input = document.createElement("input");
+          input.type = "checkbox";
+          input.value = model.id;
+          input.checked = selected.has(model.id);
+          const copy = document.createElement("span");
+          const name = document.createElement("strong");
+          name.textContent = model.label;
+          const upstream = document.createElement("small");
+          upstream.textContent = model.model;
+          copy.append(name, upstream);
+          label.append(input, copy);
+          return label;
+        }),
+      );
+      if (!this.backgroundRemovalModels.length) {
+        const empty = document.createElement("span");
+        empty.className = "background-removal-model-empty";
+        empty.textContent = "暂无可用模型";
+        this.el.backgroundRemovalModelList.append(empty);
+      }
+      this.updateBackgroundRemovalModelSelection();
+    },
+
+    checkedBackgroundRemovalModelIds() {
+      return [...this.el.backgroundRemovalModelList.querySelectorAll('input[type="checkbox"]:checked')]
+        .map((input) => input.value);
+    },
+
+    handleBackgroundRemovalModelSelection(event) {
+      const selected = this.checkedBackgroundRemovalModelIds();
+      if (selected.length > 8) {
+        event.target.checked = false;
+        UI.toast("一次最多选择 8 个透明化模型", "error");
+      }
+      this.updateBackgroundRemovalModelSelection();
+    },
+
+    updateBackgroundRemovalModelSelection() {
+      const count = this.checkedBackgroundRemovalModelIds().length;
+      setText(this.el.backgroundRemovalModelSummary, `已选择 ${count} 个`);
+      setDisabled(
+        this.el.backgroundRemovalStart,
+        !count || this.backgroundRemovalSubmitting || !this.backgroundRemovalModels.length,
+      );
+      this.el.backgroundRemovalStart.classList.toggle(
+        "is-loading",
+        this.backgroundRemovalSubmitting,
+      );
+      this.el.backgroundRemovalStart.innerHTML = this.backgroundRemovalSubmitting
+        ? '<i data-lucide="loader-circle"></i>正在提交'
+        : '<i data-lucide="play"></i>开始处理';
+      UI.icons(this.el.backgroundRemovalStart);
+    },
+
+    async startBackgroundRemoval() {
+      const itemId = this.backgroundRemovalItemId;
+      const modelIds = this.checkedBackgroundRemovalModelIds();
+      if (!itemId || !modelIds.length || this.backgroundRemovalSubmitting) return;
+      this.backgroundRemovalSubmitting = true;
+      this.updateBackgroundRemovalModelSelection();
+      try {
+        const data = await UI.api(
+          `/api/generation-items/${itemId}/background-removal`,
+          { method: "POST", body: { model_ids: modelIds } },
+        );
+        if (this.backgroundRemovalItemId !== itemId) return;
+        this.backgroundRemovalRun = data.run;
+        this.chooseBackgroundRemovalPreview();
+        this.renderBackgroundRemovalRun();
+        this.scheduleBackgroundRemovalPoll();
+        UI.toast(`已提交 ${modelIds.length} 个透明化模型`, "success");
+      } catch (error) {
+        UI.toast(error.message, "error");
+      } finally {
+        this.backgroundRemovalSubmitting = false;
+        this.updateBackgroundRemovalModelSelection();
+        this.renderBackgroundRemovalRun();
+      }
+    },
+
+    chooseBackgroundRemovalPreview() {
+      const results = this.backgroundRemovalRun?.results || [];
+      const active = results.find((result) => (
+        result.id === this.backgroundRemovalActiveResultId && result.status === "succeeded"
+      ));
+      if (active) return;
+      const selected = results.find((result) => result.selected && result.status === "succeeded");
+      const firstSucceeded = results.find((result) => result.status === "succeeded");
+      this.backgroundRemovalActiveResultId = selected?.id || firstSucceeded?.id || null;
+    },
+
+    renderBackgroundRemovalRun() {
+      const run = this.backgroundRemovalRun;
+      const results = run?.results || [];
+      const completed = results.filter((result) => result.status === "succeeded");
+      const selected = results.find((result) => result.selected);
+      const active = results.find((result) => result.id === this.backgroundRemovalActiveResultId);
+      const status = run ? (BACKGROUND_REMOVAL_STATUS[run.status] || run.status) : "未处理";
+      setText(this.el.backgroundRemovalStatus, status);
+      this.el.backgroundRemovalStatus.className = `background-removal-status ${run?.status || "idle"}`;
+      setText(
+        this.el.backgroundRemovalResultSummary,
+        results.length ? `${completed.length} / ${results.length} 个完成` : "0 个结果",
+      );
+      this.el.backgroundRemovalResultList.innerHTML = results.map((result) => {
+        const isActive = result.id === this.backgroundRemovalActiveResultId;
+        const state = BACKGROUND_REMOVAL_STATUS[result.status] || result.status;
+        const detail = result.status === "failed"
+          ? (result.error || "处理失败")
+          : result.elapsed_seconds == null ? state : `${state} · ${Number(result.elapsed_seconds).toFixed(1)} 秒`;
+        const preview = result.thumbnail_url
+          ? `<img src="${UI.escapeHtml(result.thumbnail_url)}" alt="${UI.escapeHtml(result.model_label)} 透明化候选" loading="lazy" decoding="async">`
+          : `<span class="background-removal-result-placeholder"><i data-lucide="${result.status === "failed" ? "circle-alert" : "loader-circle"}"></i></span>`;
+        const download = result.download_url
+          ? `<a class="icon-button" href="${UI.escapeHtml(result.download_url)}" download title="下载 ${UI.escapeHtml(result.model_label)} 结果" aria-label="下载 ${UI.escapeHtml(result.model_label)} 结果"><i data-lucide="download"></i></a>`
+          : "";
+        return `<article class="background-removal-result ${UI.escapeHtml(result.status)}${isActive ? " active" : ""}${result.selected ? " selected" : ""}">
+          <button type="button" data-background-removal-result="${UI.escapeHtml(result.id)}" ${result.status === "succeeded" ? "" : "disabled"}>
+            <span class="background-removal-result-thumb">${preview}</span>
+            <span class="background-removal-result-copy"><strong>${UI.escapeHtml(result.model_label)}</strong><small>${UI.escapeHtml(detail)}</small></span>
+          </button>
+          ${result.selected ? '<span class="background-removal-best">最佳</span>' : ""}
+          ${download}
+        </article>`;
+      }).join("");
+      this.el.backgroundRemovalResultList.querySelectorAll("img").forEach((image) => {
+        this.prepareImageReveal(image);
+      });
+      UI.icons(this.el.backgroundRemovalResultList);
+
+      setHidden(this.el.backgroundRemovalPreviewImage, !active?.image_url);
+      setHidden(this.el.backgroundRemovalPreviewEmpty, Boolean(active?.image_url));
+      if (active?.image_url) {
+        if (this.el.backgroundRemovalPreviewImage.src !== new URL(active.image_url, window.location.href).href) {
+          this.el.backgroundRemovalPreviewImage.src = active.image_url;
+          this.prepareImageReveal(this.el.backgroundRemovalPreviewImage);
+        }
+        setText(this.el.backgroundRemovalPreviewLabel, active.model_label);
+      } else {
+        this.el.backgroundRemovalPreviewImage.removeAttribute("src");
+        setText(this.el.backgroundRemovalPreviewLabel, "结果预览");
+        const waiting = results.some((result) => ["queued", "running"].includes(result.status));
+        const emptyText = this.el.backgroundRemovalPreviewEmpty.querySelector("span");
+        setText(emptyText, waiting ? "模型处理中" : results.length ? "暂无可预览结果" : "等待透明化结果");
+      }
+
+      setText(
+        this.el.backgroundRemovalSelectionSummary,
+        selected ? `最佳结果：${selected.model_label}` : "尚未选择最佳结果",
+      );
+      setDisabled(
+        this.el.backgroundRemovalSelectBest,
+        !active?.image_url || active.selected || this.backgroundRemovalSubmitting,
+      );
+      this.el.backgroundRemovalSelectBest.innerHTML = active?.selected
+        ? '<i data-lucide="check"></i>已设为最佳'
+        : '<i data-lucide="check"></i>设为最佳';
+      UI.icons(this.el.backgroundRemovalSelectBest);
+
+      if (run?.id && completed.length) {
+        this.el.backgroundRemovalDownloadAll.href = `/api/background-removal-runs/${run.id}/download`;
+        this.el.backgroundRemovalDownloadAll.setAttribute("download", "");
+        this.el.backgroundRemovalDownloadAll.setAttribute("aria-disabled", "false");
+      } else {
+        this.el.backgroundRemovalDownloadAll.removeAttribute("href");
+        this.el.backgroundRemovalDownloadAll.removeAttribute("download");
+        this.el.backgroundRemovalDownloadAll.setAttribute("aria-disabled", "true");
+      }
+    },
+
+    handleBackgroundRemovalResultAction(event) {
+      const button = event.target.closest("[data-background-removal-result]");
+      if (!button || button.disabled) return;
+      this.backgroundRemovalActiveResultId = button.dataset.backgroundRemovalResult;
+      this.renderBackgroundRemovalRun();
+    },
+
+    setBackgroundRemovalPreviewBackground(background) {
+      if (!["checker", "white", "black"].includes(background)) return;
+      this.el.backgroundRemovalPreviewPane.dataset.background = background;
+      this.el.backgroundRemovalBackgroundButtons.forEach((button) => {
+        button.classList.toggle(
+          "active",
+          button.dataset.backgroundRemovalBackground === background,
+        );
+      });
+    },
+
+    async selectBestBackgroundRemovalResult() {
+      const resultId = this.backgroundRemovalActiveResultId;
+      if (!resultId || this.el.backgroundRemovalSelectBest.disabled) return;
+      this.el.backgroundRemovalSelectBest.disabled = true;
+      try {
+        const data = await UI.api(`/api/background-removal-results/${resultId}/select`, {
+          method: "POST",
+        });
+        this.backgroundRemovalRun = data.run;
+        this.renderBackgroundRemovalRun();
+        UI.toast("已确认最佳透明化结果", "success");
+      } catch (error) {
+        UI.toast(error.message, "error");
+        this.renderBackgroundRemovalRun();
+      }
+    },
+
+    scheduleBackgroundRemovalPoll() {
+      window.clearTimeout(this.backgroundRemovalPollTimer);
+      this.backgroundRemovalPollTimer = null;
+      const active = (this.backgroundRemovalRun?.results || [])
+        .some((result) => ["queued", "running"].includes(result.status));
+      if (!active || !this.backgroundRemovalItemId || !this.el.backgroundRemovalDialog.open) return;
+      this.backgroundRemovalPollTimer = window.setTimeout(
+        () => this.pollBackgroundRemoval(),
+        1400,
+      );
+    },
+
+    async pollBackgroundRemoval() {
+      const itemId = this.backgroundRemovalItemId;
+      if (!itemId || !this.el.backgroundRemovalDialog.open) return;
+      try {
+        const data = await UI.api(`/api/generation-items/${itemId}/background-removal`);
+        if (this.backgroundRemovalItemId !== itemId) return;
+        this.backgroundRemovalRun = data.run || null;
+        this.chooseBackgroundRemovalPreview();
+        this.renderBackgroundRemovalRun();
+        this.scheduleBackgroundRemovalPoll();
+      } catch (error) {
+        UI.toast(error.message, "error");
+      }
     },
 
     async openSliceTool() {
@@ -407,8 +695,6 @@
           this.el.sizeInput.value = currentSize;
           if (!this.validateSizeInput(false)) this.el.sizeInput.value = "1024x1024";
           this.el.formatSelect.value = "png";
-          this.el.transparentBackground.checked = true;
-          this.updateTransparentBackgroundState();
           this.el.batchCount.value = "1";
           this.updatePrice();
         },

@@ -17,6 +17,7 @@ from ..models import AuditLog, SystemState, utcnow
 
 CHANNEL_CONFIG_KEY = "runtime_config.channels.v1"
 CHAT_CONFIG_KEY = "runtime_config.chat_models.v1"
+MATTING_CONFIG_KEY = "runtime_config.matting_models.v1"
 
 
 @dataclass(frozen=True)
@@ -62,11 +63,17 @@ class RuntimeConfigRepository:
     def load_chat_models(self) -> ConfigOverride | None:
         return self._load(CHAT_CONFIG_KEY, "models")
 
+    def load_matting_models(self) -> ConfigOverride | None:
+        return self._load(MATTING_CONFIG_KEY, "models")
+
     def channel_revision(self) -> str:
         return self._revision_for(CHANNEL_CONFIG_KEY)
 
     def chat_revision(self) -> str:
         return self._revision_for(CHAT_CONFIG_KEY)
+
+    def matting_revision(self) -> str:
+        return self._revision_for(MATTING_CONFIG_KEY)
 
     def save_channels(
         self,
@@ -98,6 +105,22 @@ class RuntimeConfigRepository:
             expected_revision=expected_revision,
             actor_user_id=actor_user_id,
             audit_action="runtime.chat_models.update",
+        )
+
+    def save_matting_models(
+        self,
+        document: dict[str, Any],
+        *,
+        expected_revision: str,
+        actor_user_id: int,
+    ) -> str:
+        return self._save(
+            MATTING_CONFIG_KEY,
+            "models",
+            document,
+            expected_revision=expected_revision,
+            actor_user_id=actor_user_id,
+            audit_action="runtime.matting_models.update",
         )
 
     def _load(self, key: str, collection_key: str) -> ConfigOverride | None:

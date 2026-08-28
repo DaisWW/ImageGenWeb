@@ -86,14 +86,13 @@ class TestProviderAndRuntime(PlatformTestCase):
         self.assertEqual(session.request["headers"]["Content-Type"], "application/json")
         self.assertEqual(session.request["headers"]["Idempotency-Key"], "imagegen-test-key")
 
-        # Transparent backgrounds are handled by Lucida in the worker; provider stays opaque.
+        # The legacy flag is ignored; generation always asks for the original image.
         transparent_result = adapter.generate(
             channel,
             replace(request, transparent_background=True),
         )
         self.assertNotIn("background", session.request["json"])
-        self.assertIn(request.prompt, session.request["json"]["prompt"])
-        self.assertIn("checkerboard", session.request["json"]["prompt"])
+        self.assertEqual(session.request["json"]["prompt"], request.prompt)
         self.assertEqual(transparent_result.content, png_bytes())
 
         subject = png_bytes((220, 35, 45))
@@ -110,8 +109,7 @@ class TestProviderAndRuntime(PlatformTestCase):
         self.assertEqual(session.request["url"], "https://relay.example/v1/images/edits")
         self.assertEqual(session.request["data"]["n"], "1")
         self.assertNotIn("background", session.request["data"])
-        self.assertIn(request.prompt, session.request["data"]["prompt"])
-        self.assertIn("checkerboard", session.request["data"]["prompt"])
+        self.assertEqual(session.request["data"]["prompt"], request.prompt)
         self.assertEqual([part[0] for part in session.request["files"]], ["image[]", "image[]"])
         self.assertEqual(
             [part[1][0] for part in session.request["files"]],
@@ -158,13 +156,12 @@ class TestProviderAndRuntime(PlatformTestCase):
         self.assertEqual(files[0][1][0], "one.webp")
         self.assertLess(len(files[0][1][1]), len(original))
 
-    def test_transparent_background_does_not_send_native_provider_flags(self):
+    def test_legacy_transparent_flag_is_ignored_by_provider(self):
         channel = self.app.extensions["channel_registry"].get("test")
         adapter = OpenAIImagesAdapter()
         session = RejectingTransparencySession()
         adapter._local.session = session
 
-        # Even when upstream would reject native transparency, Lucida path never asks for it.
         result = adapter.generate(
             channel,
             GenerationRequest(
@@ -180,11 +177,10 @@ class TestProviderAndRuntime(PlatformTestCase):
 
         self.assertEqual(len(session.requests), 1)
         self.assertNotIn("background", session.requests[0]["json"])
-        self.assertIn("极简上传图标", session.requests[0]["json"]["prompt"])
-        self.assertIn("checkerboard", session.requests[0]["json"]["prompt"])
+        self.assertEqual(session.requests[0]["json"]["prompt"], "极简上传图标")
         self.assertEqual(result.content, png_bytes())
 
-    def test_transparent_background_accepts_opaque_provider_image(self):
+    def test_legacy_transparent_flag_preserves_opaque_provider_image(self):
         content = png_bytes((35, 160, 110))
         channel = self.app.extensions["channel_registry"].get("test")
         adapter = OpenAIImagesAdapter()

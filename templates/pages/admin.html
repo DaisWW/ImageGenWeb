@@ -67,6 +67,14 @@
       <div class="inline-alert" id="chatConfigError" hidden></div>
       <div class="table-wrap"><table><thead><tr><th>名称</th><th>状态</th><th>模型</th><th>上下文策略</th><th class="actions-cell">操作</th></tr></thead><tbody id="chatModelTableBody"></tbody></table></div>
     </div>
+    <div class="admin-config-section">
+      <div class="view-toolbar">
+        <div><h2>背景透明化模型</h2><p id="mattingConfigVersion">配置版本</p></div>
+        <button class="button primary" type="button" id="createMattingModelButton"><i data-lucide="plus"></i>新增模型</button>
+      </div>
+      <div class="inline-alert" id="mattingConfigError" hidden></div>
+      <div class="table-wrap"><table><thead><tr><th>名称</th><th>状态</th><th>上游模型</th><th>运行限制</th><th class="actions-cell">操作</th></tr></thead><tbody id="mattingModelTableBody"></tbody></table></div>
+    </div>
   </section>
 
   <section class="admin-view" data-view="logs">
@@ -265,6 +273,25 @@
       <label class="field"><span>最大输出 Tokens</span><input type="number" name="max_output_tokens" min="128" max="16000" required></label>
     </div>
     <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="chatModelDialog">取消</button><button class="button primary" type="submit"><i data-lucide="save"></i>保存模型</button></div>
+  </form>
+</dialog>
+
+<dialog class="modal" id="mattingModelDialog">
+  <form class="modal-form" id="mattingModelForm">
+    <div class="modal-header"><div><span class="eyebrow">Background Removal</span><h2 id="mattingModelDialogTitle">新增透明化模型</h2></div><button class="icon-button" type="button" data-close-dialog="mattingModelDialog" aria-label="关闭"><i data-lucide="x"></i></button></div>
+    <input type="hidden" name="original_id">
+    <div class="form-grid two-columns">
+      <label class="field"><span>配置 ID</span><input name="id" maxlength="64" pattern="[A-Za-z0-9_-]+" required></label>
+      <label class="field"><span>显示名称</span><input name="label" maxlength="100" required></label>
+    </div>
+    <label class="check-line"><input type="checkbox" name="enabled" checked><span>启用模型</span></label>
+    <label class="field"><span>服务地址</span><input type="url" name="base_url" maxlength="500"></label>
+    <label class="field"><span>上游模型</span><input name="model" maxlength="150" required></label>
+    <div class="form-grid two-columns">
+      <label class="field"><span>超时秒数</span><input type="number" name="timeout_seconds" min="1" max="1800" required></label>
+      <label class="field"><span>单模型并发</span><input type="number" name="max_concurrency" min="1" max="8" required></label>
+    </div>
+    <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="mattingModelDialog">取消</button><button class="button primary" type="submit"><i data-lucide="save"></i>保存模型</button></div>
   </form>
 </dialog>
 

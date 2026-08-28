@@ -18,10 +18,6 @@ from ..image_payloads import prepare_image_bytes, prepared_filename
 from .diagnostics import response_summary
 
 MAX_OUTPUT_BYTES = 50 * 1024 * 1024
-TRANSPARENT_BACKGROUND_PROMPT_GUARD = (
-    "Generate the subject on a uniform solid background suitable for background removal. "
-    "Do not draw a checkerboard, transparency grid, grid pattern, or fake transparency."
-)
 
 
 class PinnedHostSSLAdapter(HTTPAdapter):
@@ -91,11 +87,9 @@ class OpenAIImagesAdapter:
     def generate(self, channel: Channel, request: GenerationRequest) -> ProviderResult:
         endpoint = "edits" if request.references else "generations"
         url = _api_endpoint(channel.base_url, f"images/{endpoint}")
-        # Transparent backgrounds are produced by Lucida post-processing in the
-        # worker, not by requesting native provider alpha.
         payload: dict[str, Any] = {
             "model": request.model,
-            "prompt": _provider_prompt(request),
+            "prompt": request.prompt,
             "n": 1,
             "size": request.size,
             "quality": request.quality,
@@ -346,13 +340,6 @@ class ProviderFactory:
         if channel.adapter == "openai_images":
             return self._openai_images
         raise ProviderError(f"不支持的渠道适配器：{channel.adapter}", code="adapter_error")
-
-
-def _provider_prompt(request: GenerationRequest) -> str:
-    if not request.transparent_background:
-        return request.prompt
-    prompt = request.prompt.strip()
-    return f"{prompt}\n\n{TRANSPARENT_BACKGROUND_PROMPT_GUARD}"
 
 
 def _request_id(response: requests.Response) -> str:

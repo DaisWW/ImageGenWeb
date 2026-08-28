@@ -1,5 +1,6 @@
 from .channels import Channel, ChannelRegistry
 from .chat_models import ChatModelConfig, ChatModelRegistry
+from .matting_models import MattingModelConfig, MattingModelRegistry
 from .repository import RuntimeConfigRepository, SecretCipher
 from .service import RuntimeConfigService
 
@@ -8,6 +9,8 @@ __all__ = [
     "ChannelRegistry",
     "ChatModelConfig",
     "ChatModelRegistry",
+    "MattingModelConfig",
+    "MattingModelRegistry",
     "RuntimeConfigRepository",
     "RuntimeConfigService",
     "SecretCipher",

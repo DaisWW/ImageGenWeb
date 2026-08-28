@@ -24,7 +24,6 @@ ALLOWED_WORKSPACE_SETTING_KEYS = {
     "size",
     "output_format",
     "compression",
-    "transparent_background",
     "batch_count",
     "generation_strategy",
     "series_anchor",
@@ -46,7 +45,6 @@ def default_workspace_settings() -> dict[str, Any]:
         "size": "1024x1024",
         "output_format": "png",
         "compression": 90,
-        "transparent_background": False,
         "batch_count": 1,
         "generation_strategy": "sample",
         "series_anchor": {},
@@ -96,11 +94,6 @@ def sanitize_workspace_settings(raw: Any, runtime: RuntimeSettings | None = None
     settings["model"] = str(settings["model"])[:100]
     settings["size"] = normalize_image_size(settings["size"])
     settings["output_format"] = str(settings["output_format"])[:20]
-    settings["transparent_background"] = as_bool(settings["transparent_background"])
-    if settings["output_format"] not in {"png", "webp"}:
-        settings["transparent_background"] = False
-    elif settings["transparent_background"]:
-        settings["output_format"] = "png"
     try:
         settings["compression"] = min(100, max(0, int(settings["compression"])))
         settings["batch_count"] = min(

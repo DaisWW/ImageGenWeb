@@ -1,6 +1,8 @@
-# Lucida 透明背景
+# 背景透明化
 
-勾选 **透明背景** 时：界面固定使用 PNG；上游按普通不透明图生成，且会收到禁止绘制棋盘格/假透明的约束；Worker 成功后调用 Lucida 抠图，再把带真实 Alpha 的结果入库计费。
+生图阶段始终保存上游返回的原图，不调用抠图服务，也不会覆盖原图。用户可在图片详情页打开 **背景透明化**，勾选一个或多个模型并行处理，逐步查看候选结果，再选择最满意的一张作为最佳结果。
+
+透明化候选与生成任务相互独立：候选失败不会改变原生成状态、原图路径或钱包结算。用户可以切换棋盘格、白色和黑色预览背景，单独下载 PNG，也可以把本轮成功候选打包下载为 ZIP。
 
 ## 启用方式（Docker 一体 + GPU）
 
@@ -11,6 +13,7 @@
 LUCIDA_MATTING_URL=http://lucida:8000
 LUCIDA_MATTING_MODEL=lucida
 LUCIDA_MATTING_TIMEOUT_SECONDS=120
+BACKGROUND_REMOVAL_CONCURRENCY=2
 LUCIDA_IMAGE=snow-ai-studio-lucida:latest
 # 默认 CUDA 12.4 torch；CPU 回退可设 https://download.pytorch.org/whl/cpu
 LUCIDA_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
@@ -33,15 +36,27 @@ LUCIDA_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
 | `LUCIDA_MATTING_URL` | Lucida 根地址 | `http://lucida:8000` |
 | `LUCIDA_MATTING_MODEL` | `/remove?model=` | `lucida` |
 | `LUCIDA_MATTING_TIMEOUT_SECONDS` | 读超时秒数 | `120` |
+| `BACKGROUND_REMOVAL_CONCURRENCY` | Worker 同时运行的透明化候选总数 | `2` |
 | `LUCIDA_MODEL_PATH` | 权重挂载源目录 | `./.tmp-lucida-src/lucida-main/.model/lucida` |
 | `LUCIDA_TORCH_INDEX_URL` | torch 安装源 | `https://download.pytorch.org/whl/cu124` |
 
+## 模型配置
+
+数据库尚无管理员配置时，`config/matting_models.yaml` 提供初始列表，Lucida 位于第一项。部署后在管理后台的 **背景透明化模型** 中维护顺序、服务地址、上游模型、超时和单模型并发；新模型追加到列表末尾。普通用户只会看到已启用且服务地址完整的模型。
+
+当前模型适配器使用 Lucida 兼容协议：健康检查调用 `GET /ready`，处理调用 `POST /remove?model=...`。如接入不同协议，应先增加对应服务端适配器，不能只填写一个不兼容的 URL。
+
+并行度同时受两层限制：`BACKGROUND_REMOVAL_CONCURRENCY` 控制 Worker 的候选总并发，管理后台的“单模型并发”限制同一模型的并发。生成任务拥有调度优先级，透明化任务不会占用生成计费或渠道并发。
+
 ## 行为边界
 
-- 透明背景 **不再** 向生图上游发送 `background=transparent`
-- 透明背景只接受 PNG；WebP/JPEG 不参与透明背景任务
-- img2img 的垫图和抠图结果会检查已烘焙的棋盘格像素，命中时任务失败并释放预占金额
-- 未配置 `LUCIDA_MATTING_URL` 时，勾选透明背景的任务会失败（如 `matting_unavailable`）
+- 生成 API 中遗留的 `transparent_background` 字段会被忽略，新任务始终持久化为 `false`
+- PNG、WebP 或 JPEG 原图都可提交透明化；成功候选统一保存为带真实 Alpha 的 PNG
+- Worker 会拒绝没有真实 Alpha 或仍是烘焙棋盘格的候选，但只把该候选标记为失败
+- 每个候选保存模型配置快照；管理员后续改名或改地址不会改变已排队任务
+- 已有排队或运行候选时，管理后台不能停用或删除对应模型
+- 未配置任何透明化模型时，生成仍正常工作，详情页只提示当前没有可用模型
+- `/health` 会报告透明化服务状态，但透明化不可用不会使主站 readiness 失败
 - 默认 Compose profile 不含 Lucida；主站可单独启动
 
 ## 性能

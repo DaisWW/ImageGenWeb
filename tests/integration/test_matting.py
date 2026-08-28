@@ -91,7 +91,7 @@ class TestLucidaMattingClient(PlatformTestCase):
             session=ready_session,
         ).healthcheck()
         self.assertEqual(ready_session.calls[0]["url"], "http://lucida.local:8756/ready")
-        self.assertEqual(ready_session.calls[0]["timeout"], (2, 5))
+        self.assertEqual(ready_session.calls[0]["timeout"], (1, 1))
 
         for session in (
             RecordingMattingSession(response=FakeMattingResponse(status_code=503)),

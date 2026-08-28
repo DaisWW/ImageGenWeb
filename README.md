@@ -77,9 +77,9 @@ Compose 默认通过 `deploy-docker` 启用四个服务：
 
 - `migrate`：一次性执行 Alembic 数据库迁移；成功后 Web 才启动。
 - `web`：Flask/Gunicorn Web 服务，不再自行执行迁移。
-- `worker`：独立队列 Worker，执行生图、结算和 30 天清理。
+- `worker`：独立队列 Worker，优先执行生图与结算，并独立调度详情页发起的背景透明化候选和 30 天清理。
 - `db`：PostgreSQL 17。
-- `lucida`：Docker 内 Lucida 抠图服务（默认 CUDA GPU；勾选透明背景时由 Worker 自动调用）。
+- `lucida`：Docker 内 Lucida 抠图服务（默认 CUDA GPU；在图片详情页执行背景透明化时可作为首个模型使用）。
 
 当前架构明确只支持一个 Gunicorn Web 进程和一个 Worker。登录限流、对话与工作站互斥是 Web 进程内状态，Worker 则通过数据库租约拒绝第二个活跃实例；不要通过增加 Gunicorn worker 数或复制 Compose 服务进行水平扩容。
 

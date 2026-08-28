@@ -1,0 +1,13 @@
+version: 1
+
+models:
+  - id: lucida
+    label: Lucida
+    enabled: true
+    base_url: ""
+    base_url_env: LUCIDA_MATTING_URL
+    model: lucida
+    model_env: LUCIDA_MATTING_MODEL
+    timeout_seconds: 120
+    timeout_seconds_env: LUCIDA_MATTING_TIMEOUT_SECONDS
+    max_concurrency: 1

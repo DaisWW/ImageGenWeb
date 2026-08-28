@@ -31,6 +31,8 @@ from .integrations.images import (
 )
 from .integrations.matting import LucidaMattingClient, image_has_baked_checkerboard
 from .models import (
+    BackgroundRemovalResult,
+    BackgroundRemovalRun,
     ChannelCircuitState,
     GenerationAttempt,
     GenerationItem,
@@ -63,6 +65,7 @@ class GenerationWorker:
         self.runtime_logs = services.runtime_logs
         self.billing = services.billing
         self.generations = services.generations
+        self.background_removal = services.background_removal
         self.retention = RetentionService(storage, channels)
         self.providers = ProviderFactory()
         self.poll_seconds = poll_seconds
@@ -75,6 +78,7 @@ class GenerationWorker:
         self._dependency_next_check: dict[str, float] = {}
         self._futures: dict[str, Future] = {}
         self._future_attempt_ids: dict[str, str] = {}
+        self._background_removal_futures: dict[str, Future] = {}
         self._last_heartbeat = 0.0
         self._last_recovery = 0.0
         self._last_cleanup = 0.0
@@ -159,7 +163,10 @@ class GenerationWorker:
         if not hasattr(self, "_thread_pool"):
             return
         self._thread_pool.shutdown(wait=False, cancel_futures=False)
-        while any(not future.done() for future in self._futures.values()):
+        while any(
+            not future.done()
+            for future in (*self._futures.values(), *self._background_removal_futures.values())
+        ):
             with self.app.app_context():
                 try:
                     self._heartbeat_claims()
@@ -251,7 +258,22 @@ class GenerationWorker:
                         details={"worker_id": self.worker_id},
                     )
 
+        for result_id, future in list(self._background_removal_futures.items()):
+            if not future.done():
+                continue
+            self._background_removal_futures.pop(result_id, None)
+            try:
+                future.result()
+            except Exception:
+                LOGGER.exception("透明化任务线程异常退出：%s", result_id)
+                with self.app.app_context():
+                    self._recover_crashed_background_removal(result_id)
+
     def _schedule_available(self) -> None:
+        self._schedule_generation_available()
+        self._schedule_background_removals()
+
+    def _schedule_generation_available(self) -> None:
         with self.app.app_context():
             if not self._dependency_ready("storage"):
                 db.session.remove()
@@ -333,8 +355,6 @@ class GenerationWorker:
                         continue
                     if first_for_user and item.user_id in scheduled_users:
                         continue
-                    if item.job.transparent_background and not self._dependency_ready("lucida"):
-                        continue
                     channel = self._select_channel_for_item(
                         item,
                         channel_active,
@@ -371,6 +391,259 @@ class GenerationWorker:
                 self._process_item, item_id, attempt_id
             )
 
+    def _schedule_background_removals(self) -> None:
+        with self.app.app_context():
+            if not self._dependency_ready("storage"):
+                db.session.remove()
+                return
+
+            active_rows = db.session.execute(
+                select(
+                    BackgroundRemovalResult.model_id,
+                    func.count(BackgroundRemovalResult.id),
+                )
+                .where(BackgroundRemovalResult.status == "running")
+                .group_by(BackgroundRemovalResult.model_id)
+            ).all()
+            model_active = {model_id: int(count) for model_id, count in active_rows}
+            database_active = sum(model_active.values())
+            active = max(len(self._background_removal_futures), database_active)
+            available = int(self.app.config["BACKGROUND_REMOVAL_CONCURRENCY"]) - active
+            if available <= 0:
+                db.session.remove()
+                return
+
+            candidates = list(
+                db.session.scalars(
+                    select(BackgroundRemovalResult)
+                    .where(BackgroundRemovalResult.status == "queued")
+                    .order_by(BackgroundRemovalResult.created_at, BackgroundRemovalResult.id)
+                    .limit(100)
+                )
+            )
+            selected: list[str] = []
+            for result in candidates:
+                if len(selected) >= available:
+                    break
+                if result.id in self._background_removal_futures:
+                    continue
+                if model_active.get(result.model_id, 0) >= result.model_max_concurrency:
+                    continue
+                if self._claim_background_removal(result.id):
+                    selected.append(result.id)
+                    model_active[result.model_id] = model_active.get(result.model_id, 0) + 1
+            db.session.remove()
+
+        for result_id in selected:
+            self._background_removal_futures[result_id] = self._executor().submit(
+                self._process_background_removal,
+                result_id,
+            )
+
+    def _claim_background_removal(self, result_id: str) -> bool:
+        now = utcnow()
+        claimed = db.session.execute(
+            update(BackgroundRemovalResult)
+            .where(
+                BackgroundRemovalResult.id == result_id,
+                BackgroundRemovalResult.status == "queued",
+            )
+            .values(
+                status="running",
+                claimed_by=self.worker_id,
+                heartbeat_at=now,
+                started_at=now,
+                completed_at=None,
+                elapsed_seconds=None,
+                error_code=None,
+                error_message=None,
+            )
+        )
+        if claimed.rowcount != 1:
+            db.session.rollback()
+            return False
+        result = db.session.scalar(
+            select(BackgroundRemovalResult)
+            .options(
+                selectinload(BackgroundRemovalResult.run).selectinload(BackgroundRemovalRun.results)
+            )
+            .where(BackgroundRemovalResult.id == result_id)
+            .execution_options(populate_existing=True)
+        )
+        if result is None:
+            db.session.rollback()
+            return False
+        self.background_removal.refresh_run_status(result.run)
+        db.session.commit()
+        return True
+
+    def _process_background_removal(self, result_id: str) -> None:
+        started = time.monotonic()
+        with self.app.app_context():
+            result = db.session.scalar(
+                select(BackgroundRemovalResult)
+                .options(
+                    selectinload(BackgroundRemovalResult.run)
+                    .selectinload(BackgroundRemovalRun.source_item)
+                    .selectinload(GenerationItem.job)
+                )
+                .where(BackgroundRemovalResult.id == result_id)
+                .execution_options(populate_existing=True)
+            )
+            if result is None or not self._owns_background_removal_claim(result):
+                db.session.remove()
+                return
+            item = result.run.source_item
+            if item.status != "succeeded" or not item.output_path:
+                self._fail_background_removal(
+                    result_id,
+                    code="source_image_unavailable",
+                    message="原始生成图片不存在或尚未完成",
+                    started=started,
+                )
+                db.session.remove()
+                return
+
+            try:
+                source = self.storage.read_bytes(item.output_path)
+                client = LucidaMattingClient(
+                    base_url=result.model_base_url,
+                    model=result.upstream_model,
+                    timeout_seconds=float(result.model_timeout_seconds),
+                )
+                content = client.remove_background(
+                    source,
+                    filename=f"image_{item.id}",
+                )
+                if image_has_baked_checkerboard(content):
+                    raise ServiceError(
+                        "透明化结果疑似仍包含棋盘格像素，请尝试其他模型",
+                        code="matting_checkerboard_result",
+                        status_code=502,
+                    )
+
+                db.session.expire_all()
+                latest = db.session.get(
+                    BackgroundRemovalResult,
+                    result_id,
+                    populate_existing=True,
+                )
+                if latest is None or not self._owns_background_removal_claim(latest):
+                    return
+                stored = self.storage.save_background_removal(
+                    user_id=item.user_id,
+                    workspace_id=item.job.workspace_id,
+                    job_id=item.job_id,
+                    result_id=result_id,
+                    content=content,
+                )
+                try:
+                    if not self._finish_background_removal(result_id, stored, started):
+                        self.storage.delete(stored.thumbnail_path)
+                        self.storage.delete(stored.image.relative_path)
+                        return
+                except Exception:
+                    db.session.rollback()
+                    self.storage.delete(stored.thumbnail_path)
+                    self.storage.delete(stored.image.relative_path)
+                    raise
+                LOGGER.info(
+                    "透明化任务完成：%s（%s）",
+                    result_id,
+                    result.model_label,
+                )
+            except ServiceError as exc:
+                self._fail_background_removal(
+                    result_id,
+                    code=exc.code,
+                    message=str(exc),
+                    started=started,
+                )
+            except (StorageError, OSError) as exc:
+                self._pause_dependency("storage", exc)
+                self._fail_background_removal(
+                    result_id,
+                    code="storage_error",
+                    message=str(exc),
+                    started=started,
+                )
+            except Exception as exc:
+                LOGGER.exception("透明化任务发生未预期异常：%s", result_id)
+                self._fail_background_removal(
+                    result_id,
+                    code="internal_error",
+                    message=f"内部错误：{exc.__class__.__name__}",
+                    started=started,
+                )
+            finally:
+                db.session.remove()
+
+    def _finish_background_removal(self, result_id: str, stored, started: float) -> bool:
+        result = db.session.scalar(
+            select(BackgroundRemovalResult)
+            .options(
+                selectinload(BackgroundRemovalResult.run).selectinload(BackgroundRemovalRun.results)
+            )
+            .where(BackgroundRemovalResult.id == result_id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        )
+        if result is None or not self._owns_background_removal_claim(result):
+            db.session.rollback()
+            return False
+        result.status = "succeeded"
+        result.claimed_by = None
+        result.heartbeat_at = None
+        result.completed_at = utcnow()
+        result.elapsed_seconds = Decimal(str(round(time.monotonic() - started, 3)))
+        result.output_path = stored.image.relative_path
+        result.thumbnail_path = stored.thumbnail_path
+        result.output_mime_type = stored.image.mime_type
+        result.output_byte_count = stored.image.byte_count
+        result.output_width = stored.image.width
+        result.output_height = stored.image.height
+        result.error_code = None
+        result.error_message = None
+        self.background_removal.refresh_run_status(result.run)
+        db.session.commit()
+        return True
+
+    def _fail_background_removal(
+        self,
+        result_id: str,
+        *,
+        code: str,
+        message: str,
+        started: float,
+    ) -> None:
+        db.session.expire_all()
+        result = db.session.scalar(
+            select(BackgroundRemovalResult)
+            .options(
+                selectinload(BackgroundRemovalResult.run).selectinload(BackgroundRemovalRun.results)
+            )
+            .where(BackgroundRemovalResult.id == result_id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        )
+        if result is None or not self._owns_background_removal_claim(result):
+            db.session.rollback()
+            return
+        result.status = "failed"
+        result.selected = False
+        result.claimed_by = None
+        result.heartbeat_at = None
+        result.completed_at = utcnow()
+        result.elapsed_seconds = Decimal(str(round(time.monotonic() - started, 3)))
+        result.error_code = code[:80]
+        result.error_message = message[:1000]
+        self.background_removal.refresh_run_status(result.run)
+        db.session.commit()
+        LOGGER.warning("透明化任务失败：%s（%s）：%s", result_id, code, message)
+
+    def _owns_background_removal_claim(self, result: BackgroundRemovalResult) -> bool:
+        return result.status == "running" and result.claimed_by == self.worker_id
+
     def _dependency_ready(self, name: str) -> bool:
         now = time.monotonic()
         with self._dependency_lock:
@@ -382,15 +655,6 @@ class GenerationWorker:
                     self.storage.healthcheck(
                         minimum_free_bytes=runtime.storage_min_free_mb * 1024 * 1024
                     )
-                elif name == "lucida":
-                    client = self._lucida_client()
-                    if not client.enabled:
-                        raise ServiceError(
-                            "Lucida 抠图服务未配置",
-                            code="matting_unavailable",
-                            status_code=503,
-                        )
-                    client.healthcheck()
                 else:
                     raise ValueError(f"未知 Worker 依赖：{name}")
             except Exception as exc:
@@ -416,7 +680,7 @@ class GenerationWorker:
         self._dependency_next_check[name] = time.monotonic() + retry_seconds
         if previous is available or (previous is None and available):
             return
-        label = "图片存储" if name == "storage" else "Lucida 抠图"
+        label = "图片存储"
         self.runtime_logs.commit_best_effort(
             category="worker",
             event="worker.dependency_recovered" if available else "worker.dependency_paused",
@@ -734,8 +998,6 @@ class GenerationWorker:
             try:
                 channel = self.channels.get(item.channel_id)
                 references = self._request_references(item)
-                if item.job.transparent_background and item.job.mode == "img2img":
-                    self._validate_transparent_references(references)
                 db.session.expire_all()
                 latest_item = db.session.scalar(
                     select(GenerationItem)
@@ -763,7 +1025,7 @@ class GenerationWorker:
                         quality=item.job.quality,
                         output_format=item.job.output_format,
                         compression=item.job.compression,
-                        transparent_background=item.job.transparent_background,
+                        transparent_background=False,
                         references=references,
                         idempotency_key=attempt.idempotency_key,
                     ),
@@ -779,46 +1041,9 @@ class GenerationWorker:
                         provider_completed=True,
                     ) from exc
                 self._record_channel_success(channel, item_id, result.request_id, attempt_id)
-                if item.job.transparent_background:
-                    content = self._apply_lucida_matting(
-                        content,
-                        filename=f"image_{item.id}.{item.job.output_format or 'png'}",
-                    )
-                    if image_has_baked_checkerboard(content):
-                        raise ServiceError(
-                            "透明背景结果疑似仍包含棋盘格像素，请重试或更换垫图",
-                            code="matting_checkerboard_result",
-                            status_code=502,
-                        )
                 with self._settlement_lock:
                     self._settle_success(item_id, content, result.request_id, started, attempt_id)
                 attempt_status = "succeeded"
-            except ServiceError as exc:
-                if exc.code.startswith("matting_"):
-                    self._pause_dependency("lucida", exc)
-                attempt_status = "failed"
-                attempt_error = {
-                    "code": exc.code,
-                    "message": str(exc),
-                    "upstream_status": exc.status_code,
-                }
-                with self._settlement_lock:
-                    self._settle_failure(
-                        item_id,
-                        code=exc.code,
-                        message=str(exc),
-                        upstream_status=exc.status_code,
-                        upstream_request_id="",
-                        started=started,
-                        details={
-                            "stage": (
-                                "checkerboard_reference"
-                                if exc.code == "checkerboard_reference"
-                                else "lucida_matting"
-                            )
-                        },
-                        attempt_id=attempt_id,
-                    )
             except ProviderError as exc:
                 attempt_status = (
                     "downstream_failed"
@@ -901,15 +1126,6 @@ class GenerationWorker:
                 )
                 db.session.remove()
 
-    def _apply_lucida_matting(self, content: bytes, *, filename: str) -> bytes:
-        return self._lucida_client().remove_background(content, filename=filename)
-
-    def _lucida_client(self) -> LucidaMattingClient:
-        client = self.app.extensions.get("lucida_matting_client")
-        if client is None:
-            client = LucidaMattingClient()
-        return client
-
     def _request_references(self, item: GenerationItem) -> tuple[ReferencePayload, ...]:
         return tuple(
             ReferencePayload(
@@ -919,15 +1135,6 @@ class GenerationWorker:
             )
             for reference in item.job.references
         )
-
-    @staticmethod
-    def _validate_transparent_references(references: tuple[ReferencePayload, ...]) -> None:
-        if any(image_has_baked_checkerboard(reference.content) for reference in references):
-            raise ServiceError(
-                "垫图疑似将棋盘格直接画入图片，请上传带真实透明通道的 PNG",
-                code="checkerboard_reference",
-                status_code=422,
-            )
 
     def _record_channel_success(
         self,
@@ -1554,6 +1761,17 @@ class GenerationWorker:
                 )
                 .values(heartbeat_at=now)
             )
+        background_result_ids = tuple(self._background_removal_futures)
+        if background_result_ids:
+            db.session.execute(
+                update(BackgroundRemovalResult)
+                .where(
+                    BackgroundRemovalResult.id.in_(background_result_ids),
+                    BackgroundRemovalResult.claimed_by == self.worker_id,
+                    BackgroundRemovalResult.status == "running",
+                )
+                .values(heartbeat_at=now)
+            )
         db.session.commit()
 
     def _recover_orphaned_items(self, *, immediate: bool) -> None:
@@ -1610,6 +1828,78 @@ class GenerationWorker:
                 recovered += 1
         if recovered:
             LOGGER.warning("已恢复 %d 个孤立的生成任务", recovered)
+        self._recover_orphaned_background_removals(cutoff=cutoff, immediate=immediate)
+
+    def _recover_crashed_background_removal(self, result_id: str) -> None:
+        self._recover_background_removal(
+            result_id,
+            cutoff=utcnow(),
+            immediate=True,
+        )
+
+    def _recover_orphaned_background_removals(self, *, cutoff, immediate: bool) -> None:
+        conditions = [BackgroundRemovalResult.status == "running"]
+        if immediate:
+            conditions.append(
+                or_(
+                    BackgroundRemovalResult.claimed_by.is_(None),
+                    BackgroundRemovalResult.claimed_by != self.worker_id,
+                )
+            )
+        else:
+            conditions.append(
+                or_(
+                    BackgroundRemovalResult.heartbeat_at.is_(None),
+                    BackgroundRemovalResult.heartbeat_at < cutoff,
+                )
+            )
+        result_ids = list(db.session.scalars(select(BackgroundRemovalResult.id).where(*conditions)))
+        recovered = sum(
+            self._recover_background_removal(
+                result_id,
+                cutoff=cutoff,
+                immediate=immediate,
+            )
+            for result_id in result_ids
+        )
+        if recovered:
+            LOGGER.warning("已恢复 %d 个孤立的透明化任务", recovered)
+
+    def _recover_background_removal(self, result_id: str, *, cutoff, immediate: bool) -> bool:
+        db.session.expire_all()
+        result = db.session.scalar(
+            select(BackgroundRemovalResult)
+            .options(
+                selectinload(BackgroundRemovalResult.run).selectinload(BackgroundRemovalRun.results)
+            )
+            .where(BackgroundRemovalResult.id == result_id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        )
+        if result is None or result.status != "running":
+            db.session.rollback()
+            return False
+        live_future = result.id in self._background_removal_futures
+        recoverable_claim = result.claimed_by != self.worker_id or not live_future
+        comparison_cutoff = cutoff
+        if result.heartbeat_at is not None and result.heartbeat_at.tzinfo is None:
+            comparison_cutoff = cutoff.replace(tzinfo=None)
+        stale_claim = result.heartbeat_at is None or result.heartbeat_at < comparison_cutoff
+        if not recoverable_claim or (not immediate and not stale_claim):
+            db.session.rollback()
+            return False
+
+        result.status = "queued"
+        result.claimed_by = None
+        result.heartbeat_at = None
+        result.started_at = None
+        result.completed_at = None
+        result.elapsed_seconds = None
+        result.error_code = None
+        result.error_message = None
+        self.background_removal.refresh_run_status(result.run)
+        db.session.commit()
+        return True
 
     def _recover_crashed_attempt(self, item_id: str, *, attempt_id: str | None = None) -> None:
         if attempt_id is None:

@@ -230,8 +230,7 @@
   background: var(--surface-2);
 }
 
-.output-tile.has-transparency,
-.transparent-background-swatch {
+.output-tile.has-transparency {
   --checkerboard-dark: #d4d8d6;
   --checkerboard-light: #f2f4f3;
   background:

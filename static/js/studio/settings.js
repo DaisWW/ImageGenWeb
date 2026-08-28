@@ -78,7 +78,6 @@
       this.renderCreativeDirectionOptions(settings.creative_direction_id || "auto");
       this.renderGalleryCategoryOptions(settings.gallery_category_id || "auto");
       this.el.translatePrompt.checked = settings.translate_prompt === true;
-      this.el.transparentBackground.checked = settings.transparent_background === true;
       this.el.promptInput.value = settings.prompt || "";
       this.updatePromptCounter();
       this.el.batchCount.value = this.generationStrategyPolicy()
@@ -146,7 +145,6 @@
         this.el.sizeInput.value = "";
         this.el.sizeInput.disabled = true;
         this.el.sizeInput.setCustomValidity("");
-        this.updateTransparentBackgroundState();
         this.el.generateButton.disabled = true;
         this.updatePrice();
         return;
@@ -167,7 +165,6 @@
       this.fillSelect(this.el.formatSelect, channel.capabilities.formats, settings.output_format, null, null, {
         png: "PNG", jpeg: "JPEG", webp: "WebP",
       });
-      this.updateTransparentBackgroundState();
       document.querySelectorAll("[data-mode]").forEach((button) => {
         button.disabled = !channel.capabilities.modes.includes(button.dataset.mode);
       });
@@ -368,20 +365,6 @@
       if (valid) this.el.sizeInput.value = value;
       else if (report) this.el.sizeInput.reportValidity();
       return valid;
-    },
-
-    updateTransparentBackgroundState() {
-      const hasPng = [...this.el.formatSelect.options].some((option) => option.value === "png");
-      if (this.el.transparentBackground.checked && hasPng && this.el.formatSelect.value !== "png") {
-        this.el.formatSelect.value = "png";
-      }
-      const available = hasPng;
-      this.el.transparentBackground.disabled = !available;
-      if (!available) this.el.transparentBackground.checked = false;
-      this.el.transparentBackgroundControl.classList.toggle("is-disabled", !available);
-      this.el.transparentBackgroundControl.title = available
-        ? "生成后由 Lucida 自动抠成真实透明 PNG（不请求上游原生透明）"
-        : "当前渠道不支持透明 PNG";
     },
 
     setMode(mode, shouldSave) {
@@ -592,7 +575,6 @@
           || "1024x1024",
         output_format: this.el.formatSelect.value,
         compression: 90,
-        transparent_background: this.el.transparentBackground.checked,
         batch_count: this.generationCount(),
         generation_strategy: this.el.generationStrategy.value || "sample",
         series_anchor: this.activeWorkspace?.settings?.series_anchor || {},

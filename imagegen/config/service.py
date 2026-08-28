@@ -6,10 +6,11 @@ from sqlalchemy import select
 
 from ..errors import ServiceError
 from ..extensions import db
-from ..models import GenerationItem
+from ..models import BackgroundRemovalResult, GenerationItem
 from ..validation import as_bool
 from .channels import AUTO_CHANNEL_ID, MIXED_CHANNEL_ID, ChannelRegistry, ChannelSnapshot
 from .chat_models import DEFAULT_WORKSPACE_PROMPTS, ChatModelRegistry
+from .matting_models import MattingModelRegistry, MattingModelSnapshot
 from .repository import RuntimeConfigRepository
 
 ACTIVE_GENERATION_STATUSES = {"queued", "running", "canceling"}
@@ -23,10 +24,12 @@ class RuntimeConfigService:
         repository: RuntimeConfigRepository,
         channels: ChannelRegistry,
         chat_models: ChatModelRegistry,
+        matting_models: MattingModelRegistry,
     ):
         self.repository = repository
         self.channels = channels
         self.chat_models = chat_models
+        self.matting_models = matting_models
 
     def channel_config(self) -> dict[str, Any]:
         config = self.channels.editable_config()
@@ -37,6 +40,12 @@ class RuntimeConfigService:
     def chat_config(self) -> dict[str, Any]:
         config = self.chat_models.editable_config()
         config["revision"] = self.repository.chat_revision()
+        config["managed"] = bool(config["revision"])
+        return config
+
+    def matting_config(self) -> dict[str, Any]:
+        config = self.matting_models.editable_config()
+        config["revision"] = self.repository.matting_revision()
         config["managed"] = bool(config["revision"])
         return config
 
@@ -74,6 +83,24 @@ class RuntimeConfigService:
         if not self.chat_models.reload(force=True):
             raise ServiceError("对话模型配置已保存但未能加载", status_code=500)
         return self.chat_config()
+
+    def save_matting_models(self, payload: Any, actor_user_id: int) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ServiceError("透明化模型配置必须是对象")
+        document = self._matting_document(payload)
+        try:
+            snapshot = self.matting_models.validate(document)
+        except ValueError as exc:
+            raise ServiceError(str(exc)) from exc
+        self._guard_active_matting_models(snapshot)
+        self.repository.save_matting_models(
+            document,
+            expected_revision=str(payload.get("revision", "")),
+            actor_user_id=actor_user_id,
+        )
+        if not self.matting_models.reload(force=True):
+            raise ServiceError("透明化模型配置已保存但未能加载", status_code=500)
+        return self.matting_config()
 
     def _channel_document(self, payload: dict[str, Any]) -> dict[str, Any]:
         raw_channels = payload.get("channels")
@@ -210,6 +237,27 @@ class RuntimeConfigService:
             "models": models,
         }
 
+    def _matting_document(self, payload: dict[str, Any]) -> dict[str, Any]:
+        raw_models = payload.get("models")
+        if not isinstance(raw_models, list):
+            raise ServiceError("透明化模型列表格式无效")
+        models: list[dict[str, Any]] = []
+        for raw in raw_models:
+            if not isinstance(raw, dict):
+                raise ServiceError("透明化模型条目格式无效")
+            models.append(
+                {
+                    "id": str(raw.get("id", "")).strip(),
+                    "label": str(raw.get("label", "")).strip(),
+                    "enabled": as_bool(raw.get("enabled", True)),
+                    "base_url": str(raw.get("base_url", "")).strip(),
+                    "model": str(raw.get("model", "")).strip(),
+                    "timeout_seconds": raw.get("timeout_seconds"),
+                    "max_concurrency": raw.get("max_concurrency"),
+                }
+            )
+        return {"version": 1, "models": models}
+
     @staticmethod
     def _guard_active_channels(snapshot: ChannelSnapshot) -> None:
         active_ids = set(
@@ -229,6 +277,27 @@ class RuntimeConfigService:
             raise ServiceError(
                 f"渠道 {', '.join(sorted(unavailable))} 仍有生成任务，暂时不能停用或删除",
                 code="channel_in_use",
+                status_code=409,
+            )
+
+    @staticmethod
+    def _guard_active_matting_models(snapshot: MattingModelSnapshot) -> None:
+        active_ids = set(
+            db.session.scalars(
+                select(BackgroundRemovalResult.model_id)
+                .where(BackgroundRemovalResult.status.in_(ACTIVE_GENERATION_STATUSES))
+                .distinct()
+            )
+        )
+        unavailable = [
+            identifier
+            for identifier in active_ids
+            if identifier not in snapshot.models or not snapshot.models[identifier].configured
+        ]
+        if unavailable:
+            raise ServiceError(
+                f"透明化模型 {', '.join(sorted(unavailable))} 仍有任务，暂时不能停用或删除",
+                code="matting_model_in_use",
                 status_code=409,
             )
 

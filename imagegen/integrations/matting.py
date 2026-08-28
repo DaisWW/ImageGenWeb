@@ -22,11 +22,7 @@ CHECKERBOARD_MAX_SAMPLES = 1200
 
 @dataclass(frozen=True)
 class LucidaMattingClient:
-    """HTTP client for the Lucida /remove service.
-
-    Disabled when base_url is empty. Used for transparent-background generation
-    post-processing and optional explicit downloads.
-    """
+    """HTTP client for Lucida-compatible background-removal services."""
 
     base_url: str = ""
     model: str = "lucida"
@@ -44,17 +40,17 @@ class LucidaMattingClient:
         try:
             response = session.get(
                 f"{self.base_url.rstrip('/')}/ready",
-                timeout=(2, 5),
+                timeout=(1, 1),
             )
         except requests.RequestException as exc:
             raise ServiceError(
-                "Lucida 抠图服务未就绪",
+                "透明化服务未就绪",
                 code="matting_unavailable",
                 status_code=503,
             ) from exc
         if response.status_code >= 400:
             raise ServiceError(
-                "Lucida 抠图服务未就绪",
+                "透明化服务未就绪",
                 code="matting_unavailable",
                 status_code=503,
             )
@@ -62,7 +58,7 @@ class LucidaMattingClient:
     def remove_background(self, content: bytes, *, filename: str = "image.png") -> bytes:
         if not self.enabled:
             raise ServiceError(
-                "Lucida 抠图服务未配置（请设置 LUCIDA_MATTING_URL）",
+                "透明化服务未配置",
                 code="matting_unavailable",
                 status_code=503,
             )
@@ -70,7 +66,7 @@ class LucidaMattingClient:
             raise ServiceError("图片内容为空", code="invalid_image")
         if len(content) > MAX_MATTING_BYTES:
             raise ServiceError(
-                "图片超过 50 MiB 限制，无法发送到 Lucida",
+                "图片超过 50 MiB 限制，无法发送到透明化服务",
                 code="matting_input_too_large",
             )
         _assert_safe_input(content)
@@ -91,13 +87,13 @@ class LucidaMattingClient:
             )
         except requests.Timeout as exc:
             raise ServiceError(
-                "Lucida 抠图超时",
+                "透明化处理超时",
                 code="matting_timeout",
                 status_code=504,
             ) from exc
         except requests.RequestException as exc:
             raise ServiceError(
-                "无法连接 Lucida 抠图服务",
+                "无法连接透明化服务",
                 code="matting_connection_failed",
                 status_code=503,
             ) from exc
@@ -105,7 +101,7 @@ class LucidaMattingClient:
         if response.status_code >= 400:
             detail = _response_detail(response)
             raise ServiceError(
-                detail or f"Lucida 抠图失败（HTTP {response.status_code}）",
+                detail or f"透明化处理失败（HTTP {response.status_code}）",
                 code="matting_upstream_failed",
                 status_code=502,
             )
@@ -113,7 +109,7 @@ class LucidaMattingClient:
         result = response.content or b""
         if len(result) > MAX_MATTING_BYTES:
             raise ServiceError(
-                "Lucida 返回图片超过 50 MiB 限制",
+                "透明化服务返回图片超过 50 MiB 限制",
                 code="matting_output_too_large",
                 status_code=502,
             )
@@ -147,7 +143,7 @@ def _assert_safe_input(content: bytes) -> None:
 def _assert_real_alpha_png(content: bytes) -> None:
     if not content:
         raise ServiceError(
-            "Lucida 返回空结果",
+            "透明化服务返回空结果",
             code="matting_invalid_result",
             status_code=502,
         )
@@ -158,14 +154,14 @@ def _assert_real_alpha_png(content: bytes) -> None:
                 width, height = image.size
                 if width * height > MAX_MATTING_PIXELS:
                     raise ServiceError(
-                        "Lucida 返回图片像素数量超过安全限制",
+                        "透明化服务返回图片像素数量超过安全限制",
                         code="matting_output_too_large",
                         status_code=502,
                     )
                 image.load()
                 if image.format != "PNG":
                     raise ServiceError(
-                        "Lucida 未返回 PNG 结果",
+                        "透明化服务未返回 PNG 结果",
                         code="matting_invalid_result",
                         status_code=502,
                     )
@@ -174,20 +170,20 @@ def _assert_real_alpha_png(content: bytes) -> None:
         raise
     except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
         raise ServiceError(
-            "Lucida 返回图片像素数量超过安全限制",
+            "透明化服务返回图片像素数量超过安全限制",
             code="matting_output_too_large",
             status_code=502,
         ) from exc
     except (UnidentifiedImageError, OSError, ValueError) as exc:
         raise ServiceError(
-            "Lucida 返回的图片无效",
+            "透明化服务返回的图片无效",
             code="matting_invalid_result",
             status_code=502,
         ) from exc
 
     if alpha_extrema[0] == 255:
         raise ServiceError(
-            "Lucida 未返回真实透明背景图片",
+            "透明化服务未返回真实透明背景图片",
             code="matting_opaque_result",
             status_code=502,
         )

@@ -25,6 +25,7 @@
       this.jobsInitialized = false;
       this.channelConfig = null;
       this.chatConfig = null;
+      this.mattingConfig = null;
       this.systemConfig = null;
       this.logMode = "runtime";
       this.logs = [];
@@ -119,6 +120,13 @@
         chatModelDialog: byId("chatModelDialog"),
         chatModelDialogTitle: byId("chatModelDialogTitle"),
         chatModelForm: byId("chatModelForm"),
+        mattingModelTableBody: byId("mattingModelTableBody"),
+        mattingConfigVersion: byId("mattingConfigVersion"),
+        mattingConfigError: byId("mattingConfigError"),
+        createMattingModelButton: byId("createMattingModelButton"),
+        mattingModelDialog: byId("mattingModelDialog"),
+        mattingModelDialogTitle: byId("mattingModelDialogTitle"),
+        mattingModelForm: byId("mattingModelForm"),
         contextDialog: byId("contextDialog"),
         contextForm: byId("contextForm"),
         settingsForm: byId("settingsForm"),
@@ -167,6 +175,9 @@
       this.el.createChatModelButton.addEventListener("click", () => this.openChatModelDialog());
       this.el.chatModelTableBody.addEventListener("click", (event) => this.handleChatModelAction(event));
       this.el.chatModelForm.addEventListener("submit", (event) => this.saveChatModel(event));
+      this.el.createMattingModelButton.addEventListener("click", () => this.openMattingModelDialog());
+      this.el.mattingModelTableBody.addEventListener("click", (event) => this.handleMattingModelAction(event));
+      this.el.mattingModelForm.addEventListener("submit", (event) => this.saveMattingModel(event));
       this.el.contextForm.addEventListener("submit", (event) => this.saveContext(event));
       this.el.settingsForm.addEventListener("submit", (event) => this.saveSettings(event));
       window.addEventListener("resize", () => this.updateTabIndicator(false));
@@ -189,6 +200,7 @@
       if (name === "channels") {
         this.loadChannels();
         this.loadChatModels();
+        this.loadMattingModels();
       }
       if (name === "logs") this.loadLogs();
       if (name === "settings") this.loadSettings();
@@ -1093,6 +1105,120 @@
       });
       this.chatConfig = data.config;
       this.renderChatModels();
+      UI.toast(message, "success");
+    }
+
+    async loadMattingModels() {
+      try {
+        const data = await UI.api("/api/admin/matting-models");
+        this.mattingConfig = data.config;
+        this.renderMattingModels();
+      } catch (error) {
+        UI.toast(error.message, "error");
+      }
+    }
+
+    renderMattingModels() {
+      const config = this.mattingConfig;
+      if (!config) return;
+      const origin = config.managed ? "数据库管理" : "启动默认";
+      this.el.mattingConfigVersion.textContent = `${origin} · 版本 ${config.version}`;
+      this.el.mattingConfigError.hidden = !config.last_error;
+      this.el.mattingConfigError.textContent = config.last_error || "";
+      this.el.mattingModelTableBody.innerHTML = config.models.map((model) => `
+        <tr>
+          <td><strong>${UI.escapeHtml(model.label)}</strong><small class="subline">${UI.escapeHtml(model.id)}</small></td>
+          <td><span class="status-badge ${model.configured ? "succeeded" : "failed"}"><span></span>${model.configured ? "可用" : model.enabled ? "未配置" : "停用"}</span></td>
+          <td>${UI.escapeHtml(model.model)}<small class="subline">${UI.escapeHtml(model.base_url || "未设置服务地址")}</small></td>
+          <td><div class="capability-list"><span>并发 ${Number(model.max_concurrency)}</span><span>超时 ${Number(model.timeout_seconds)} 秒</span></div></td>
+          <td class="actions-cell"><div class="row-actions">
+            <button class="icon-button" type="button" data-edit-matting-model="${UI.escapeHtml(model.id)}" title="编辑模型" aria-label="编辑模型"><i data-lucide="pencil"></i></button>
+            <button class="icon-button danger" type="button" data-delete-matting-model="${UI.escapeHtml(model.id)}" title="删除模型" aria-label="删除模型"><i data-lucide="trash-2"></i></button>
+          </div></td>
+        </tr>`).join("");
+      UI.icons(this.el.mattingModelTableBody);
+    }
+
+    openMattingModelDialog(identifier = "") {
+      const model = this.mattingConfig?.models.find((item) => item.id === identifier) || null;
+      const form = this.el.mattingModelForm;
+      form.reset();
+      form.elements.original_id.value = model?.id || "";
+      form.elements.id.value = model?.id || "";
+      form.elements.id.readOnly = Boolean(model);
+      form.elements.label.value = model?.label || "";
+      form.elements.enabled.checked = model ? model.enabled : true;
+      form.elements.base_url.value = model?.base_url || "";
+      form.elements.model.value = model?.model || "";
+      form.elements.timeout_seconds.value = model?.timeout_seconds ?? 120;
+      form.elements.max_concurrency.value = model?.max_concurrency ?? 1;
+      this.el.mattingModelDialogTitle.textContent = model
+        ? `编辑 ${model.label}`
+        : "新增透明化模型";
+      UI.openDialog(this.el.mattingModelDialog);
+    }
+
+    async handleMattingModelAction(event) {
+      const edit = event.target.closest("[data-edit-matting-model]");
+      if (edit) {
+        this.openMattingModelDialog(edit.dataset.editMattingModel);
+        return;
+      }
+      const remove = event.target.closest("[data-delete-matting-model]");
+      if (!remove) return;
+      const model = this.mattingConfig.models.find((item) => item.id === remove.dataset.deleteMattingModel);
+      if (!window.confirm(`删除透明化模型“${model.label}”？`)) return;
+      const next = copy(this.mattingConfig);
+      next.models = next.models.filter((item) => item.id !== model.id);
+      try {
+        await this.persistMattingModels(next, "透明化模型已删除");
+      } catch (error) {
+        UI.toast(error.message, "error");
+      }
+    }
+
+    async saveMattingModel(event) {
+      event.preventDefault();
+      const submit = this.el.mattingModelForm.querySelector('[type="submit"]');
+      submit.disabled = true;
+      try {
+        const form = this.el.mattingModelForm;
+        const model = {
+          id: form.elements.id.value.trim(),
+          label: form.elements.label.value.trim(),
+          enabled: form.elements.enabled.checked,
+          base_url: form.elements.base_url.value.trim(),
+          model: form.elements.model.value.trim(),
+          timeout_seconds: Number(form.elements.timeout_seconds.value),
+          max_concurrency: Number(form.elements.max_concurrency.value),
+        };
+        const next = copy(this.mattingConfig);
+        const originalId = form.elements.original_id.value;
+        const index = next.models.findIndex((item) => item.id === originalId);
+        if (index >= 0) next.models[index] = model;
+        else next.models.push(model);
+        await this.persistMattingModels(
+          next,
+          originalId ? "透明化模型已更新" : "透明化模型已创建",
+        );
+        UI.closeDialog(this.el.mattingModelDialog);
+      } catch (error) {
+        UI.toast(error.message, "error");
+      } finally {
+        submit.disabled = false;
+      }
+    }
+
+    async persistMattingModels(config, message) {
+      const data = await UI.api("/api/admin/matting-models", {
+        method: "PUT",
+        body: {
+          revision: this.mattingConfig.revision,
+          models: config.models,
+        },
+      });
+      this.mattingConfig = data.config;
+      this.renderMattingModels();
       UI.toast(message, "success");
     }
 

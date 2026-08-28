@@ -289,6 +289,19 @@ def admin_update_chat_models():
     return jsonify(config=config)
 
 
+@web.get("/api/admin/matting-models")
+@admin_required
+def admin_matting_models():
+    return jsonify(config=services().configuration.matting_config())
+
+
+@web.put("/api/admin/matting-models")
+@admin_required
+def admin_update_matting_models():
+    config = services().configuration.save_matting_models(json_body(), current_user.id)
+    return jsonify(config=config)
+
+
 @web.get("/api/admin/settings")
 @admin_required
 def admin_settings():
