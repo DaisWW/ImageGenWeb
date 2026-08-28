@@ -89,8 +89,13 @@ services:
     <<: *app
     command:
       ["gunicorn", "--bind", "0.0.0.0:7860", "--workers", "1", "--threads", "16", "--timeout", "700", "app:app"]
+    # LISTENER CONTRACT - DO NOT CHANGE for LAN deployments:
+    # deploy-docker.cmd and deploy-docker.ps1 (default/-Lan) must publish
+    # IMAGEGEN_BIND_HOST=0.0.0.0. Use 127.0.0.1 only for explicit local-only
+    # mode or the internal Web side of HTTPS proxying.
+    # Missing values fail fast; never add a silent loopback fallback here.
     ports:
-      - "${IMAGEGEN_BIND_HOST:-127.0.0.1}:${IMAGEGEN_PORT:-18081}:7860"
+      - "${IMAGEGEN_BIND_HOST:?IMAGEGEN_BIND_HOST is required (use 0.0.0.0 for LAN)}:${IMAGEGEN_PORT:?IMAGEGEN_PORT is required}:7860"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -122,8 +127,10 @@ services:
     environment:
       IMAGEGEN_HTTPS_HOST: ${IMAGEGEN_HTTPS_HOST:-localhost}
       IMAGEGEN_CADDY_TLS: ${IMAGEGEN_CADDY_TLS-tls internal}
+    # HTTPS has its own host binding; validate it instead of silently hiding
+    # the proxy on loopback when the HTTPS profile is enabled.
     ports:
-      - "${IMAGEGEN_HTTPS_BIND_HOST:-127.0.0.1}:${IMAGEGEN_HTTPS_PORT:-18443}:443"
+      - "${IMAGEGEN_HTTPS_BIND_HOST:?IMAGEGEN_HTTPS_BIND_HOST is required}:${IMAGEGEN_HTTPS_PORT:?IMAGEGEN_HTTPS_PORT is required}:443"
     volumes:
       - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

@@ -427,6 +427,54 @@ class TestWorker(PlatformTestCase):
         self.assertEqual(attempt.status, "unknown")
         self.assertGreater(attempt.capacity_expires_at, attempt.started_at)
 
+    def test_worker_recovery_of_stale_attempt_preserves_live_replacement_attempt(self):
+        workspace = self.create_workspace()
+        job = self.submit(workspace)
+        item_id = job.items[0].id
+        worker = self.create_worker()
+        worker.worker_id = "replacement-attempt-worker"
+        channel = self.app.extensions["channel_registry"].get("test")
+        stale_attempt_id = worker._claim(item_id, channel)
+        self.assertIsNotNone(stale_attempt_id)
+
+        stale_at = utcnow() - timedelta(minutes=30)
+        stale_attempt = db.session.get(GenerationAttempt, stale_attempt_id)
+        stale_attempt.heartbeat_at = stale_at
+        replacement_attempt = GenerationAttempt(
+            id="replacement-attempt",
+            item_id=item_id,
+            user_id=self.user.id,
+            channel_id=channel.identifier,
+            channel_label=channel.label,
+            attempt_number=2,
+            idempotency_key="replacement-attempt-idempotency",
+            status="running",
+            claimed_by=worker.worker_id,
+            heartbeat_at=utcnow(),
+            started_at=utcnow(),
+            capacity_expires_at=utcnow() + timedelta(minutes=20),
+        )
+        db.session.add(replacement_attempt)
+        item = db.session.get(GenerationItem, item_id)
+        item.heartbeat_at = utcnow()
+        db.session.commit()
+        worker._futures[item_id] = Future()
+        worker._future_attempt_ids[item_id] = replacement_attempt.id
+
+        worker._recover_orphaned_items(immediate=False)
+
+        db.session.expire_all()
+        item = db.session.get(GenerationItem, item_id)
+        user = db.session.get(User, self.user.id)
+        stale_attempt = db.session.get(GenerationAttempt, stale_attempt_id)
+        replacement_attempt = db.session.get(GenerationAttempt, replacement_attempt.id)
+        self.assertEqual(item.status, "running")
+        self.assertEqual(item.claimed_by, worker.worker_id)
+        self.assertEqual(user.reserved_rmb, Decimal("1.2500"))
+        self.assertEqual(stale_attempt.status, "unknown")
+        self.assertEqual(replacement_attempt.status, "running")
+        self.assertEqual(replacement_attempt.claimed_by, worker.worker_id)
+
     def test_worker_keeps_excess_images_queued_at_user_and_channel_limits(self):
         workspace = self.create_workspace()
         job = self.submit(workspace, batch_count=4)

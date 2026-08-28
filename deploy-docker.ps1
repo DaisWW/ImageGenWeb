@@ -6,6 +6,8 @@ param(
     [ValidatePattern("^[A-Za-z0-9_.-]+$")]
     [string]$AdminUsername = "admin",
 
+    # LAN is the product default for this deployment. Use -LocalOnly to
+    # opt out; keep -Lan for backwards-compatible explicit invocation.
     [switch]$Lan,
     [switch]$LocalOnly,
     [switch]$SkipFirewall,
@@ -15,14 +17,22 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# LISTENER POLICY - DO NOT CHANGE: LAN is the default; loopback is explicit.
 if ($LocalOnly) {
     $Lan = $false
+} else {
+    $Lan = $true
 }
 
 $projectDir = $PSScriptRoot
 $envPath = Join-Path $projectDir ".env"
 $firewallRuleName = "Snow AI Studio LAN"
 $httpsFirewallRuleName = "Snow AI Studio HTTPS LAN"
+
+# LISTENER CONTRACT - DO NOT CHANGE for LAN deployments: HTTP publishes on
+# every host interface; loopback is only for explicit -LocalOnly or HTTPS Web.
+$lanBindHost = "0.0.0.0"
+$loopbackBindHost = "127.0.0.1"
 
 function Get-FirewallRule {
     param([string]$RuleName = $firewallRuleName)
@@ -124,6 +134,8 @@ function Get-EnvValue {
 }
 
 function Initialize-EnvironmentFile {
+    param([bool]$LanMode)
+
     $lines = New-Object "System.Collections.Generic.List[string]"
     if (Test-Path -LiteralPath $envPath) {
         [IO.File]::ReadAllLines($envPath) | ForEach-Object { $lines.Add($_) | Out-Null }
@@ -158,9 +170,11 @@ function Initialize-EnvironmentFile {
     Set-EnvValue $lines "LUCIDA_MODEL_PATH" "./.tmp-lucida-src/lucida-main/.model/lucida" -ReplaceBlank | Out-Null
     Set-EnvValue $lines "IMAGEGEN_PORT" ([string]$Port) | Out-Null
     $httpsProxyEnabled = Get-EnvFlag -Lines $lines -Name "IMAGEGEN_HTTPS_ENABLED"
-    $bindHost = if ($httpsProxyEnabled -or -not $Lan) { "127.0.0.1" } else { "0.0.0.0" }
+    # Keep the public HTTP listener explicit. Never silently fall back to a
+    # loopback bind when the deployment was requested for the LAN.
+    $bindHost = if ($httpsProxyEnabled -or -not $LanMode) { $loopbackBindHost } else { $lanBindHost }
     Set-EnvValue $lines "IMAGEGEN_BIND_HOST" $bindHost | Out-Null
-    $httpsBindHost = if ($httpsProxyEnabled -and $Lan) { "0.0.0.0" } else { "127.0.0.1" }
+    $httpsBindHost = if ($httpsProxyEnabled -and $LanMode) { $lanBindHost } else { $loopbackBindHost }
     Set-EnvValue $lines "IMAGEGEN_HTTPS_BIND_HOST" $httpsBindHost | Out-Null
     Set-EnvValue $lines "COOKIE_SECURE" "false" -ReplaceBlank | Out-Null
     Set-EnvValue $lines "TRUST_PROXY_HEADERS" "false" -ReplaceBlank | Out-Null
@@ -217,6 +231,36 @@ function Test-CurrentStackOwnsPort {
     return $exitCode -eq 0 -and ($publishedPort -match ":$ListenPort$")
 }
 
+function Assert-PublishedListener {
+    param(
+        [string]$Service,
+        [int]$ContainerPort,
+        [string]$ExpectedHost,
+        [int]$ExpectedPort,
+        [string]$Label,
+        [switch]$HttpsProfile
+    )
+
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "SilentlyContinue"
+        $composeArguments = @("--project-directory", $projectDir)
+        if ($HttpsProfile) {
+            $composeArguments += @("--profile", "https")
+        }
+        $publishedPort = docker compose @composeArguments port $Service $ContainerPort 2>$null
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+
+    $publishedPort = @($publishedPort | ForEach-Object { "$_".Trim() } | Where-Object { $_ })[0]
+    $expectedPublished = "$ExpectedHost`:$ExpectedPort"
+    if ($exitCode -ne 0 -or $publishedPort -ne $expectedPublished) {
+        throw "监听校验失败（$Label）：Docker 当前发布为 '$publishedPort'，预期为 '$expectedPublished'。LAN 请使用 -Lan；仅本机访问请显式使用 -LocalOnly。"
+    }
+}
+
 function Get-LanAddresses {
     return [Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() |
         Where-Object {
@@ -261,9 +305,24 @@ try {
         throw "Docker 引擎未运行。请启动 Docker Desktop 后重试。"
     }
 
-    $generatedAdminPassword = Initialize-EnvironmentFile
+    $existingBindHost = ""
+    if (Test-Path -LiteralPath $envPath) {
+        $existingLines = [IO.File]::ReadAllLines($envPath)
+        $existingBindHost = Get-EnvValue -Lines $existingLines -Name "IMAGEGEN_BIND_HOST"
+        if ($existingBindHost -and $existingBindHost -notin @($lanBindHost, $loopbackBindHost)) {
+            throw "IMAGEGEN_BIND_HOST 只能是 $lanBindHost 或 $loopbackBindHost，当前值 '$existingBindHost' 无效。"
+        }
+    }
+    $effectiveLan = $Lan
+
+    $generatedAdminPassword = Initialize-EnvironmentFile -LanMode $effectiveLan
     $envLines = [IO.File]::ReadAllLines($envPath)
     $httpsProxyEnabled = Get-EnvFlag -Lines $envLines -Name "IMAGEGEN_HTTPS_ENABLED"
+    $expectedWebBindHost = if ($httpsProxyEnabled) { $loopbackBindHost } elseif ($effectiveLan) { $lanBindHost } else { $loopbackBindHost }
+    $actualWebBindHost = Get-EnvValue -Lines $envLines -Name "IMAGEGEN_BIND_HOST"
+    if ($actualWebBindHost -ne $expectedWebBindHost) {
+        throw "监听配置不一致：Web 预期绑定 $expectedWebBindHost，实际为 $actualWebBindHost。请使用 -Lan 或显式 -LocalOnly。"
+    }
     [int]$backupRetentionDays = 30
     $configuredRetention = Get-EnvValue -Lines $envLines -Name "IMAGEGEN_BACKUP_RETENTION_DAYS"
     [int]$parsedRetention = 0
@@ -304,16 +363,16 @@ try {
         Write-Host "部署前备份：$preDeployBackup" -ForegroundColor Green
     }
 
-    if ($Lan -and $httpsProxyEnabled) {
+    if ($effectiveLan -and $httpsProxyEnabled) {
         Write-Host "局域网模式将通过 HTTPS 反向代理提供访问。" -ForegroundColor Green
-    } elseif ($Lan) {
+    } elseif ($effectiveLan) {
         Write-Warning "局域网模式会通过明文 HTTP 暴露登录和会话流量。请仅在可信网络使用，或在服务前配置 TLS。"
     }
 
     $firewallPort = if ($httpsProxyEnabled) { $httpsPort } else { $Port }
     $firewallRuleNameForMode = if ($httpsProxyEnabled) { $httpsFirewallRuleName } else { $firewallRuleName }
     $firewallRule = Get-FirewallRule -RuleName $firewallRuleNameForMode
-    if ($Lan -and -not $SkipFirewall -and -not (Test-FirewallRule -Rule $firewallRule -ListenPort $firewallPort)) {
+    if ($effectiveLan -and -not $SkipFirewall -and -not (Test-FirewallRule -Rule $firewallRule -ListenPort $firewallPort)) {
         Write-Host "正在配置 Windows 防火墙，需要确认一次管理员权限。" -ForegroundColor Yellow
         $operation = if ($null -eq $firewallRule) { "add" } else { "set" }
         $firewallArguments = @(
@@ -449,6 +508,29 @@ try {
         throw "docker compose 启动或数据库迁移失败。"
     }
 
+    # A localhost health check cannot detect a wrongly scoped host port. Check
+    # Compose's published endpoint so LAN mode fails before it is announced.
+    Assert-PublishedListener `
+        -Service "web" `
+        -ContainerPort 7860 `
+        -ExpectedHost $expectedWebBindHost `
+        -ExpectedPort $Port `
+        -Label "Web HTTP"
+    if ($httpsProxyEnabled) {
+        $expectedHttpsBindHost = if ($effectiveLan) { $lanBindHost } else { $loopbackBindHost }
+        Assert-PublishedListener `
+            -Service "proxy" `
+            -ContainerPort 443 `
+            -ExpectedHost $expectedHttpsBindHost `
+            -ExpectedPort $httpsPort `
+            -Label "HTTPS proxy" `
+            -HttpsProfile
+    }
+    Write-Host "监听校验通过：Web $expectedWebBindHost`:$Port" -ForegroundColor Green
+    if ($httpsProxyEnabled) {
+        Write-Host "监听校验通过：HTTPS $expectedHttpsBindHost`:$httpsPort" -ForegroundColor Green
+    }
+
     $healthUrl = "http://127.0.0.1:$Port/health"
     $deadline = (Get-Date).AddMinutes(15)
     $healthy = $false
@@ -494,7 +576,7 @@ try {
     if ($httpsProxyEnabled) {
         Write-Host "HTTPS 反向代理：https://${httpsHost}:${httpsPort}" -ForegroundColor Green
     }
-    if ($Lan) {
+    if ($effectiveLan) {
         foreach ($address in Get-LanAddresses) {
             if ($httpsProxyEnabled) {
                 Write-Host "局域网地址（HTTPS，请确保主机名解析到此机器）：https://${httpsHost}:${httpsPort}"

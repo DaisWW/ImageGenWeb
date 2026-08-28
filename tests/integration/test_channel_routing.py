@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from datetime import timedelta
 from decimal import Decimal
 
@@ -297,6 +298,73 @@ class TestChannelRouting(PlatformTestCase):
         self.assertEqual(ledger_count, 1)
         self.assertEqual([entry.provider_id for entry in logs], ["current", "lucen"])
         self.assertTrue(logs[0].details["will_retry"])
+
+    def test_delayed_retry_finalization_does_not_touch_the_next_attempt(self):
+        workspace = self.create_workspace()
+        job = self.submit(workspace, channel_id="", batch_count=1)
+        item_id = job.items[0].id
+        worker = self.create_worker()
+        worker.providers = SelectiveProviderFactory(
+            {
+                "current": ProviderError(
+                    "刀哥暂时不可用",
+                    code="upstream_error",
+                    status_code=502,
+                )
+            }
+        )
+        first_attempt_id = worker._claim(item_id)
+        self.assertIsNotNone(first_attempt_id)
+
+        finalization_started = threading.Event()
+        allow_finalization = threading.Event()
+        original_finalize_attempt = worker._finalize_attempt
+        processing_errors: list[Exception] = []
+
+        def delayed_finalize_attempt(finalized_item_id, **kwargs):
+            if kwargs.get("attempt_id") == first_attempt_id:
+                finalization_started.set()
+                if not allow_finalization.wait(5):
+                    raise TimeoutError("旧 attempt 最终化等待超时")
+            return original_finalize_attempt(finalized_item_id, **kwargs)
+
+        def process_first_attempt():
+            try:
+                worker._process_item(item_id, first_attempt_id)
+            except Exception as exc:
+                processing_errors.append(exc)
+
+        worker._finalize_attempt = delayed_finalize_attempt
+        processing = threading.Thread(target=process_first_attempt)
+        second_attempt_id = None
+        processing.start()
+        try:
+            self.assertTrue(finalization_started.wait(5))
+            second_attempt_id = worker._claim(item_id)
+            self.assertIsNotNone(second_attempt_id)
+        finally:
+            allow_finalization.set()
+            processing.join(10)
+            worker._finalize_attempt = original_finalize_attempt
+
+        self.assertFalse(processing.is_alive())
+        self.assertEqual(processing_errors, [])
+        db.session.expire_all()
+        item = db.session.get(GenerationItem, item_id)
+        attempts = list(
+            db.session.scalars(
+                select(GenerationAttempt)
+                .where(GenerationAttempt.item_id == item_id)
+                .order_by(GenerationAttempt.attempt_number)
+            )
+        )
+        self.assertEqual(
+            [attempt.id for attempt in attempts], [first_attempt_id, second_attempt_id]
+        )
+        self.assertEqual([attempt.status for attempt in attempts], ["failed", "running"])
+        self.assertEqual(attempts[1].claimed_by, worker.worker_id)
+        self.assertEqual(item.status, "running")
+        self.assertEqual(item.channel_id, "lucen")
 
     def test_uncertain_provider_error_stops_without_switching_channel(
         self,
