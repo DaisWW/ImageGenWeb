@@ -140,7 +140,6 @@ p {
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
-.transparent-background-control:has(input:focus-visible),
 .workspace-select:focus-visible,
 .workspace-action:focus-visible,
 .mode-button:focus-visible {

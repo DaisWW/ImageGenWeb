@@ -38,26 +38,27 @@ async function uploadLibraryImage(page, file) {
 }
 
 async function mockConfiguredImageChannel(page) {
+  const channel = {
+    id: "e2e",
+    label: "E2E 渠道",
+    enabled: true,
+    configured: true,
+    models: [{ id: "e2e-image", label: "GPT Image 2" }],
+    default_model: "e2e-image",
+    price_rmb: "0.0300",
+    capabilities: {
+      modes: ["text2img", "img2img"],
+      max_reference_images: 2,
+      max_reference_image_mb: 10,
+      max_reference_total_mb: 40,
+      formats: ["png", "jpeg", "webp"],
+    },
+    limits: { max_concurrency: 2 },
+  };
   await page.route("**/api/channels", (route) => route.fulfill({
     json: {
       version: "e2e-channels",
-      channels: [{
-        id: "e2e",
-        label: "E2E 渠道",
-        enabled: true,
-        configured: true,
-        models: [{ id: "e2e-image", label: "GPT Image 2" }],
-        default_model: "e2e-image",
-        price_rmb: "0.0300",
-        capabilities: {
-          modes: ["text2img", "img2img"],
-          max_reference_images: 2,
-          max_reference_image_mb: 10,
-          max_reference_total_mb: 40,
-          formats: ["png", "jpeg", "webp"],
-        },
-        limits: { max_concurrency: 2 },
-      }],
+      channels: [channel, { ...channel, id: "lucen", label: "Lucen", price_rmb: "0.0800" }],
     },
   }));
 }

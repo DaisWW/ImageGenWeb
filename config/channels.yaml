@@ -3,7 +3,7 @@ version: 1
 queue:
   # 生产并发：刀哥的 2 + Lucen 4；仍受单用户并发限制。
   global_concurrency: 6
-  # 同一张图片最多尝试两个不同渠道。
+  # 兼容自动调度请求的同一张图片最多尝试两个不同渠道。
   max_channel_attempts: 2
   max_queued_per_user: 20
   max_queued_global: 100
@@ -13,7 +13,7 @@ queue:
 channels:
   - id: current
     label: 刀哥的
-    # 数值越小越优先；系统会在该渠道达到并发上限后自动使用下一渠道。
+    # 数值越小越优先；仅用于未指定渠道的兼容自动调度。
     priority: 1
     enabled: true
     adapter: openai_images
@@ -57,7 +57,7 @@ channels:
       - id: gpt-image-2
         label: GPT Image 2
         enabled: true
-    price_rmb: 0.0900
+    price_rmb: 0.0800
     capabilities:
       modes: [text2img, img2img]
       # 2026-07-17 使用 gpt-image-2、low、PNG 实测垫图合并：

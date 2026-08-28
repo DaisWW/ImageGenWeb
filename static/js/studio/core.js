@@ -164,6 +164,12 @@
       this.sliceBoxes = [];
       this.sliceSelected = new Set();
       this.sliceBusy = false;
+      this.backgroundRemovalItemId = null;
+      this.backgroundRemovalModels = [];
+      this.backgroundRemovalRun = null;
+      this.backgroundRemovalActiveResultId = null;
+      this.backgroundRemovalSubmitting = false;
+      this.backgroundRemovalPollTimer = null;
       this.libraryImages = null;
       this.libraryTarget = "chat";
       this.libraryLoading = false;
@@ -288,10 +294,7 @@
         channelSelect: byId("channelSelect"),
         modelSelect: byId("modelSelect"),
         sizeInput: byId("sizeInput"),
-        sizeOptions: byId("sizeOptions"),
         formatSelect: byId("formatSelect"),
-        transparentBackground: byId("transparentBackground"),
-        transparentBackgroundControl: byId("transparentBackgroundControl"),
         batchCount: byId("batchCount"),
         generationStrategy: byId("generationStrategy"),
         generationPlan: byId("generationPlan"),
@@ -328,9 +331,25 @@
         detailSeriesAnchor: byId("detailSeriesAnchor"),
         detailUiKit: byId("detailUiKit"),
         detailSlice: byId("detailSlice"),
+        detailBackgroundRemoval: byId("detailBackgroundRemoval"),
         detailSaveLibrary: byId("detailSaveLibrary"),
         detailReuse: byId("detailReuse"),
         detailDownload: byId("detailDownload"),
+        backgroundRemovalDialog: byId("backgroundRemovalDialog"),
+        backgroundRemovalStatus: byId("backgroundRemovalStatus"),
+        backgroundRemovalModelList: byId("backgroundRemovalModelList"),
+        backgroundRemovalModelSummary: byId("backgroundRemovalModelSummary"),
+        backgroundRemovalStart: byId("backgroundRemovalStart"),
+        backgroundRemovalPreviewPane: byId("backgroundRemovalPreviewPane"),
+        backgroundRemovalPreviewLabel: byId("backgroundRemovalPreviewLabel"),
+        backgroundRemovalPreviewEmpty: byId("backgroundRemovalPreviewEmpty"),
+        backgroundRemovalPreviewImage: byId("backgroundRemovalPreviewImage"),
+        backgroundRemovalBackgroundButtons: [...document.querySelectorAll("[data-background-removal-background]")],
+        backgroundRemovalResultList: byId("backgroundRemovalResultList"),
+        backgroundRemovalResultSummary: byId("backgroundRemovalResultSummary"),
+        backgroundRemovalSelectionSummary: byId("backgroundRemovalSelectionSummary"),
+        backgroundRemovalSelectBest: byId("backgroundRemovalSelectBest"),
+        backgroundRemovalDownloadAll: byId("backgroundRemovalDownloadAll"),
         sliceDialog: byId("sliceDialog"),
         slicePreviewTitle: byId("slicePreviewTitle"),
         sliceConfidence: byId("sliceConfidence"),
@@ -527,11 +546,6 @@
       });
       this.el.modelSelect.addEventListener("change", () => this.settingChanged());
       this.el.formatSelect.addEventListener("change", () => {
-        this.updateTransparentBackgroundState();
-        this.settingChanged();
-      });
-      this.el.transparentBackground.addEventListener("change", () => {
-        this.updateTransparentBackgroundState();
         this.settingChanged();
       });
       this.el.sizeInput.addEventListener("input", () => this.el.sizeInput.setCustomValidity(""));
@@ -571,8 +585,24 @@
       this.el.detailApplyReview.addEventListener("click", () => this.applyDetailReview());
       this.el.detailSeriesAnchor.addEventListener("click", () => this.setDetailAsSeriesAnchor());
       this.el.detailSlice.addEventListener("click", () => this.openSliceTool());
+      this.el.detailBackgroundRemoval.addEventListener("click", () => this.openBackgroundRemovalTool());
       this.el.detailSaveLibrary.addEventListener("click", () => this.saveDetailToLibrary());
       this.el.detailReuse.addEventListener("click", () => this.useDetailAsReference());
+      this.el.backgroundRemovalModelList.addEventListener("change", (event) => {
+        this.handleBackgroundRemovalModelSelection(event);
+      });
+      this.el.backgroundRemovalStart.addEventListener("click", () => this.startBackgroundRemoval());
+      this.el.backgroundRemovalResultList.addEventListener("click", (event) => {
+        this.handleBackgroundRemovalResultAction(event);
+      });
+      this.el.backgroundRemovalBackgroundButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+          this.setBackgroundRemovalPreviewBackground(button.dataset.backgroundRemovalBackground);
+        });
+      });
+      this.el.backgroundRemovalSelectBest.addEventListener("click", () => {
+        this.selectBestBackgroundRemovalResult();
+      });
       this.el.sliceLayoutFields.addEventListener("input", () => this.rebuildSliceGrid());
       this.el.sliceOverlay.addEventListener("click", (event) => this.handleSliceSelection(event));
       this.el.sliceList.addEventListener("click", (event) => this.handleSliceSelection(event));
@@ -594,6 +624,13 @@
         this.sliceBoxes = [];
         this.sliceSelected.clear();
         this.el.sliceImage.removeAttribute("src");
+      });
+      this.el.backgroundRemovalDialog.addEventListener("close", () => {
+        window.clearTimeout(this.backgroundRemovalPollTimer);
+        this.backgroundRemovalPollTimer = null;
+        this.backgroundRemovalItemId = null;
+        this.backgroundRemovalActiveResultId = null;
+        this.el.backgroundRemovalPreviewImage.removeAttribute("src");
       });
       this.el.libraryUploadButton.addEventListener("click", () => this.el.libraryInput.click());
       this.el.libraryInput.addEventListener("change", () => {
