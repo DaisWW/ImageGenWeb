@@ -35,6 +35,11 @@ class TestMigrationCompatibility(unittest.TestCase):
                     text("ALTER TABLE generation_attempts DROP COLUMN circuit_probe")
                 )
                 connection.execute(text("DROP TABLE channel_circuit_states"))
+                connection.execute(
+                    text(
+                        "CREATE INDEX ix_workspaces_user_position ON workspaces (user_id, position)"
+                    )
+                )
             engine.dispose()
 
             with patch.dict(os.environ, {"DATABASE_URL": database_url}):
@@ -50,11 +55,11 @@ class TestMigrationCompatibility(unittest.TestCase):
                     column["name"] for column in inspector.get_columns("generation_attempts")
                 }
                 self.assertTrue(
-                    {"attempted_channel_ids", "circuit_probe"}.issubset(
-                        generation_item_columns
-                    )
+                    {"attempted_channel_ids", "circuit_probe"}.issubset(generation_item_columns)
                 )
                 self.assertIn("circuit_probe", generation_attempt_columns)
                 self.assertIn("channel_circuit_states", inspector.get_table_names())
+                workspace_indexes = {index["name"] for index in inspector.get_indexes("workspaces")}
+                self.assertNotIn("ix_workspaces_user_position", workspace_indexes)
             finally:
                 engine.dispose()
