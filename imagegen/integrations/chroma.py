@@ -281,9 +281,7 @@ def _compute_alpha(
     for pixel_index in range(len(alpha)):
         offset = pixel_index * 4
         r, g, b, source_alpha = rgba[offset : offset + 4]
-        distance = math.sqrt(
-            (r - kr) ** 2 + (g - kg) ** 2 + (b - kb) ** 2
-        ) / _NORMALIZATION
+        distance = math.sqrt((r - kr) ** 2 + (g - kg) ** 2 + (b - kb) ** 2) / _NORMALIZATION
         ratio = max(0.0, min(1.0, (distance - lower) / span))
         # Smoothstep avoids a visible hard contour around particles.
         ratio = ratio * ratio * (3.0 - 2.0 * ratio)
@@ -357,7 +355,9 @@ def _feather_alpha(alpha: bytearray, width: int, height: int, radius: int) -> by
             blurred.close()
 
 
-def _sample_border_color(rgba: bytes, width: int, height: int, sample_side: int) -> tuple[int, int, int]:
+def _sample_border_color(
+    rgba: bytes, width: int, height: int, sample_side: int
+) -> tuple[int, int, int]:
     side = min(sample_side, width, height)
     stride = max(1, max(width, height) // 256)
     horizontal_bands = [(0, side)]
@@ -417,9 +417,7 @@ def _sample_border_color(rgba: bytes, width: int, height: int, sample_side: int)
 
     if not samples:
         return (0, 255, 0)
-    green_samples = [
-        sample for sample in samples if sample[1] >= max(sample[0], sample[2]) + 15
-    ]
+    green_samples = [sample for sample in samples if sample[1] >= max(sample[0], sample[2]) + 15]
     selected = green_samples if len(green_samples) >= max(8, len(samples) // 5) else samples
     return tuple(
         sorted(sample[index] for sample in selected)[len(selected) // 2] for index in range(3)

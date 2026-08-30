@@ -243,8 +243,7 @@ class RuntimeConfigService:
         if not isinstance(raw_models, list):
             raise ServiceError("透明化模型列表格式无效")
         existing = {
-            model.identifier: model
-            for model in self.matting_models.list(include_disabled=True)
+            model.identifier: model for model in self.matting_models.list(include_disabled=True)
         }
         models: list[dict[str, Any]] = []
         for raw in raw_models:

@@ -110,9 +110,7 @@ def upgrade() -> None:
             sa.Column("output_height", sa.Integer(), nullable=True),
             sa.Column("created_at", sa.DateTime(), nullable=False),
             sa.Column("updated_at", sa.DateTime(), nullable=False),
-            sa.ForeignKeyConstraint(
-                ["run_id"], ["background_removal_runs.id"], ondelete="CASCADE"
-            ),
+            sa.ForeignKeyConstraint(["run_id"], ["background_removal_runs.id"], ondelete="CASCADE"),
             sa.PrimaryKeyConstraint("id"),
             sa.UniqueConstraint("output_path"),
             sa.UniqueConstraint("thumbnail_path"),

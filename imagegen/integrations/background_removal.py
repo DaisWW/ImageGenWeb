@@ -19,14 +19,11 @@ class BackgroundRemovalAdapter(Protocol):
 
     adapter_id: str
 
-    def remove_background(self, content: bytes, *, filename: str = "image.png") -> bytes:
-        ...
+    def remove_background(self, content: bytes, *, filename: str = "image.png") -> bytes: ...
 
-    def healthcheck(self) -> None:
-        ...
+    def healthcheck(self) -> None: ...
 
-    def close(self) -> None:
-        ...
+    def close(self) -> None: ...
 
 
 class MattingAdapterFactory:
@@ -47,9 +44,9 @@ class MattingAdapterFactory:
         # Session instances are isolated per worker thread.  A single factory
         # is shared by web health checks and background tasks, but requests'
         # Session object is not guaranteed to be thread-safe.
-        self._sessions: weakref.WeakKeyDictionary[
-            threading.Thread, dict[str, requests.Session]
-        ] = weakref.WeakKeyDictionary()
+        self._sessions: weakref.WeakKeyDictionary[threading.Thread, dict[str, requests.Session]] = (
+            weakref.WeakKeyDictionary()
+        )
         self._lock = threading.RLock()
 
     def create(
@@ -62,7 +59,9 @@ class MattingAdapterFactory:
         try:
             adapter_id = normalize_adapter_id(adapter_id)
         except ValueError as exc:
-            raise ServiceError(str(exc), code="matting_adapter_unsupported", status_code=500) from exc
+            raise ServiceError(
+                str(exc), code="matting_adapter_unsupported", status_code=500
+            ) from exc
         base_url = str(self._source_value(source, "base_url", "") or "").strip()
         model = str(self._source_value(source, "model", "") or "").strip()
         timeout = float(self._source_value(source, "timeout_seconds", 120) or 120)

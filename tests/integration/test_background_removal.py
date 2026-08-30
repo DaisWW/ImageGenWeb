@@ -26,7 +26,12 @@ def transparent_candidate(color: tuple[int, int, int], size: tuple[int, int] = (
     width, height = size
     draw = ImageDraw.Draw(image)
     draw.rounded_rectangle(
-        (max(1, width // 8), max(1, height // 8), width - max(2, width // 8), height - max(2, height // 8)),
+        (
+            max(1, width // 8),
+            max(1, height // 8),
+            width - max(2, width // 8),
+            height - max(2, height // 8),
+        ),
         radius=max(2, min(width, height) // 8),
         fill=(*color, 255),
     )
@@ -191,9 +196,7 @@ class TestBackgroundRemoval(PlatformTestCase):
             self.app.extensions["image_storage"].read_bytes(original_path),
             original_bytes,
         )
-        self.assertTrue(
-            all(call["filename"].endswith(".png") for call in FakeMattingClient.calls)
-        )
+        self.assertTrue(all(call["filename"].endswith(".png") for call in FakeMattingClient.calls))
         self.assertNotEqual(by_model["lucida"].output_path, original_path)
         self.assertEqual(user_after.balance_rmb, balance_before)
         self.assertEqual(user_after.reserved_rmb, reserved_before)
@@ -279,9 +282,7 @@ class TestBackgroundRemoval(PlatformTestCase):
 
         admin_client = self.admin_client()
         selected = admin_client.post(f"/api/background-removal-results/{result_id}/select")
-        downloaded = admin_client.get(
-            f"/media/background-removal-results/{result_id}?download=1"
-        )
+        downloaded = admin_client.get(f"/media/background-removal-results/{result_id}?download=1")
 
         self.assertEqual(selected.status_code, 200)
         self.assertEqual(selected.json["run"]["selected_result_id"], result_id)

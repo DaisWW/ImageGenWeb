@@ -127,7 +127,9 @@ class TestChromaAdapters(unittest.TestCase):
     def test_local_adapter_rejects_a_fully_opaque_result(self):
         source = _image_bytes([(220, 40, 40, 255)] * 4, (2, 2))
         with self.assertRaises(ServiceError) as context:
-            ChromaKeyAdapter({"key_color": [0, 255, 0], "threshold": 0, "softness": 0.01}).remove_background(source)
+            ChromaKeyAdapter(
+                {"key_color": [0, 255, 0], "threshold": 0, "softness": 0.01}
+            ).remove_background(source)
         self.assertEqual(context.exception.code, "matting_opaque_result")
 
     def test_local_adapter_rejects_images_above_its_memory_budget(self):

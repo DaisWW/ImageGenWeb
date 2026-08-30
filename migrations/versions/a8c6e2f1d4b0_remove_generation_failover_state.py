@@ -24,10 +24,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def _existing_columns(table_name: str) -> set[str]:
-    return {
-        column["name"]
-        for column in sa.inspect(op.get_bind()).get_columns(table_name)
-    }
+    return {column["name"] for column in sa.inspect(op.get_bind()).get_columns(table_name)}
 
 
 def upgrade() -> None:
