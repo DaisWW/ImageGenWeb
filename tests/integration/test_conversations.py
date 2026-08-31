@@ -298,6 +298,41 @@ models:
             "本次调用同时完成需求确认和最终提示词整理", self.chat_client.calls[0]["system"]
         )
 
+    def test_chat_keeps_ready_draft_when_auto_direction_conflicts_with_locked_gallery(self):
+        workspace = self.create_workspace("锁定图谱的对话")
+        self.services.workspaces.update(
+            workspace,
+            {"settings": {"gallery_category_id": "watercolor"}},
+        )
+        self.chat_client.reply_content = json.dumps(
+            {
+                "status": "ready",
+                "summary_zh": "水彩人物海报，保留柔和手绘质感。",
+                "prompt": "A watercolor character poster with soft hand-painted texture.",
+                "creative_direction": "poster",
+                "template_id": "custom",
+                "style_tags": ["Watercolor"],
+                "scene_tags": [],
+                "selection_reason": "按人物海报整理。",
+                "brief": {"deliverable": "人物海报"},
+                "hard_checks": ["主体清晰"],
+                "quality_hint": "high",
+            },
+            ensure_ascii=False,
+        )
+
+        _user_message, assistant_message = self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="生成一张水彩人物海报",
+        )
+
+        self.assertEqual(assistant_message.kind, "prompt_draft")
+        self.assertEqual(assistant_message.payload["status"], "ready")
+        self.assertIn("水彩人物海报", assistant_message.payload["summary_zh"])
+        self.assertEqual(assistant_message.payload["gallery_categories"], ["watercolor"])
+        self.assertEqual(len(self.chat_client.calls), 1)
+
     def test_chat_turn_falls_back_after_repeated_invalid_structured_output(self):
         workspace = self.create_workspace("对话结构化错误")
         self.chat_client.reply_content = json.dumps(
