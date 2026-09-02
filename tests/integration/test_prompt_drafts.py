@@ -27,6 +27,25 @@ from tests.support.platform import (
 
 
 class TestPromptDrafts(PlatformTestCase):
+    def test_prompt_draft_classifies_repairable_output_failures(self):
+        review = PromptDraftReview(
+            translate_to_english=False,
+            workspace_prompt="",
+        )
+
+        cases = (
+            ("not-json", "prompt_draft_invalid_json"),
+            ('{"status":"unknown"}', "prompt_draft_invalid_status"),
+            ('{"status":"ready","summary_zh":"缺少提示词"}', "prompt_draft_missing_fields"),
+        )
+        for content, expected_code in cases:
+            with (
+                self.subTest(expected_code=expected_code),
+                self.assertRaises(ServiceError) as raised,
+            ):
+                review.parse(content)
+            self.assertEqual(raised.exception.code, expected_code)
+
     def test_stream_preview_publishes_only_completed_visible_fields(self):
         previews = []
         stream = PromptDraftStreamPreview(
@@ -704,12 +723,13 @@ class TestPromptDrafts(PlatformTestCase):
         self.assertEqual(raised.exception.status_code, 502)
         entry = db.session.get(RuntimeLog, raised.exception.error_id)
         self.assertIsNotNone(entry)
-        self.assertEqual(entry.event, "chat.prompt_draft")
+        self.assertEqual(entry.event, "chat.prompt_draft.repair")
         self.assertEqual(entry.error_code, "chat_invalid_response")
         self.assertEqual(
             entry.details["diagnostics"]["validation"],
             "structured_output_contract",
         )
+        self.assertEqual(entry.details["diagnostics"]["request_stage"], "format_repair")
         self.assertNotIn("private-invalid-prompt", json.dumps(entry.details))
 
     def test_prompt_draft_does_not_repair_a_prompt_contract_length_error(self):

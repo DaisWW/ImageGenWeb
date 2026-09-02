@@ -23,8 +23,14 @@ from .creative import (
 from .creative.models import CreativeCase, PromptTemplate
 from .structured_output import parse_json_object
 
-PROMPT_DRAFT_INVALID_OUTPUT_CODE = "prompt_draft_invalid_output"
 PROMPT_CONTRACT_TOO_LONG_CODE = "prompt_contract_too_long"
+PROMPT_DRAFT_REPAIRABLE_CODES = frozenset(
+    {
+        "prompt_draft_invalid_json",
+        "prompt_draft_invalid_status",
+        "prompt_draft_missing_fields",
+    }
+)
 
 _VISIBLE_MESSAGE_KEYS = (
     "message",
@@ -334,6 +340,7 @@ ready 时还必须完成一次交付前审查：
 
     def parse(self, content: str) -> dict[str, Any]:
         payload = parse_json_object(content)
+        error_code = "prompt_draft_invalid_json"
         if payload is not None:
             status = _draft_status(payload)
             parser = {
@@ -344,13 +351,12 @@ ready 时还必须完成一次交付前审查：
             parsed = parser(payload) if parser else None
             if parsed is not None:
                 return parsed
+            error_code = "prompt_draft_missing_fields" if parser else "prompt_draft_invalid_status"
         if self.conversation_prompt.strip() and _plain_text_response(content):
             if visible := _text(content, self.max_prompt_characters):
                 return self._conversation_result(visible)
         raise ServiceError(
-            "聊天模型未能返回有效提示词草稿，请重试",
-            code=PROMPT_DRAFT_INVALID_OUTPUT_CODE,
-            status_code=502,
+            "聊天模型未能返回有效提示词草稿，请重试", code=error_code, status_code=502
         )
 
     def conversation_fallback(self, *contents: str) -> dict[str, Any] | None:

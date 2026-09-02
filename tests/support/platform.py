@@ -296,7 +296,9 @@ class FakeChatClient:
                     output_characters=1,
                 )
             )
-        if "工作站生成一个简短、具体的标题" in system:
+        if "只负责修复上一条候选回复" in system:
+            content = self.reply_content or self.prompt_draft_content or "测试回复"
+        elif "工作站生成一个简短、具体的标题" in system:
             content = "红发蓝眼中年男性角色"
         elif "对话行为规则如下" in system:
             content = self.reply_content or json.dumps(

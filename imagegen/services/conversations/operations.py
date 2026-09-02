@@ -59,6 +59,7 @@ class ConversationOperation:
         "output": 65,
         "completed": 70,
         "parsing": 80,
+        "repairing": 85,
         "saving": 90,
         "upstream_error": 100,
         "connection_error": 100,

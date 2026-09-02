@@ -349,10 +349,11 @@ class ConversationReplyService(ConversationSupport):
         operation.ensure_active()
         operation.update_progress("parsing", "正在解析模型结果")
         try:
-            parsed, result, format_repaired = self._parse_prompt_draft_result(
+            parsed, result, format_repaired, model, format_repair = self._parse_prompt_draft_result(
+                workspace=workspace,
+                event="chat.reply",
                 review=review,
                 model=model,
-                system_prompt=system_prompt,
                 messages=context,
                 result=result,
                 operation=operation,
@@ -366,7 +367,7 @@ class ConversationReplyService(ConversationSupport):
         except OpenAIChatError as exc:
             return self._error_reply(
                 workspace,
-                model,
+                getattr(exc, "chat_model", model),
                 user_message,
                 exc,
                 operation=operation,
@@ -376,7 +377,11 @@ class ConversationReplyService(ConversationSupport):
                 workspace,
                 model,
                 user_message,
-                self._prompt_draft_validation_error(exc, result),
+                self._prompt_draft_validation_error(
+                    exc,
+                    result,
+                    model=getattr(exc, "chat_model", model),
+                ),
                 operation=operation,
             )
         if draft.get("status") == "needs_clarification" and candidate_references:
@@ -417,6 +422,7 @@ class ConversationReplyService(ConversationSupport):
                 "reference_count": len(generation_references),
                 "reference_usage": draft["reference_usage"],
                 "format_repaired": format_repaired,
+                **({"format_repair": format_repair} if format_repair else {}),
                 "retrieved_case_count": len(draft.get("retrieved_cases", [])),
                 "template_candidate_count": len(retrieval.templates),
             },
@@ -528,7 +534,12 @@ class ConversationReplyService(ConversationSupport):
         operation: ConversationOperation,
     ) -> ConversationMessage:
         operation.ensure_active()
-        error_id = self._record_chat_error(workspace, model, "chat.reply", error)
+        error_id = self._record_chat_error(
+            workspace,
+            model,
+            self._chat_error_event("chat.reply", error),
+            error,
+        )
         content = self._chat_error_message(error)
         if error_id:
             content = f"{content}\n错误 ID：{error_id}"

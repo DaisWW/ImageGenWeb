@@ -161,10 +161,11 @@ class PromptDraftWorkflow(ConversationSupport):
             )
         operation.update_progress("parsing", "正在解析模型结果")
         try:
-            parsed, result, format_repaired = self._parse_prompt_draft_result(
+            parsed, result, format_repaired, model, format_repair = self._parse_prompt_draft_result(
+                workspace=workspace,
+                event="chat.prompt_draft",
                 review=review,
                 model=model,
-                system_prompt=system_prompt,
                 messages=context,
                 result=result,
                 operation=operation,
@@ -176,13 +177,22 @@ class PromptDraftWorkflow(ConversationSupport):
                 reference_ids=[asset.id for asset in attachments],
             )
         except OpenAIChatError as exc:
-            self._raise_chat_error(workspace, model, "chat.prompt_draft", exc)
+            self._raise_chat_error(
+                workspace,
+                getattr(exc, "chat_model", model),
+                "chat.prompt_draft",
+                exc,
+            )
         except ServiceError as exc:
             self._raise_chat_error(
                 workspace,
                 model,
                 "chat.prompt_draft",
-                self._prompt_draft_validation_error(exc, result),
+                self._prompt_draft_validation_error(
+                    exc,
+                    result,
+                    model=getattr(exc, "chat_model", model),
+                ),
             )
         generation_references = self._draft_references(draft, attachments)
         content, message_kind = review.message_content(draft)
@@ -216,6 +226,7 @@ class PromptDraftWorkflow(ConversationSupport):
                 "reference_count": len(generation_references),
                 "reference_usage": draft["reference_usage"],
                 "format_repaired": format_repaired,
+                **({"format_repair": format_repair} if format_repair else {}),
                 "creative_direction": draft.get("creative_direction", "other"),
                 "template_id": draft.get("template_id", "custom"),
                 "edit_recipe_id": draft.get("edit_recipe_id", ""),

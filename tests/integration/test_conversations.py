@@ -9,7 +9,7 @@ from unittest.mock import patch
 from sqlalchemy import select
 
 from imagegen.extensions import db
-from imagegen.integrations.openai_chat import OpenAIChatError
+from imagegen.integrations.openai_chat import ChatCompletion, OpenAIChatError
 from imagegen.models import (
     RuntimeLog,
     Workspace,
@@ -184,6 +184,147 @@ models:
         self.assertTrue(entries[0].details["format_repaired"])
         self.assertEqual(entries[0].details["output_tokens"], 24)
 
+    def test_chat_repair_sends_text_context_without_image_data(self):
+        workspace = self.create_workspace("精简格式修复请求")
+        asset = self.services.workspaces.add_assets(
+            workspace,
+            [("reference.png", png_bytes())],
+        )[0]
+        replies = iter(
+            [
+                '{"status":"conversation","message":null}',
+                "参考图已经收到，我会按你的要求继续整理。",
+            ]
+        )
+        complete = self.chat_client.complete
+
+        def sequenced_complete(*args, **kwargs):
+            self.chat_client.reply_content = next(replies)
+            return complete(*args, **kwargs)
+
+        with patch.object(self.chat_client, "complete", side_effect=sequenced_complete):
+            _user_message, assistant_message = self.services.conversations.send(
+                workspace,
+                model_id="test-chat",
+                content="分析这张参考图",
+                attachment_ids=(asset.id,),
+            )
+
+        initial_request = json.dumps(self.chat_client.calls[0]["messages"])
+        repair_request = json.dumps(self.chat_client.calls[1]["messages"])
+        self.assertEqual(assistant_message.kind, "message")
+        self.assertIn(";base64,", initial_request)
+        self.assertNotIn(";base64,", repair_request)
+        self.assertNotIn("当前是静态图片工作站", self.chat_client.calls[1]["system"])
+
+    def test_chat_repair_uses_failover_and_the_fallback_output_limit(self):
+        self.chat_path.write_text(
+            """\
+version: 1
+context:
+  max_context_tokens: 32000
+models:
+  - id: primary
+    label: Primary
+    enabled: true
+    base_url: https://primary.example
+    api_key_env: TEST_CHAT_KEY
+    model: gpt-primary
+    reasoning_effort: max
+    review_reasoning_effort: medium
+    timeout_seconds: 30
+    max_output_tokens: 1000
+    fallback_model_ids: [repair-fallback]
+  - id: repair-fallback
+    label: Repair Fallback
+    enabled: true
+    base_url: https://fallback.example
+    api_key_env: TEST_CHAT_KEY
+    model: gpt-repair-fallback
+    reasoning_effort: max
+    review_reasoning_effort: low
+    timeout_seconds: 30
+    max_output_tokens: 128
+""",
+            encoding="utf-8",
+        )
+        self.app.extensions["chat_model_registry"].reload(force=True)
+        workspace = self.create_workspace("修复请求故障切换")
+        calls = []
+
+        def complete(
+            model,
+            *,
+            system,
+            messages,
+            max_output_tokens=None,
+            reasoning_effort=None,
+            progress=None,
+            output_delta=None,
+        ):
+            calls.append(
+                {
+                    "model_id": model.identifier,
+                    "system": system,
+                    "messages": messages,
+                    "max_output_tokens": max_output_tokens,
+                    "reasoning_effort": reasoning_effort,
+                }
+            )
+            if len(calls) == 2:
+                raise OpenAIChatError(
+                    "修复模型连接超时",
+                    code="chat_timeout",
+                    status_code=504,
+                    details={"first_output_seconds": None},
+                )
+            content = (
+                '{"status":"conversation","message":null}'
+                if len(calls) == 1
+                else "修复后的正常回复。"
+            )
+            if output_delta:
+                output_delta(content)
+            return ChatCompletion(
+                content=content,
+                request_id=f"request-{len(calls)}",
+                input_tokens=10,
+                output_tokens=5,
+                elapsed_seconds=0.5,
+                request_body_bytes=100 * len(calls),
+                first_output_seconds=0.1,
+            )
+
+        with patch.object(self.chat_client, "complete", side_effect=complete):
+            _user_message, assistant_message = self.services.conversations.send(
+                workspace,
+                model_id="primary",
+                content="你能做什么",
+            )
+
+        self.assertEqual(
+            [call["model_id"] for call in calls],
+            ["primary", "primary", "repair-fallback"],
+        )
+        self.assertEqual(calls[-1]["max_output_tokens"], 128)
+        self.assertEqual(assistant_message.provider_id, "repair-fallback")
+        entries, _total = self.services.runtime_logs.list_runtime(
+            category="chat",
+            since_hours=None,
+        )
+        success = next(entry for entry in entries if entry.status == "success")
+        retry = next(
+            entry
+            for entry in entries
+            if entry.status == "error" and entry.event == "chat.reply.repair"
+        )
+        self.assertEqual(success.details["format_repair"]["reason"], "prompt_draft_missing_fields")
+        self.assertEqual(
+            [item["provider_id"] for item in success.details["format_repair"]["attempts"]],
+            ["primary", "repair-fallback"],
+        )
+        self.assertEqual(retry.details["request_stage"], "format_repair")
+
     def test_chat_keeps_a_real_provider_error_from_the_repair_request(self):
         workspace = self.create_workspace("修复请求超时")
         complete = self.chat_client.complete
@@ -209,6 +350,15 @@ models:
         self.assertEqual(assistant_message.kind, "error")
         self.assertEqual(assistant_message.payload["code"], "chat_timeout")
         self.assertIn("响应超时", assistant_message.content)
+        entry = db.session.scalar(
+            select(RuntimeLog)
+            .where(RuntimeLog.status == "error", RuntimeLog.error_code == "chat_timeout")
+            .order_by(RuntimeLog.created_at.desc(), RuntimeLog.id.desc())
+        )
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.event, "chat.reply.repair")
+        self.assertEqual(entry.provider_id, "test-chat")
+        self.assertEqual(entry.details["diagnostics"]["request_stage"], "format_repair")
 
     def test_chat_does_not_repair_a_prompt_contract_length_error(self):
         workspace = self.create_workspace("制作契约过长")
