@@ -376,7 +376,7 @@ class ConversationReplyService(ConversationSupport):
                 workspace,
                 model,
                 user_message,
-                self._structured_output_error(exc, result),
+                self._prompt_draft_validation_error(exc, result),
                 operation=operation,
             )
         if draft.get("status") == "needs_clarification" and candidate_references:

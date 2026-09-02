@@ -210,6 +210,29 @@ models:
         self.assertEqual(assistant_message.payload["code"], "chat_timeout")
         self.assertIn("响应超时", assistant_message.content)
 
+    def test_chat_does_not_repair_a_prompt_contract_length_error(self):
+        workspace = self.create_workspace("制作契约过长")
+        self.chat_client.reply_content = json.dumps(
+            {
+                "status": "ready",
+                "summary_zh": "包含精确文字的长提示词",
+                "prompt": "画" * 7990,
+                "brief": {"exact_text": ["SNOW AI STUDIO"]},
+            },
+            ensure_ascii=False,
+        )
+
+        _user_message, assistant_message = self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="生成包含指定文字的详细海报",
+        )
+
+        self.assertEqual(len(self.chat_client.calls), 1)
+        self.assertEqual(assistant_message.kind, "error")
+        self.assertEqual(assistant_message.payload["code"], "prompt_contract_too_long")
+        self.assertIn("制作契约加入后提示词超过", assistant_message.content)
+
     def test_chat_accepts_nested_message_alias_and_hides_reasoning_tags(self):
         workspace = self.create_workspace("宽松聊天格式")
         self.chat_client.reply_content = json.dumps(

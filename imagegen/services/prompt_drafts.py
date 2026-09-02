@@ -23,6 +23,9 @@ from .creative import (
 from .creative.models import CreativeCase, PromptTemplate
 from .structured_output import parse_json_object
 
+PROMPT_DRAFT_INVALID_OUTPUT_CODE = "prompt_draft_invalid_output"
+PROMPT_CONTRACT_TOO_LONG_CODE = "prompt_contract_too_long"
+
 _VISIBLE_MESSAGE_KEYS = (
     "message",
     "content",
@@ -344,7 +347,11 @@ ready 时还必须完成一次交付前审查：
         if self.conversation_prompt.strip() and _plain_text_response(content):
             if visible := _text(content, self.max_prompt_characters):
                 return self._conversation_result(visible)
-        raise ServiceError("聊天模型未能返回有效提示词草稿，请重试")
+        raise ServiceError(
+            "聊天模型未能返回有效提示词草稿，请重试",
+            code=PROMPT_DRAFT_INVALID_OUTPUT_CODE,
+            status_code=502,
+        )
 
     def conversation_fallback(self, *contents: str) -> dict[str, Any] | None:
         if not self.conversation_prompt.strip():
@@ -756,7 +763,11 @@ def _enforce_prompt_contract(
     block = f"{heading}\n{json.dumps(contract, ensure_ascii=False, indent=2)}"
     result = f"{prompt.rstrip()}\n\n{block}"
     if len(result) > maximum:
-        raise ServiceError(f"结构化制作契约加入后提示词超过 {maximum} 个字符，请精简需求")
+        raise ServiceError(
+            f"结构化制作契约加入后提示词超过 {maximum} 个字符，请精简需求",
+            code=PROMPT_CONTRACT_TOO_LONG_CODE,
+            status_code=422,
+        )
     return result
 
 

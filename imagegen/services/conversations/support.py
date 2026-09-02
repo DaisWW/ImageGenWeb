@@ -20,7 +20,12 @@ from ...models import (
 from ...storage import ImageStorage
 from ..creative import CASE_CATALOG, CREATIVE_ROUTER, GALLERY_ATLAS
 from ..creative.models import CreativeRetrieval
-from ..prompt_drafts import PromptDraftReview, PromptDraftStreamPreview
+from ..prompt_drafts import (
+    PROMPT_CONTRACT_TOO_LONG_CODE,
+    PROMPT_DRAFT_INVALID_OUTPUT_CODE,
+    PromptDraftReview,
+    PromptDraftStreamPreview,
+)
 from ..runtime_logs import RuntimeLogService
 from ..series import ResolvedSeriesAnchor
 from ..settings import SystemSettingsService
@@ -151,6 +156,11 @@ class ConversationSupport:
 
     @staticmethod
     def _chat_error_message(error: OpenAIChatError) -> str:
+        if error.code in {
+            "creative_catalog_conflict",
+            PROMPT_CONTRACT_TOO_LONG_CODE,
+        }:
+            return str(error)
         return {
             "chat_timeout": "聊天模型响应超时，请重试",
             "chat_connection_error": "聊天模型连接中断，请重试",
@@ -174,7 +184,9 @@ class ConversationSupport:
     ) -> tuple[dict[str, Any], ChatCompletion, bool]:
         try:
             return review.parse(result.content), result, False
-        except ServiceError:
+        except ServiceError as exc:
+            if exc.code != PROMPT_DRAFT_INVALID_OUTPUT_CODE:
+                raise
             operation.ensure_active()
             operation.update_progress("parsing", "回复格式不完整，正在自动修复")
 
@@ -221,6 +233,8 @@ class ConversationSupport:
         try:
             return review.parse(repaired.content), combined, True
         except ServiceError as exc:
+            if exc.code != PROMPT_DRAFT_INVALID_OUTPUT_CODE:
+                raise
             fallback = review.conversation_fallback(repaired.content, result.content)
             if fallback is not None:
                 return fallback, combined, True
@@ -530,6 +544,26 @@ class ConversationSupport:
             elapsed_seconds=result.elapsed_seconds,
             details={
                 "validation": "structured_output_contract",
+                "input_tokens": result.input_tokens,
+                "output_tokens": result.output_tokens,
+                "request_body_bytes": result.request_body_bytes,
+                "first_output_seconds": result.first_output_seconds,
+            },
+        )
+
+    @staticmethod
+    def _prompt_draft_validation_error(
+        error: ServiceError,
+        result: ChatCompletion,
+    ) -> OpenAIChatError:
+        return OpenAIChatError(
+            str(error),
+            code=error.code,
+            status_code=error.status_code,
+            request_id=result.request_id,
+            elapsed_seconds=result.elapsed_seconds,
+            details={
+                "validation": error.code,
                 "input_tokens": result.input_tokens,
                 "output_tokens": result.output_tokens,
                 "request_body_bytes": result.request_body_bytes,

@@ -712,6 +712,36 @@ class TestPromptDrafts(PlatformTestCase):
         )
         self.assertNotIn("private-invalid-prompt", json.dumps(entry.details))
 
+    def test_prompt_draft_does_not_repair_a_prompt_contract_length_error(self):
+        workspace = self.create_workspace("草稿制作契约过长")
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="生成包含指定文字的详细海报",
+        )
+        self.chat_client.prompt_draft_content = json.dumps(
+            {
+                "status": "ready",
+                "summary_zh": "包含精确文字的长提示词",
+                "prompt": "画" * 7990,
+                "brief": {"exact_text": ["SNOW AI STUDIO"]},
+            },
+            ensure_ascii=False,
+        )
+        calls_before_draft = len(self.chat_client.calls)
+
+        with self.assertRaises(ServiceError) as raised:
+            self.services.conversations.create_prompt_draft(
+                workspace,
+                model_id="test-chat",
+                translate_to_english=False,
+            )
+
+        self.assertEqual(len(self.chat_client.calls), calls_before_draft + 1)
+        self.assertEqual(raised.exception.code, "prompt_contract_too_long")
+        self.assertEqual(raised.exception.status_code, 422)
+        self.assertIn("制作契约加入后提示词超过", str(raised.exception))
+
     def test_prompt_draft_does_not_stringify_invalid_optional_text(self):
         workspace = self.create_workspace("可选字段类型")
         self.services.conversations.send(

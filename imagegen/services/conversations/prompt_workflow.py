@@ -182,7 +182,7 @@ class PromptDraftWorkflow(ConversationSupport):
                 workspace,
                 model,
                 "chat.prompt_draft",
-                self._structured_output_error(exc, result),
+                self._prompt_draft_validation_error(exc, result),
             )
         generation_references = self._draft_references(draft, attachments)
         content, message_kind = review.message_content(draft)
