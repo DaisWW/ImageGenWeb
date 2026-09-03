@@ -634,7 +634,7 @@ class ConversationSupport:
             select(GenerationJob.id)
             .where(
                 GenerationJob.workspace_id == workspace.id,
-                GenerationJob.status.in_(["queued", "running", "canceling"]),
+                GenerationJob.status.in_(["queued", "running", "canceling", "reconnecting"]),
             )
             .limit(1)
         )

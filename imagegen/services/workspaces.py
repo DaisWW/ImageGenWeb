@@ -365,7 +365,7 @@ class WorkspaceService:
 
     def delete(self, workspace: Workspace) -> None:
         user, locked_workspace, jobs, items = self._lock_workspace_records(workspace)
-        if any(item.status in {"running", "canceling"} for item in items):
+        if any(item.status in {"running", "canceling", "reconnecting"} for item in items):
             raise ServiceError(
                 "工作站仍有正在生成的任务，请先取消并等待结束",
                 status_code=409,
@@ -386,7 +386,7 @@ class WorkspaceService:
 
     def clear(self, workspace: Workspace) -> Workspace:
         _, locked_workspace, jobs, items = self._lock_workspace_records(workspace)
-        if any(item.status in {"queued", "running", "canceling"} for item in items):
+        if any(item.status in {"queued", "running", "canceling", "reconnecting"} for item in items):
             raise ServiceError(
                 "当前图片尚未生成完成，请等待完成或先取消任务",
                 code="workspace_generation_active",

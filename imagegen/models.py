@@ -216,8 +216,8 @@ class GenerationJob(TimestampMixin, db.Model):
             "uq_generation_jobs_workspace_active",
             "workspace_id",
             unique=True,
-            sqlite_where=text("status IN ('queued', 'running', 'canceling')"),
-            postgresql_where=text("status IN ('queued', 'running', 'canceling')"),
+            sqlite_where=text("status IN ('queued', 'running', 'canceling', 'reconnecting')"),
+            postgresql_where=text("status IN ('queued', 'running', 'canceling', 'reconnecting')"),
         ),
     )
 
@@ -280,6 +280,7 @@ class GenerationItem(TimestampMixin, db.Model):
         UniqueConstraint("job_id", "position", name="uq_generation_item_position"),
         Index("ix_generation_items_queue", "status", "created_at"),
         Index("ix_generation_items_channel_status", "channel_id", "status"),
+        Index("ix_generation_items_retry", "status", "retry_at"),
     )
 
     id: Mapped[str] = mapped_column(db.String(32), primary_key=True, default=new_public_id)
@@ -297,6 +298,9 @@ class GenerationItem(TimestampMixin, db.Model):
     position: Mapped[int]
     prompt: Mapped[str] = mapped_column(db.Text, default="", nullable=False)
     status: Mapped[str] = mapped_column(db.String(20), default="queued", index=True)
+    retry_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    retry_limit: Mapped[int] = mapped_column(default=5, nullable=False)
+    retry_at: Mapped[datetime | None]
     cancel_requested_at: Mapped[datetime | None]
     claimed_by: Mapped[str | None] = mapped_column(db.String(100))
     heartbeat_at: Mapped[datetime | None]

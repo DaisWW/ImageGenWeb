@@ -51,6 +51,9 @@ from .worker_health import worker_heartbeat_grace_seconds
 
 LOGGER = logging.getLogger(__name__)
 
+DEFAULT_TIMEOUT_RETRY_LIMIT = 5
+TIMEOUT_RETRY_DELAYS = (3, 5, 10, 20, 30)
+
 
 class GenerationWorker:
     def __init__(
@@ -335,7 +338,18 @@ class GenerationWorker:
                         selectinload(GenerationItem.user),
                         selectinload(GenerationItem.job).selectinload(GenerationJob.references),
                     )
-                    .where(GenerationItem.status == "queued")
+                    .where(
+                        or_(
+                            GenerationItem.status == "queued",
+                            and_(
+                                GenerationItem.status == "reconnecting",
+                                or_(
+                                    GenerationItem.retry_at.is_(None),
+                                    GenerationItem.retry_at <= now,
+                                ),
+                            ),
+                        )
+                    )
                     .order_by(GenerationItem.created_at, GenerationItem.position)
                     .limit(200)
                 )
@@ -364,16 +378,23 @@ class GenerationWorker:
                         continue
                     if first_for_user and item.user_id in scheduled_users:
                         continue
-                    channel = self._select_channel_for_item(
-                        item,
-                        channel_active,
-                        circuit_states=circuit_states,
-                        probe_active=probe_active,
-                    )
-                    if channel is None and not self._has_routable_channel(item):
-                        self._fail_unavailable_item(item.id)
-                        unavailable_ids.add(item.id)
-                        continue
+                    if item.status == "reconnecting":
+                        channel = self._retry_channel_for_item(item, channel_active)
+                        if channel is None and not self._retry_channel_is_available(item):
+                            self._fail_unavailable_item(item.id)
+                            unavailable_ids.add(item.id)
+                            continue
+                    else:
+                        channel = self._select_channel_for_item(
+                            item,
+                            channel_active,
+                            circuit_states=circuit_states,
+                            probe_active=probe_active,
+                        )
+                        if channel is None and not self._has_routable_channel(item):
+                            self._fail_unavailable_item(item.id)
+                            unavailable_ids.add(item.id)
+                            continue
                     if channel is None:
                         continue
                     if user_active.get(item.user_id, 0) >= item.user.generation_concurrency:
@@ -737,17 +758,20 @@ class GenerationWorker:
     def _claim(self, item_id: str, channel: Channel | None = None) -> str | None:
         db.session.expire_all()
         item_preview = db.session.get(GenerationItem, item_id, populate_existing=True)
-        if item_preview is None or item_preview.status != "queued":
+        if item_preview is None or item_preview.status not in {"queued", "reconnecting"}:
             db.session.rollback()
             return None
+        reconnecting = item_preview.status == "reconnecting"
+        now = utcnow()
         if (
             db.session.scalar(
                 select(GenerationAttempt.id).where(
                     GenerationAttempt.item_id == item_id,
-                    GenerationAttempt.status == "running",
+                    GenerationAttempt.status.in_(("running", "retrying")),
                 )
             )
             is not None
+            and not reconnecting
         ):
             db.session.rollback()
             return None
@@ -757,12 +781,32 @@ class GenerationWorker:
         if job is None or job.cancel_requested_at:
             db.session.rollback()
             return None
-        if channel is None:
+        retrying_attempt = None
+        if reconnecting:
+            retrying_attempt = db.session.scalar(
+                select(GenerationAttempt)
+                .where(
+                    GenerationAttempt.item_id == item_id,
+                    GenerationAttempt.status == "retrying",
+                )
+                .order_by(GenerationAttempt.attempt_number.desc())
+                .with_for_update()
+            )
+            if retrying_attempt is None:
+                db.session.rollback()
+                return None
+            if channel is None:
+                try:
+                    channel = self.channels.get(item_preview.channel_id)
+                except ValueError:
+                    db.session.rollback()
+                    return None
+        elif channel is None:
             channel = self._select_channel_for_item(item_preview, {})
         if channel is None:
             db.session.rollback()
             return None
-        if channel.price_rmb > job.price_per_image_rmb:
+        if not reconnecting and channel.price_rmb > job.price_per_image_rmb:
             db.session.rollback()
             return None
         if not channel.configured or not self._channel_supports_item(channel, item_preview):
@@ -780,7 +824,42 @@ class GenerationWorker:
             db.session.rollback()
             return None
 
-        now = utcnow()
+        if reconnecting:
+            claimed = db.session.execute(
+                update(GenerationItem)
+                .where(
+                    GenerationItem.id == item_id,
+                    GenerationItem.status == "reconnecting",
+                    GenerationItem.cancel_requested_at.is_(None),
+                    or_(
+                        GenerationItem.retry_at.is_(None),
+                        GenerationItem.retry_at <= now,
+                    ),
+                )
+                .values(
+                    status="running",
+                    claimed_by=self.worker_id,
+                    heartbeat_at=now,
+                    retry_at=None,
+                    circuit_probe=circuit_probe,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if claimed.rowcount != 1:
+                db.session.rollback()
+                return None
+            retrying_attempt.status = "running"
+            retrying_attempt.claimed_by = self.worker_id
+            retrying_attempt.heartbeat_at = now
+            retrying_attempt.completed_at = None
+            retrying_attempt.circuit_probe = circuit_probe
+            retrying_attempt.capacity_expires_at = now + timedelta(
+                seconds=channel.limits.timeout_seconds + 30
+            )
+            db.session.commit()
+            db.session.expire(item_preview)
+            return retrying_attempt.id
+
         attempt_number = (
             int(
                 db.session.scalar(
@@ -891,6 +970,27 @@ class GenerationWorker:
                 continue
             return channel
         return None
+
+    def _retry_channel_for_item(
+        self, item: GenerationItem, channel_active: dict[str, int]
+    ) -> Channel | None:
+        """Keep a timeout retry on its original channel and idempotency key."""
+        try:
+            channel = self.channels.get(item.channel_id)
+        except ValueError:
+            return None
+        if channel_active.get(channel.identifier, 0) >= channel.limits.max_concurrency:
+            return None
+        if not self._channel_supports_item(channel, item):
+            return None
+        return channel
+
+    def _retry_channel_is_available(self, item: GenerationItem) -> bool:
+        try:
+            channel = self.channels.get(item.channel_id, require_available=False)
+        except ValueError:
+            return False
+        return channel.configured and self._channel_supports_item(channel, item)
 
     def _has_routable_channel(self, item: GenerationItem) -> bool:
         """Return whether the item has any capable configured provider.
@@ -1279,11 +1379,11 @@ class GenerationWorker:
             db.session.rollback()
             return
         item = db.session.get(GenerationItem, item_id, populate_existing=True)
-        if status == "succeeded":
+        if item is not None and item.status == "canceled":
+            final_status = "discarded" if attempt.provider_completed else "canceled"
+        elif status == "succeeded":
             if item is not None and item.status == "succeeded":
                 final_status = "succeeded"
-            elif item is not None and item.status == "canceled":
-                final_status = "discarded" if attempt.provider_completed else "canceled"
             else:
                 final_status = "downstream_failed" if attempt.provider_completed else "unknown"
         elif status == "canceled":
@@ -1434,6 +1534,9 @@ class GenerationWorker:
         preview = db.session.get(GenerationItem, item_id, populate_existing=True)
         if preview is None or not self._owns_claim(preview, attempt_id):
             return
+        # Lock the account before the attempt so cancellation cannot wait on
+        # an attempt while settlement waits on the account.
+        user = self.billing.lock_user(preview.user_id)
         attempt = (
             self._attempt_for_item(attempt_id, item_id, lock=True)
             if attempt_id is not None
@@ -1442,7 +1545,6 @@ class GenerationWorker:
         if attempt is None or attempt.claimed_by != self.worker_id:
             db.session.rollback()
             return
-        user = self.billing.lock_user(preview.user_id)
         item = db.session.scalar(
             select(GenerationItem)
             .where(GenerationItem.id == item_id)
@@ -1461,6 +1563,7 @@ class GenerationWorker:
         )
         provider_id, provider_label = self._provider_fields(item, job)
         will_retry = False
+        timeout_retry = False
         circuit_opened = False
         attempt_number = len(item.attempted_channel_ids or [])
         if item.cancel_requested_at or item.status == "canceling" or job.cancel_requested_at:
@@ -1474,15 +1577,34 @@ class GenerationWorker:
             attempt_number = len(attempted)
             if retryable or record_channel_failure:
                 circuit_opened = self._record_channel_failure(item, provider_id, provider_label)
-            if retryable:
-                will_retry = self._can_retry_item(item, attempted)
-            if will_retry:
-                self._reset_item_for_retry(item)
-                job.completed_at = None
-                attempt.status = "failed"
+            timeout_retry = (
+                result_unknown
+                and code in {"timeout", "connection_error"}
+                and int(item.retry_count or 0)
+                < int(item.retry_limit or DEFAULT_TIMEOUT_RETRY_LIMIT)
+            )
+            if timeout_retry:
+                item.retry_count = int(item.retry_count or 0) + 1
+                item.status = "reconnecting"
+                item.retry_at = utcnow() + timedelta(
+                    seconds=TIMEOUT_RETRY_DELAYS[
+                        min(item.retry_count - 1, len(TIMEOUT_RETRY_DELAYS) - 1)
+                    ]
+                )
+                item.error_code = code[:80]
+                item.error_message = (
+                    f"{message}，正在重连 {item.retry_count}/{item.retry_limit or DEFAULT_TIMEOUT_RETRY_LIMIT}"
+                )[:1000]
+                item.upstream_status = upstream_status
+                item.upstream_request_id = upstream_request_id[:255]
+                item.completed_at = None
+                item.elapsed_seconds = Decimal(str(round(time.monotonic() - started, 3)))
+                item.claimed_by = None
+                item.heartbeat_at = None
+                attempt.status = "retrying"
                 attempt.claimed_by = None
                 attempt.heartbeat_at = None
-                attempt.completed_at = utcnow()
+                attempt.completed_at = None
                 attempt.elapsed_seconds = Decimal(str(round(time.monotonic() - started, 3)))
                 attempt.error_code = code[:80]
                 attempt.error_message = message[:1000]
@@ -1490,6 +1612,25 @@ class GenerationWorker:
                     attempt.upstream_status = upstream_status
                 if upstream_request_id:
                     attempt.upstream_request_id = upstream_request_id[:255]
+                will_retry = True
+                job.completed_at = None
+            elif retryable:
+                will_retry = self._can_retry_item(item, attempted)
+            if will_retry:
+                if not timeout_retry:
+                    self._reset_item_for_retry(item)
+                    job.completed_at = None
+                    attempt.status = "failed"
+                    attempt.claimed_by = None
+                    attempt.heartbeat_at = None
+                    attempt.completed_at = utcnow()
+                    attempt.elapsed_seconds = Decimal(str(round(time.monotonic() - started, 3)))
+                    attempt.error_code = code[:80]
+                    attempt.error_message = message[:1000]
+                    if upstream_status is not None:
+                        attempt.upstream_status = upstream_status
+                    if upstream_request_id:
+                        attempt.upstream_request_id = upstream_request_id[:255]
             else:
                 item.status = "interrupted" if result_unknown else "failed"
                 item.error_code = code[:80]
@@ -1527,7 +1668,11 @@ class GenerationWorker:
                 "will_retry": will_retry,
                 "circuit_opened": circuit_opened,
                 "result_unknown": result_unknown,
-                "attempt_status": "unknown"
+                "retry_count": int(item.retry_count or 0),
+                "retry_limit": int(item.retry_limit or DEFAULT_TIMEOUT_RETRY_LIMIT),
+                "attempt_status": "retrying"
+                if timeout_retry
+                else "unknown"
                 if record_channel_failure and not retryable
                 else "failed",
             },
@@ -1623,6 +1768,8 @@ class GenerationWorker:
         item.channel_id = AUTO_CHANNEL_ID
         item.channel_label = AUTO_CHANNEL_LABEL
         item.provider_price_rmb = money(0)
+        item.retry_count = 0
+        item.retry_at = None
         item.claimed_by = None
         item.heartbeat_at = None
         item.started_at = None
@@ -1694,7 +1841,7 @@ class GenerationWorker:
         )
         if (
             job is None
-            or item.status != "queued"
+            or item.status not in {"queued", "reconnecting"}
             or item.cancel_requested_at is not None
             or job.cancel_requested_at is not None
         ):
@@ -1703,7 +1850,21 @@ class GenerationWorker:
         item.status = "failed"
         item.error_code = "channel_unavailable"
         item.error_message = "渠道已禁用或 API Key 未配置"
+        item.retry_at = None
         item.completed_at = utcnow()
+        retrying_attempt = db.session.scalar(
+            select(GenerationAttempt)
+            .where(
+                GenerationAttempt.item_id == item.id,
+                GenerationAttempt.status == "retrying",
+            )
+            .with_for_update()
+        )
+        if retrying_attempt is not None:
+            retrying_attempt.status = "failed"
+            retrying_attempt.completed_at = item.completed_at
+            retrying_attempt.error_code = item.error_code
+            retrying_attempt.error_message = item.error_message
         self.billing.release(user, job, money(job.price_per_image_rmb))
         self.generations.refresh_job_status(job)
         provider_id, provider_label = self._provider_fields(item, job)
@@ -1728,7 +1889,7 @@ class GenerationWorker:
 
     @staticmethod
     def _active_status(item: GenerationItem) -> bool:
-        return item.status in {"running", "canceling"}
+        return item.status in {"running", "canceling", "reconnecting"}
 
     def _owns_claim(self, item: GenerationItem, attempt_id: str | None = None) -> bool:
         if not self._active_status(item) or item.claimed_by != self.worker_id:

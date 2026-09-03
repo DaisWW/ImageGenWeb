@@ -14,7 +14,7 @@ from .chat_models import DEFAULT_WORKSPACE_PROMPTS, ChatModelRegistry
 from .matting_models import MattingModelRegistry, MattingModelSnapshot
 from .repository import RuntimeConfigRepository
 
-ACTIVE_GENERATION_STATUSES = {"queued", "running", "canceling"}
+ACTIVE_GENERATION_STATUSES = {"queued", "running", "canceling", "reconnecting"}
 
 
 class RuntimeConfigService:

@@ -18,6 +18,7 @@ from ...config.channels import (
 from ...errors import ServiceError
 from ...extensions import db
 from ...models import (
+    GenerationAttempt,
     GenerationItem,
     GenerationJob,
     GenerationQueueState,
@@ -278,13 +279,27 @@ class GenerationService:
         job.cancel_requested_at = now
         releasable = Decimal("0")
         for item in job.items:
-            if item.status not in {"queued", "running", "canceling"}:
+            if item.status not in {"queued", "running", "canceling", "reconnecting"}:
                 continue
             item.status = "canceled"
             item.cancel_requested_at = now
+            item.retry_at = None
             item.completed_at = now
             item.claimed_by = None
             item.heartbeat_at = None
+            retrying_attempt = db.session.scalar(
+                select(GenerationAttempt)
+                .where(
+                    GenerationAttempt.item_id == item.id,
+                    GenerationAttempt.status == "retrying",
+                )
+                .with_for_update()
+            )
+            if retrying_attempt is not None:
+                retrying_attempt.status = "canceled"
+                retrying_attempt.completed_at = now
+                retrying_attempt.error_code = "canceled"
+                retrying_attempt.error_message = "任务已取消"
             releasable += money(job.price_per_image_rmb)
         self.billing.release(user, job, releasable)
         self.refresh_job_status(job)
@@ -347,7 +362,7 @@ class GenerationService:
                 .options(selectinload(GenerationJob.items))
                 .where(
                     GenerationJob.user_id == user_id,
-                    GenerationJob.status.in_(("queued", "running", "canceling")),
+                    GenerationJob.status.in_(("queued", "running", "canceling", "reconnecting")),
                 )
                 .order_by(GenerationJob.created_at)
             )
@@ -362,7 +377,7 @@ class GenerationService:
         query = (
             select(GenerationItem.status, func.count(GenerationItem.id))
             .join(GenerationJob)
-            .where(GenerationItem.status.in_(("running", "canceling", "queued")))
+            .where(GenerationItem.status.in_(("running", "canceling", "reconnecting", "queued")))
         )
         if user_id is not None:
             query = query.where(GenerationJob.user_id == user_id)
@@ -370,7 +385,9 @@ class GenerationService:
             query = query.where(GenerationJob.workspace_id == workspace_id)
         counts = dict(db.session.execute(query.group_by(GenerationItem.status)).all())
         return (
-            int(counts.get("running", 0)) + int(counts.get("canceling", 0)),
+            int(counts.get("running", 0))
+            + int(counts.get("canceling", 0))
+            + int(counts.get("reconnecting", 0)),
             int(counts.get("queued", 0)),
         )
 
@@ -392,7 +409,7 @@ class GenerationService:
             select(GenerationJob.id)
             .where(
                 GenerationJob.workspace_id == workspace_id,
-                GenerationJob.status.in_(["queued", "running", "canceling"]),
+                GenerationJob.status.in_(["queued", "running", "canceling", "reconnecting"]),
             )
             .limit(1)
         )
@@ -450,7 +467,9 @@ class GenerationService:
         )
         if not admin:
             job_query = job_query.where(GenerationJob.user_id == user_id)
-        job = db.session.scalar(job_query.with_for_update())
+        job = db.session.scalar(
+            job_query.execution_options(populate_existing=True).with_for_update()
+        )
         if job is None:
             raise ServiceError("生成任务不存在", status_code=404)
         return user, job
@@ -466,6 +485,9 @@ class GenerationService:
     @staticmethod
     def refresh_job_status(job: GenerationJob) -> None:
         statuses = [item.status for item in job.items]
+        if any(status == "reconnecting" for status in statuses):
+            job.status = "canceling" if job.cancel_requested_at else "reconnecting"
+            return
         if any(status in {"running", "canceling"} for status in statuses):
             job.status = "canceling" if job.cancel_requested_at else "running"
             return

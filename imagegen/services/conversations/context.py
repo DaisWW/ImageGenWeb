@@ -265,7 +265,9 @@ class ConversationContextManager:
                     selectinload(GenerationJob.references).selectinload(GenerationReference.asset),
                 )
                 .where(GenerationJob.workspace_id == workspace.id)
-                .where(GenerationJob.status.not_in(("queued", "running", "canceling")))
+                .where(
+                    GenerationJob.status.not_in(("queued", "running", "canceling", "reconnecting"))
+                )
                 .order_by(GenerationJob.created_at.desc(), GenerationJob.id.desc())
                 .limit(MAX_LOADED_GENERATION_JOBS)
                 .execution_options(populate_existing=True)

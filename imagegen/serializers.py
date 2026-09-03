@@ -217,7 +217,9 @@ def _job_status_dict(
         "queue_total": queue_total if job.status == "queued" else 0,
         "estimated_end_at": _iso(estimated_end),
         "is_over_estimate": bool(
-            estimated_end and now > estimated_end and job.status in {"running", "canceling"}
+            estimated_end
+            and now > estimated_end
+            and job.status in {"running", "canceling", "reconnecting"}
         ),
     }
 
@@ -270,7 +272,7 @@ def job_dict(
         "succeeded_count": succeeded,
         "failed_count": failed,
         "canceled_count": canceled,
-        "can_cancel": job.status in {"queued", "running", "canceling"},
+        "can_cancel": job.status in {"queued", "running", "canceling", "reconnecting"},
         "references": [asset_dict(reference.asset) for reference in job.references],
         "items": item_results,
     }
@@ -292,6 +294,9 @@ def item_dict(item: GenerationItem, *, now: datetime, admin: bool = False) -> di
         "channel": item.channel_label or getattr(item.job, "channel_label", ""),
         "prompt": item.prompt or item.job.prompt,
         "status": item.status,
+        "retry_count": int(item.retry_count or 0),
+        "retry_limit": int(item.retry_limit or 5),
+        "retry_at": _iso(item.retry_at),
         "progress_percent": progress,
         "started_at": _iso(item.started_at),
         "completed_at": _iso(item.completed_at),
@@ -408,14 +413,14 @@ def _job_estimated_end(
     *,
     generation_concurrency: int | None = None,
 ) -> datetime | None:
-    if job.status not in {"running", "canceling"} or not job.started_at:
+    if job.status not in {"running", "canceling", "reconnecting"} or not job.started_at:
         return None
     estimates = [float(item.estimated_seconds) for item in job.items if item.estimated_seconds]
     typical = statistics_median(estimates) if estimates else 180.0
     active_ends = [
         _aware(item.started_at) + timedelta(seconds=float(item.estimated_seconds or typical))
         for item in job.items
-        if item.status in {"running", "canceling"} and item.started_at
+        if item.status in {"running", "canceling", "reconnecting"} and item.started_at
     ]
     base = max(active_ends, default=now)
     queued = sum(item.status == "queued" for item in job.items)

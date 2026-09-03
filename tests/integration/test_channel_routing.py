@@ -106,6 +106,26 @@ class SelectiveProviderFactory:
         return ProviderResult(content=png_bytes(), request_id=f"request-{channel.identifier}")
 
 
+class SequenceProviderFactory:
+    def __init__(self, outcomes):
+        self.outcomes = list(outcomes)
+        self.calls: list[str] = []
+        self.requests = []
+
+    def for_channel(self, _channel):
+        return self
+
+    def generate(self, channel, request):
+        self.calls.append(channel.identifier)
+        self.requests.append(request)
+        outcome = self.outcomes.pop(0) if self.outcomes else None
+        if isinstance(outcome, ProviderError):
+            raise outcome
+        return outcome or ProviderResult(
+            content=png_bytes(), request_id=f"request-{channel.identifier}"
+        )
+
+
 class RecordingSizeProviderFactory:
     def __init__(self):
         self.requests: list[tuple[str, str]] = []
@@ -439,11 +459,14 @@ class TestChannelRouting(PlatformTestCase):
         self.assertEqual(unavailable_logs, 0)
         billing_proxy.release.assert_not_called()
 
-    def test_uncertain_provider_error_stops_without_switching_channel(
-        self,
-    ):
+    def test_uncertain_provider_error_reconnects_five_times_then_stops(self):
         for code in ("timeout", "connection_error"):
             with self.subTest(code=code):
+                db.session.query(ChannelCircuitState).delete()
+                db.session.query(GenerationAttempt).update(
+                    {GenerationAttempt.circuit_probe: False}, synchronize_session=False
+                )
+                db.session.commit()
                 workspace = self.create_workspace(code)
                 job = self.submit(workspace, channel_id="", batch_count=1)
                 item_id = job.items[0].id
@@ -452,7 +475,13 @@ class TestChannelRouting(PlatformTestCase):
                     {"current": ProviderError("刀哥调用结果未知", code=code, status_code=504)}
                 )
 
-                self.assertTrue(worker._claim(item_id))
+                self.assertTrue(
+                    worker._claim(item_id, self.app.extensions["channel_registry"].get("current"))
+                )
+                attempt_id = db.session.scalar(
+                    select(GenerationAttempt.id).where(GenerationAttempt.item_id == item_id)
+                )
+                idempotency_key = db.session.get(GenerationAttempt, attempt_id).idempotency_key
                 worker._process_item(item_id)
 
                 db.session.expire_all()
@@ -464,14 +493,210 @@ class TestChannelRouting(PlatformTestCase):
                         GenerationAttempt.attempt_number == 1,
                     )
                 )
-                self.assertEqual(retried.status, "interrupted")
+                self.assertEqual(retried.status, "reconnecting")
+                self.assertEqual(retried.retry_count, 1)
+                self.assertEqual(retried.retry_limit, 5)
                 self.assertEqual(retried.attempted_channel_ids, ["current"])
+                self.assertEqual(attempt.id, attempt_id)
+                self.assertEqual(attempt.idempotency_key, idempotency_key)
+                self.assertEqual(attempt.status, "retrying")
+                self.assertEqual(user.reserved_rmb, Decimal("0.0900"))
+                self.assertEqual(worker.providers.calls, ["current"])
+                self.assertIsNone(worker._claim(item_id))
+                self.assertTrue(
+                    db.session.scalar(
+                        select(RuntimeLog).where(RuntimeLog.item_id == item_id)
+                    ).details["will_retry"]
+                )
+
+                for retry_count in range(2, 6):
+                    db.session.expire_all()
+                    retried = db.session.get(GenerationItem, item_id)
+                    state = db.session.get(ChannelCircuitState, "current")
+                    if state is not None and state.open_until is not None:
+                        state.open_until = utcnow() - timedelta(seconds=1)
+                    retried.retry_at = utcnow() - timedelta(seconds=1)
+                    db.session.commit()
+                    self.assertTrue(worker._claim(item_id), msg=f"retry_count={retry_count}")
+                    worker._process_item(item_id)
+                    db.session.expire_all()
+                    retried = db.session.get(GenerationItem, item_id)
+                    self.assertEqual(retried.status, "reconnecting")
+                    self.assertEqual(retried.retry_count, retry_count)
+                    self.assertEqual(user.reserved_rmb, Decimal("0.0900"))
+
+                retried.retry_at = utcnow() - timedelta(seconds=1)
+                state = db.session.get(ChannelCircuitState, "current")
+                if state is not None and state.open_until is not None:
+                    state.open_until = utcnow() - timedelta(seconds=1)
+                db.session.commit()
+                self.assertTrue(worker._claim(item_id))
+                worker._process_item(item_id)
+                db.session.expire_all()
+                retried = db.session.get(GenerationItem, item_id)
+                user = db.session.get(User, self.user.id)
+                attempt = db.session.get(GenerationAttempt, attempt_id)
+                logs = list(
+                    db.session.scalars(
+                        select(RuntimeLog)
+                        .where(RuntimeLog.item_id == item_id)
+                        .where(RuntimeLog.event == "generation.provider")
+                        .order_by(RuntimeLog.created_at, RuntimeLog.id)
+                    )
+                )
+                self.assertEqual(retried.status, "interrupted")
+                self.assertEqual(retried.retry_count, 5)
                 self.assertEqual(attempt.status, "unknown")
                 self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
-                self.assertEqual(worker.providers.calls, ["current"])
-                log = db.session.scalar(select(RuntimeLog).where(RuntimeLog.item_id == item_id))
-                self.assertFalse(log.details["will_retry"])
-                self.assertTrue(log.details["result_unknown"])
+                self.assertEqual(worker.providers.calls, ["current"] * 6)
+                self.assertEqual(len(logs), 6)
+                self.assertTrue(all(log.details["will_retry"] for log in logs[:5]))
+                self.assertFalse(logs[-1].details["will_retry"])
+                self.assertTrue(logs[-1].details["result_unknown"])
+
+    def test_timeout_reconnect_success_reuses_attempt_and_charges_once(self):
+        workspace = self.create_workspace()
+        job = self.submit(workspace, channel_id="", batch_count=1)
+        item_id = job.items[0].id
+        worker = self.create_worker()
+        worker.providers = SequenceProviderFactory(
+            [
+                ProviderError("刀哥调用结果未知", code="timeout", status_code=504),
+                ProviderResult(content=png_bytes(), request_id="request-after-reconnect"),
+            ]
+        )
+
+        attempt_id = worker._claim(item_id)
+        self.assertIsNotNone(attempt_id)
+        attempt = db.session.get(GenerationAttempt, attempt_id)
+        idempotency_key = attempt.idempotency_key
+        worker._process_item(item_id)
+        db.session.expire_all()
+        self.assertEqual(db.session.get(GenerationItem, item_id).status, "reconnecting")
+        self.assertEqual(db.session.get(User, self.user.id).reserved_rmb, Decimal("0.0900"))
+
+        self.channel_path.write_text(
+            MULTI_CHANNEL_CONFIG.replace("price_rmb: 0.0600", "price_rmb: 0.1200"),
+            encoding="utf-8",
+        )
+        self.app.extensions["channel_registry"].reload(force=True)
+        item = db.session.get(GenerationItem, item_id)
+        item.retry_at = utcnow() - timedelta(seconds=1)
+        db.session.commit()
+        self.assertEqual(worker._claim(item_id), attempt_id)
+        worker._process_item(item_id)
+        db.session.expire_all()
+        item = db.session.get(GenerationItem, item_id)
+        saved_job = db.session.get(GenerationJob, job.id)
+        user = db.session.get(User, self.user.id)
+        attempt = db.session.get(GenerationAttempt, attempt_id)
+        charge_count = db.session.scalar(
+            select(func.count(WalletLedger.id)).where(
+                WalletLedger.generation_item_id == item_id,
+                WalletLedger.entry_type == "generation_charge",
+            )
+        )
+        self.assertEqual(item.status, "succeeded")
+        self.assertEqual(item.retry_count, 1)
+        self.assertEqual(saved_job.status, "succeeded")
+        self.assertEqual(saved_job.charged_rmb, Decimal("0.0600"))
+        self.assertEqual(user.balance_rmb, Decimal("19.9400"))
+        self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
+        self.assertEqual(charge_count, 1)
+        self.assertEqual(attempt.status, "succeeded")
+        self.assertEqual(len({request.idempotency_key for request in worker.providers.requests}), 1)
+        self.assertEqual(worker.providers.requests[0].idempotency_key, idempotency_key)
+        self.assertEqual(worker.providers.calls, ["current", "current"])
+
+    def test_selected_channel_timeout_reconnects_without_switching_channel(self):
+        workspace = self.create_workspace()
+        job = self.submit(workspace, channel_id="current", batch_count=1)
+        item_id = job.items[0].id
+        worker = self.create_worker()
+        worker.providers = SelectiveProviderFactory(
+            {"current": ProviderError("刀哥调用结果未知", code="timeout", status_code=504)}
+        )
+
+        self.assertTrue(worker._claim(item_id))
+        worker._process_item(item_id)
+        db.session.expire_all()
+        item = db.session.get(GenerationItem, item_id)
+        self.assertEqual(item.status, "reconnecting")
+        self.assertEqual(item.channel_id, "current")
+        self.assertEqual(worker.providers.calls, ["current"])
+        self.assertEqual(db.session.get(User, self.user.id).reserved_rmb, Decimal("0.0600"))
+
+    def test_cancel_reconnecting_item_releases_reservation_and_stops_retry(self):
+        workspace = self.create_workspace()
+        job = self.submit(workspace, channel_id="", batch_count=1)
+        item_id = job.items[0].id
+        worker = self.create_worker()
+        worker.providers = SelectiveProviderFactory(
+            {"current": ProviderError("刀哥调用结果未知", code="timeout", status_code=504)}
+        )
+
+        attempt_id = worker._claim(item_id)
+        worker._process_item(item_id)
+        canceled = self.services.generations.cancel(job.id, user_id=self.user.id)
+        db.session.expire_all()
+        item = db.session.get(GenerationItem, item_id)
+        attempt = db.session.get(GenerationAttempt, attempt_id)
+        user = db.session.get(User, self.user.id)
+        self.assertEqual(canceled.status, "canceled")
+        self.assertEqual(item.status, "canceled")
+        self.assertEqual(attempt.status, "canceled")
+        self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
+        self.assertIsNone(item.retry_at)
+        self.assertIsNone(worker._claim(item_id))
+
+    def test_timeout_failure_race_with_cancel_logs_without_error(self):
+        workspace = self.create_workspace("超时取消竞态")
+        job = self.submit(workspace, channel_id="", batch_count=1)
+        item_id = job.items[0].id
+        worker = self.create_worker()
+        worker.providers = SelectiveProviderFactory(
+            {"current": ProviderError("刀哥调用结果未知", code="timeout", status_code=504)}
+        )
+        original_billing = worker.billing
+        billing_proxy = Mock(wraps=original_billing)
+        cancellation_count = 0
+
+        def lock_user_and_mark_cancel(user_id):
+            nonlocal cancellation_count
+            cancellation_count += 1
+            user = original_billing.lock_user(user_id)
+            item = db.session.get(GenerationItem, item_id, populate_existing=True)
+            item.cancel_requested_at = utcnow()
+            item.status = "canceling"
+            return user
+
+        billing_proxy.lock_user.side_effect = lock_user_and_mark_cancel
+        worker.billing = billing_proxy
+        try:
+            self.assertTrue(worker._claim(item_id))
+            worker._process_item(item_id)
+        finally:
+            worker.billing = original_billing
+
+        db.session.expire_all()
+        item = db.session.get(GenerationItem, item_id)
+        saved_job = db.session.get(GenerationJob, job.id)
+        attempt = db.session.scalar(
+            select(GenerationAttempt).where(GenerationAttempt.item_id == item_id)
+        )
+        user = db.session.get(User, self.user.id)
+        log = db.session.scalar(
+            select(RuntimeLog)
+            .where(RuntimeLog.item_id == item_id)
+            .where(RuntimeLog.event == "generation.provider")
+        )
+        self.assertEqual(cancellation_count, 1)
+        self.assertEqual(item.status, "canceled")
+        self.assertEqual(saved_job.status, "canceled")
+        self.assertEqual(attempt.status, "canceled")
+        self.assertIsNotNone(attempt.completed_at)
+        self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
+        self.assertIsNotNone(log)
 
     def test_selected_channel_failure_does_not_retry_on_another_channel(self):
         workspace = self.create_workspace()
@@ -576,6 +801,90 @@ class TestChannelRouting(PlatformTestCase):
         next_job = self.submit(self.create_workspace("熔断后任务"), channel_id="")
         selected = worker._select_channel_for_item(next_job.items[0], {})
         self.assertEqual(selected.identifier, "lucen")
+
+    def test_timeout_reconnect_waits_for_circuit_cooldown(self):
+        workspace = self.create_workspace("重连等待熔断冷却")
+        job = self.submit(workspace, channel_id="", batch_count=1)
+        item_id = job.items[0].id
+        timeout = ProviderError("刀哥调用结果未知", code="timeout", status_code=504)
+        worker = self.create_worker()
+        worker.providers = SequenceProviderFactory(
+            [
+                timeout,
+                timeout,
+                timeout,
+                ProviderResult(content=png_bytes(), request_id="after-cooldown"),
+            ]
+        )
+
+        for retry_count in range(1, 4):
+            if retry_count == 1:
+                self.assertTrue(worker._claim(item_id))
+            else:
+                item = db.session.get(GenerationItem, item_id)
+                item.retry_at = utcnow() - timedelta(seconds=1)
+                db.session.commit()
+                self.assertTrue(worker._claim(item_id))
+            worker._process_item(item_id)
+
+        db.session.expire_all()
+        item = db.session.get(GenerationItem, item_id)
+        state = db.session.get(ChannelCircuitState, "current")
+        self.assertEqual(item.status, "reconnecting")
+        self.assertIsNotNone(state.open_until)
+        item.retry_at = utcnow() - timedelta(seconds=1)
+        db.session.commit()
+        self.assertIsNone(worker._claim(item_id))
+        self.assertEqual(worker.providers.calls, ["current"] * 3)
+
+        state.open_until = utcnow() - timedelta(seconds=1)
+        db.session.commit()
+        self.assertTrue(worker._claim(item_id))
+        self.assertTrue(db.session.get(GenerationItem, item_id).circuit_probe)
+        worker._process_item(item_id)
+
+        db.session.expire_all()
+        item = db.session.get(GenerationItem, item_id)
+        state = db.session.get(ChannelCircuitState, "current")
+        self.assertEqual(item.status, "succeeded")
+        self.assertIsNone(state.open_until)
+        self.assertEqual(worker.providers.calls, ["current"] * 4)
+
+    def test_reconnecting_items_share_one_half_open_probe(self):
+        worker = self.create_worker()
+        timeout = ProviderError("刀哥调用结果未知", code="timeout", status_code=504)
+        worker.providers = SequenceProviderFactory(
+            [timeout, timeout, ProviderResult(content=png_bytes(), request_id="probe-success")]
+        )
+        first = self.submit(self.create_workspace("重连探测一"), channel_id="", batch_count=1)
+        second = self.submit(self.create_workspace("重连探测二"), channel_id="", batch_count=1)
+
+        self.assertTrue(worker._claim(first.items[0].id))
+        worker._process_item(first.items[0].id)
+        self.assertTrue(worker._claim(second.items[0].id))
+        worker._process_item(second.items[0].id)
+
+        db.session.expire_all()
+        state = db.session.get(ChannelCircuitState, "current")
+        self.assertEqual(state.failure_count, 2)
+        state.open_until = utcnow() - timedelta(seconds=1)
+        for job in (first, second):
+            item = db.session.get(GenerationItem, job.items[0].id)
+            item.retry_at = utcnow() - timedelta(seconds=1)
+        db.session.commit()
+
+        self.assertTrue(worker._claim(first.items[0].id))
+        self.assertTrue(db.session.get(GenerationItem, first.items[0].id).circuit_probe)
+        self.assertIsNone(worker._claim(second.items[0].id))
+        self.assertEqual(worker.providers.calls, ["current", "current"])
+        worker._process_item(first.items[0].id)
+
+        db.session.expire_all()
+        state = db.session.get(ChannelCircuitState, "current")
+        self.assertIsNone(state.open_until)
+        self.assertTrue(worker._claim(second.items[0].id))
+        worker._process_item(second.items[0].id)
+        self.assertEqual(worker.providers.calls, ["current"] * 4)
 
     def test_first_failure_recovers_from_concurrent_circuit_state_creation(self):
         job = self.submit(self.create_workspace("熔断状态并发创建"), channel_id="")
