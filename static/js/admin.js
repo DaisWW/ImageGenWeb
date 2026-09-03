@@ -5,6 +5,7 @@
   const STATUS = {
     queued: "排队中",
     running: "生成中",
+    reconnecting: "正在重连",
     canceling: "取消中",
     succeeded: "已完成",
     partial: "部分完成",
@@ -666,6 +667,8 @@
           item.channel,
           item.thumbnail_url,
           item.image_url,
+          item.retry_count,
+          item.retry_limit,
         ]),
       ]);
     }
@@ -691,9 +694,14 @@
         };
         const outputs = job.items.map((item) => {
           const provider = item.channel || job.channel || "系统自动调度";
+          const retryCount = item.retry_count ?? 0;
+          const retryLimit = item.retry_limit ?? 5;
+          const statusLabel = item.status === "reconnecting"
+            ? `正在重连 ${retryCount}/${retryLimit}`
+            : "";
           return item.thumbnail_url
             ? `<a class="admin-media-tile admin-output" href="${UI.escapeHtml(item.image_url)}" target="_blank" rel="noopener" title="查看第 ${item.position + 1} 张原图 · ${UI.escapeHtml(provider)}"><img src="${UI.escapeHtml(item.thumbnail_url)}" alt="生成结果 ${item.position + 1} · ${UI.escapeHtml(provider)}" loading="lazy" decoding="async"${imageDimensions(item)}><small class="admin-output-channel">${UI.escapeHtml(provider)}</small></a>`
-            : `<span class="admin-media-tile admin-output empty ${item.status}" aria-label="${UI.escapeHtml(STATUS[item.status] || item.status)} · ${UI.escapeHtml(provider)}"><i data-lucide="${item.status === "failed" ? "circle-alert" : "loader-circle"}"></i><small class="admin-output-channel">${UI.escapeHtml(provider)}</small></span>`;
+            : `<span class="admin-media-tile admin-output empty ${item.status}" aria-label="${UI.escapeHtml(statusLabel || STATUS[item.status] || item.status)} · ${UI.escapeHtml(provider)}"><i data-lucide="${item.status === "failed" ? "circle-alert" : "loader-circle"}"></i>${statusLabel ? `<small class="admin-output-status">${UI.escapeHtml(statusLabel)}</small>` : ""}<small class="admin-output-channel">${UI.escapeHtml(provider)}</small></span>`;
         }).join("");
         const references = job.references.length
           ? `<section class="admin-media-group admin-reference-group admin-references"><div class="admin-media-heading"><span>垫图</span><small>${job.references.length} 张</small></div><div class="admin-media-grid">${job.references.map((asset, index) => `<a class="admin-media-tile admin-reference" href="${UI.escapeHtml(asset.url)}" target="_blank" rel="noopener" title="查看垫图 ${index + 1}"><img src="${UI.escapeHtml(asset.url)}" alt="${UI.escapeHtml(asset.name || `垫图 ${index + 1}`)}" loading="lazy" decoding="async"${imageDimensions(asset)}></a>`).join("")}</div></section>`

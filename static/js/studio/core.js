@@ -5,6 +5,7 @@
   const STATUS = {
     queued: ["排队中", "queued"],
     running: ["生成中", "running"],
+    reconnecting: ["正在重连", "reconnecting"],
     canceling: ["取消中", "canceling"],
     succeeded: ["已完成", "succeeded"],
     partial: ["部分完成", "partial"],

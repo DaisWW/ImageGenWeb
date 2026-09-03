@@ -336,7 +336,13 @@
     },
 
     updateJobCard(article, job) {
-      const [statusLabel, statusClass] = STATUS[job.status] || [job.status, ""];
+      const [defaultStatusLabel, statusClass] = STATUS[job.status] || [job.status, ""];
+      const reconnecting = (job.items || []).filter((item) => item.status === "reconnecting");
+      const retryCount = Math.max(...reconnecting.map((item) => item.retry_count ?? 0), 0);
+      const retryLimit = Math.max(...reconnecting.map((item) => item.retry_limit ?? 5), 5);
+      const statusLabel = reconnecting.length
+        ? `正在重连 ${retryCount}/${retryLimit}`
+        : defaultStatusLabel;
       const enteringClass = article.classList.contains("timeline-enter") ? " timeline-enter" : "";
       const className = `job-card timeline-job ${statusClass}${enteringClass}`;
       if (article.className !== className) article.className = className;
@@ -418,9 +424,16 @@
 
     updateOutputTile(button, job, item) {
       const imageUrl = item.thumbnail_url || item.image_url || "";
+      const retryCount = item.retry_count ?? 0;
+      const retryLimit = item.retry_limit ?? 5;
       const imageArrived = button.isConnected && !button.dataset.imageUrl && Boolean(imageUrl);
       const contentChanged = button.dataset.imageUrl !== imageUrl
-        || (!imageUrl && button.dataset.itemStatus !== item.status);
+        || (!imageUrl && (
+          button.dataset.itemStatus !== item.status
+          || (item.status === "reconnecting"
+            && (button.dataset.retryCount !== String(retryCount)
+              || button.dataset.retryLimit !== String(retryLimit)))
+        ));
       const transparencyClass = job.transparent_background ? " has-transparency" : "";
       const arrivedClass = button.classList.contains("result-arrived") ? " result-arrived" : "";
       const className = `output-tile ${item.status}${transparencyClass}${arrivedClass}`;
@@ -429,6 +442,8 @@
       if (button.dataset.itemId !== String(item.id)) button.dataset.itemId = item.id;
       if (button.dataset.itemStatus !== item.status) button.dataset.itemStatus = item.status;
       if (button.dataset.imageUrl !== imageUrl) button.dataset.imageUrl = imageUrl;
+      if (button.dataset.retryCount !== String(retryCount)) button.dataset.retryCount = retryCount;
+      if (button.dataset.retryLimit !== String(retryLimit)) button.dataset.retryLimit = retryLimit;
       setDisabled(button, !item.image_url);
       if (!contentChanged) return button;
       if (imageUrl) {
@@ -444,7 +459,10 @@
         placeholder.className = "output-placeholder";
         const icon = ["failed", "interrupted"].includes(item.status)
           ? "circle-alert" : item.status === "canceled" ? "ban" : "loader-circle";
-        placeholder.innerHTML = `<i data-lucide="${icon}"></i><small>${STATUS[item.status]?.[0] || "等待"}</small>`;
+        const label = item.status === "reconnecting"
+          ? `正在重连 ${retryCount}/${retryLimit}`
+          : STATUS[item.status]?.[0] || "等待";
+        placeholder.innerHTML = `<i data-lucide="${icon}"></i><small>${label}</small>`;
         button.replaceChildren(placeholder);
         UI.icons(button);
       }
@@ -473,7 +491,7 @@
     optimisticCanceledJob(job) {
       const completedAt = new Date().toISOString();
       const items = (job.items || []).map((item) => (
-        ["queued", "running", "canceling"].includes(item.status)
+        ["queued", "running", "canceling", "reconnecting"].includes(item.status)
           ? { ...item, status: "canceled", completed_at: completedAt, image_url: null, thumbnail_url: null }
           : item
       ));

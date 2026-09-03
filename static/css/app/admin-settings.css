@@ -339,6 +339,7 @@ tbody tr:hover td {
 }
 
 .admin-job-card.running,
+.admin-job-card.reconnecting,
 .admin-job-card.canceling {
   border-color: #62472f;
 }
@@ -492,7 +493,19 @@ tbody tr:hover td {
   height: 16px;
 }
 
+.admin-output-status {
+  max-width: calc(100% - 10px);
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: 10px;
+  font-weight: 650;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .admin-output.empty.running svg,
+.admin-output.empty.reconnecting svg,
 .admin-output.empty.queued svg {
   animation: spin 1.4s linear infinite;
 }

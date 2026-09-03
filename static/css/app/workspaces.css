@@ -242,6 +242,10 @@
   color: var(--accent);
 }
 
+.workspace-item.job-reconnecting .workspace-meta {
+  color: var(--accent);
+}
+
 .workspace-item.job-queued .workspace-meta {
   color: var(--focus);
 }

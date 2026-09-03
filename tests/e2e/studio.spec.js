@@ -682,6 +682,76 @@ test("active generation locks prompt reuse and cancellation unlocks immediately"
   await expect(page.getByText("取消中", { exact: true })).toHaveCount(0);
 });
 
+test("reconnecting generation shows bounded retry progress", {
+  tag: "@responsive",
+}, async ({ studioPage: page }) => {
+  const workspaceId = await page.locator("#workspaceList .workspace-item.active")
+    .getAttribute("data-workspace-id");
+  const createdAt = new Date().toISOString();
+  const reconnectingJob = {
+    id: "e2e-reconnecting-job",
+    workspace_id: workspaceId,
+    status: "reconnecting",
+    progress_percent: 1,
+    queue_position: null,
+    queue_total: 0,
+    estimated_end_at: null,
+    is_over_estimate: false,
+    kind: "image",
+    channel_id: "e2e",
+    channel: "E2E 渠道",
+    mode: "text2img",
+    prompt: "等待渠道重连",
+    model: "e2e-model",
+    size: "1024x1024",
+    quality: "high",
+    output_format: "png",
+    compression: null,
+    transparent_background: false,
+    requested_count: 1,
+    price_per_image_rmb: "0.0300",
+    charged_rmb: "0.0000",
+    reserved_rmb: "0.0300",
+    created_at: createdAt,
+    started_at: createdAt,
+    completed_at: null,
+    succeeded_count: 0,
+    failed_count: 0,
+    canceled_count: 0,
+    can_cancel: true,
+    references: [],
+    items: [{
+      id: "e2e-reconnecting-item",
+      position: 0,
+      status: "reconnecting",
+      retry_count: 1,
+      retry_limit: 5,
+      error: "渠道请求超时，正在重连 1/5",
+      image_url: null,
+      thumbnail_url: null,
+    }],
+  };
+
+  await page.route("**/api/generations*", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/api/generations/active") {
+      await route.fulfill({ json: { jobs: [reconnectingJob] } });
+      return;
+    }
+    if (url.pathname === "/api/generations") {
+      await route.fulfill({ json: { jobs: [reconnectingJob], queue_total: 0 } });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.reload();
+  const jobCard = page.locator(`[data-job-id="${reconnectingJob.id}"]`);
+  await expect(jobCard.locator("[data-job-status-label]")).toHaveText("正在重连 1/5");
+  await expect(jobCard.locator(".output-placeholder")).toContainText("正在重连 1/5");
+  await expect(jobCard.getByRole("button", { name: "取消" })).toBeVisible();
+});
+
 test("failed generation shows the provider reason once", {
   tag: "@responsive",
 }, async ({ studioPage: page }) => {

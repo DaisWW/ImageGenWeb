@@ -128,7 +128,7 @@
       const elements = this.workspaceElementCache.get(item);
       if (!elements) return;
       const { meta, progress, progressFill, timing, endLabel, remainingLabel } = elements;
-      ["queued", "running", "canceling"].forEach((status) => {
+      ["queued", "running", "reconnecting", "canceling"].forEach((status) => {
         item.classList.toggle(`job-${status}`, job?.status === status && !operation);
       });
       if (operation) {

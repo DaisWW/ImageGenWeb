@@ -113,7 +113,7 @@
 
   function generationChargeLabel(job) {
     const charged = money(job?.charged_rmb);
-    if (["queued", "running", "canceling"].includes(job?.status)) {
+    if (["queued", "running", "reconnecting", "canceling"].includes(job?.status)) {
       return `${money(job?.reserved_rmb)} 预占 · ${charged} 已扣`;
     }
     return `${charged} 已扣`;

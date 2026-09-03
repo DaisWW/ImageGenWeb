@@ -12,7 +12,7 @@
 
   Object.assign(StudioApp.prototype, {
     activeGenerationJobs() {
-      return this.jobs.filter((job) => ["running", "canceling"].includes(job.status));
+      return this.jobs.filter((job) => ["running", "canceling", "reconnecting"].includes(job.status));
     },
 
     updateMetrics() {
@@ -23,8 +23,11 @@
       this.updateEtaMetric();
       const busy = running.length > 0 || queued.length > 0;
       this.el.workspaceStateDot.classList.toggle("busy", busy);
+      const reconnecting = running.filter((job) => job.status === "reconnecting");
       setText(this.el.workspaceStatus, !this.activeWorkspace
         ? "未选择工作站"
+        : reconnecting.length
+        ? `${reconnecting.length} 个任务正在重连`
         : running.length
         ? `${running.length} 个任务正在生成`
         : queued.length ? `${queued.length} 个任务排队中` : "等待任务");

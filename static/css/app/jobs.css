@@ -9,6 +9,7 @@
   contain-intrinsic-size: auto 180px;
 }
 .job-card.running,
+.job-card.reconnecting,
 .job-card.canceling {
   border-color: #62472f;
 }
@@ -59,6 +60,7 @@
 }
 
 .status-badge.running,
+.status-badge.reconnecting,
 .status-badge.succeeded {
   color: var(--accent);
   border-color: #67482f;
@@ -67,6 +69,10 @@
 
 .status-badge.running > span:first-child {
   animation: status-pulse 1.8s ease-in-out infinite;
+}
+
+.status-badge.reconnecting > span:first-child {
+  animation: status-pulse 1.1s ease-in-out infinite;
 }
 
 .status-badge.queued {
@@ -125,6 +131,7 @@
 }
 
 .job-card.running .job-progress span::after,
+.job-card.reconnecting .job-progress span::after,
 .job-card.canceling .job-progress span::after {
   position: absolute;
   inset: 0;
@@ -285,6 +292,7 @@
 }
 
 .output-tile.running .output-placeholder svg,
+.output-tile.reconnecting .output-placeholder svg,
 .output-tile.queued .output-placeholder svg {
   animation: spin 1.4s linear infinite;
 }
