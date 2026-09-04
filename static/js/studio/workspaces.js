@@ -305,6 +305,42 @@
       }
     },
 
+    async refreshWorkspaces() {
+      try {
+        const data = await UI.api("/api/workspaces", { cache: "no-store" });
+        const previousById = new Map(this.workspaces.map((workspace) => [workspace.id, workspace]));
+        const activeWorkspaceId = this.activeWorkspace?.id || "";
+        const currentWorkspaceSettings = this.activeWorkspace
+          ? this.collectSettings?.()
+          : null;
+        const preserveLocalSettings = Boolean(
+          this.saveTimer !== null || this.workspaceSettingSaves.has(activeWorkspaceId),
+        );
+        this.workspaces = data.workspaces.map((workspace) => {
+          const current = previousById.get(workspace.id);
+          if (current) Object.assign(current, workspace);
+          return current || workspace;
+        });
+        this.maxWorkspaces = data.max_count;
+        const activeWorkspace = this.workspaces.find((workspace) => workspace.id === activeWorkspaceId);
+        if (activeWorkspace) {
+          this.activeWorkspace = activeWorkspace;
+          this.el.workspaceTitle.textContent = activeWorkspace.name;
+          if (currentWorkspaceSettings && preserveLocalSettings) {
+            activeWorkspace.settings = { ...activeWorkspace.settings, ...currentWorkspaceSettings };
+          }
+          this.renderWorkspaceList();
+        } else if (this.workspaces[0]) {
+          this.activeWorkspace = null;
+          this.selectWorkspace(this.workspaces[0].id);
+        } else {
+          this.showEmptyWorkspace();
+        }
+      } catch (error) {
+        if (error?.name !== "AbortError") UI.toast(error.message, "error");
+      }
+    },
+
     clearWorkspaceDropIndicators() {
       this.el.workspaceList.querySelectorAll(".drop-before, .drop-after").forEach((item) => {
         item.classList.remove("drop-before", "drop-after");

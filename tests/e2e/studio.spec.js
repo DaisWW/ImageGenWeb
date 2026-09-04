@@ -98,6 +98,20 @@ test("new workspace names use the next available number", async ({ studioPage: p
   await deleteWorkspace(page, "工作站 1");
 });
 
+test("history back restores workspaces created in a newer page entry", async ({
+  studioPage: page,
+}) => {
+  await page.goto("/");
+  const name = `E2E-History-${Date.now()}`;
+  await createWorkspace(page, name);
+
+  await page.goBack();
+
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.locator("#workspaceList")).toContainText(name);
+  await deleteWorkspace(page, name);
+});
+
 test("deleting the last workspace leaves the workspace list empty", {
   tag: "@responsive",
 }, async ({ page }) => {

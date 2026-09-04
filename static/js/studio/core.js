@@ -653,6 +653,11 @@
       this.el.libraryDialog.addEventListener("close", () => {
         this.el.libraryDialog.classList.remove("is-image-dragover");
       });
+      window.addEventListener("pageshow", (event) => {
+        const navigation = window.performance.getEntriesByType?.("navigation")?.[0];
+        if (!event.persisted && navigation?.type !== "back_forward") return;
+        void this.refreshWorkspaces();
+      });
       document.addEventListener("paste", (event) => this.handleLibraryPaste(event));
       document.addEventListener("visibilitychange", () => {
         if (document.hidden) return;
