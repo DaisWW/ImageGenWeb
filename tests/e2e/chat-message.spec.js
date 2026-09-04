@@ -225,7 +225,7 @@ test("server chat operation does not show an assistant before its message is sto
   await expect(page.locator(".message-row.assistant")).toHaveCount(0);
 });
 
-test("chat streams a smooth visible preview before the final response", {
+test("chat displays each server preview immediately before the final response", {
   tag: "@responsive",
 }, async ({ page }) => {
   const preview = [
@@ -307,21 +307,58 @@ test("chat streams a smooth visible preview before the final response", {
   await page.locator("#chatForm").evaluate((form) => form.requestSubmit());
   await expect.poll(() => Boolean(submitted)).toBe(true);
   await expect.poll(() => eventsRequested).toBe(true);
+  const firstVisiblePreview = page.evaluate(() => new Promise((resolve) => {
+    const list = document.querySelector("#messageList");
+    let observer;
+    const read = () => {
+      const text = list?.querySelector(".message-row.assistant.pending .message-stream-text")
+        ?.textContent || "";
+      if (!text) return;
+      observer?.disconnect();
+      resolve(text);
+    };
+    observer = new MutationObserver(read);
+    observer.observe(list, { childList: true, characterData: true, subtree: true });
+    read();
+  }));
   releaseEvents();
-  await page.waitForFunction((length) => {
-    const text = document.querySelector(".message-stream-text")?.textContent || "";
-    return text.length > 0 && text.length < length;
-  }, preview.length);
+  expect(await firstVisiblePreview).toBe(preview);
 
   const stream = page.locator(".message-row.assistant.pending .message-stream-text");
   await expect(stream).toBeVisible();
   await expect(page.locator(".message-stream-cursor")).toBeVisible();
+  const finalHandoff = page.evaluate((id) => new Promise((resolve) => {
+    const list = document.querySelector("#messageList");
+    const selector = `[data-message-id="${id}"]`;
+    let hadEmptyHandoff = false;
+    const read = () => {
+      const node = list?.querySelector(selector);
+      if (!node && !list?.querySelector(".message-row.assistant.pending")) {
+        hadEmptyHandoff = true;
+      }
+      if (!node) return false;
+      resolve({
+        hadEmptyHandoff,
+        hadEntranceAnimation: node.classList.contains("timeline-enter"),
+      });
+      return true;
+    };
+    if (read()) return;
+    const observer = new MutationObserver(() => {
+      if (read()) observer.disconnect();
+    });
+    observer.observe(list, { childList: true });
+  }), assistantId);
   releaseReply();
   await page.waitForTimeout(100);
   await expect(page.locator(".message-row.assistant.pending")).toHaveCount(1);
   await expect(page.locator(`[data-message-id="${assistantId}"]`)).toHaveCount(0);
   await expect(stream).toHaveText(preview);
   await expect(page.locator(`[data-message-id="${assistantId}"]`)).toContainText("AIR ZERO");
+  expect(await finalHandoff).toEqual({
+    hadEmptyHandoff: false,
+    hadEntranceAnimation: false,
+  });
   await expect(page.locator(".message-row.assistant.pending")).toHaveCount(0);
 });
 

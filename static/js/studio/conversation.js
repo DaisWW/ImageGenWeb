@@ -238,7 +238,10 @@
         return;
       }
       if (!failure) {
-        if (!data) return;
+        if (!data) {
+          if (this.activeWorkspace?.id === message.workspace_id) this.renderMessages();
+          return;
+        }
         this.outgoingMessages.delete(message.id);
         if (this.activeWorkspace?.id === message.workspace_id) {
           this.mergeConversationMessages(data.messages, data.context);
@@ -285,16 +288,12 @@
           });
         },
       );
-      const { data, failure, canceled } = result;
-      if (data && this.activeWorkspace?.id === workspaceId) {
-        this.mergeConversationMessages([data.message], data.context);
+      const { data, failure } = result;
+      if (this.activeWorkspace?.id === workspaceId) {
+        if (data) this.mergeConversationMessages([data.message], data.context);
+        if (failure && previousError) previousError.retry_error = failure.message;
         this.renderMessages();
       }
-      if (failure && this.activeWorkspace?.id === workspaceId && previousError) {
-        previousError.retry_error = failure.message;
-        this.renderMessages();
-      }
-      if (canceled && this.activeWorkspace?.id === workspaceId) this.renderMessages();
     },
 
     openGenerationComposer(referenceIds = null) {
@@ -442,11 +441,7 @@
         operationId,
         source: null,
         targetText: "",
-        targetCharacters: [],
         displayedText: "",
-        displayedCount: 0,
-        frame: null,
-        drainTimer: null,
         handoffTimer: null,
         drainResolve: null,
         finalText: "",
@@ -497,31 +492,15 @@
         return;
       }
       if (state.finalText && text !== state.finalText) return;
-      const characters = Array.from(text);
-      if (!text.startsWith(state.displayedText)) {
-        const displayed = Array.from(state.displayedText);
-        let common = 0;
-        while (common < displayed.length
-          && common < characters.length
-          && displayed[common] === characters[common]) common += 1;
-        state.displayedCount = common;
-        state.displayedText = characters.slice(0, common).join("");
-      }
       state.targetText = text;
-      state.targetCharacters = characters;
+      state.displayedText = text;
       const operation = this.chatOperations.get(state.workspaceId);
       const outgoing = operation?.message_id
         ? this.outgoingMessages.get(operation.message_id)
         : null;
       if (outgoing?.delivery_state === "sending") outgoing.delivery_state = "accepted";
       if (this.activeWorkspace?.id === state.workspaceId) this.renderMessages();
-      if (this.reducedMotion.matches) {
-        state.displayedCount = characters.length;
-        state.displayedText = text;
-        this.updateChatPreviewText(state);
-        return;
-      }
-      this.scheduleChatPreviewFrame(state);
+      this.updateChatPreviewText(state);
     },
 
     completeChatPreview(workspaceId, operation, data, messageId) {
@@ -541,70 +520,20 @@
         state.finalText = finalText;
         this.queueChatPreview(state, finalText);
       }
-      if (!state.targetText || state.displayedCount >= state.targetCharacters.length) {
+      if (!state.targetText) {
         return Promise.resolve();
       }
       if (this.reducedMotion.matches || document.hidden) {
-        state.displayedCount = state.targetCharacters.length;
-        state.displayedText = state.targetText;
-        this.updateChatPreviewText(state);
         return Promise.resolve();
       }
       return new Promise((resolve) => {
         state.drainResolve = resolve;
-        const resolveImmediately = () => {
+        state.handoffTimer = window.setTimeout(() => {
+          state.handoffTimer = null;
           if (state.drainResolve !== resolve) return;
           state.drainResolve = null;
           resolve();
-        };
-        const resolveAfterHandoff = () => {
-          if (state.handoffTimer !== null) return;
-          state.handoffTimer = window.setTimeout(() => {
-            state.handoffTimer = null;
-            resolveImmediately();
-          }, CHAT_PREVIEW_HANDOFF_MS);
-        };
-        const waitForPreview = () => {
-          state.drainTimer = null;
-          if (this.chatPreviews.get(workspaceId) !== state
-            || operation.canceled
-          ) {
-            resolveImmediately();
-            return;
-          }
-          if (state.displayedCount >= state.targetCharacters.length) {
-            resolveAfterHandoff();
-            return;
-          }
-          if (document.hidden) {
-            state.displayedCount = state.targetCharacters.length;
-            state.displayedText = state.targetText;
-            this.updateChatPreviewText(state);
-            resolveImmediately();
-            return;
-          }
-          state.drainTimer = window.setTimeout(waitForPreview, 16);
-        };
-        waitForPreview();
-      });
-    },
-
-    scheduleChatPreviewFrame(state) {
-      if (state.frame !== null || state.displayedCount >= state.targetCharacters.length) return;
-      state.frame = window.requestAnimationFrame(() => {
-        state.frame = null;
-        if (this.chatPreviews.get(state.workspaceId) !== state) return;
-        const remaining = state.targetCharacters.length - state.displayedCount;
-        const batch = remaining > 800 ? 32
-          : remaining > 320 ? 16
-            : remaining > 120 ? 8
-              : remaining > 48 ? 4
-                : remaining > 18 ? 2 : 1;
-        state.displayedCount = Math.min(state.targetCharacters.length, state.displayedCount + batch);
-        state.displayedText = state.targetCharacters.slice(0, state.displayedCount).join("");
-        this.updateChatPreviewText(state);
-        if (state.displayedCount >= state.targetCharacters.length) return;
-        this.scheduleChatPreviewFrame(state);
+        }, CHAT_PREVIEW_HANDOFF_MS);
       });
     },
 
@@ -625,8 +554,6 @@
       const state = this.chatPreviews.get(workspaceId);
       if (!state || (operationId && state.operationId !== operationId)) return;
       state.source?.close();
-      if (state.frame !== null) window.cancelAnimationFrame(state.frame);
-      if (state.drainTimer !== null) window.clearTimeout(state.drainTimer);
       if (state.handoffTimer !== null) window.clearTimeout(state.handoffTimer);
       const finish = state.drainResolve;
       state.handoffTimer = null;
@@ -676,7 +603,6 @@
         this.chatOperations.delete(workspaceId);
       }
       this.renderWorkspaceList();
-      if (this.activeWorkspace?.id === workspaceId) this.renderMessages();
     },
 
     requestOperationCancellation(workspaceId, operationId) {

@@ -222,6 +222,12 @@
         desiredKeys.add(key);
         const isNew = !existing.has(key);
         let node = existing.get(key);
+        const currentBeforeUpdate = this.el.messageList.children[index];
+        const replacingPending = entry.type === "message"
+          && entry.value.role === "assistant"
+          && entry.value.kind !== "pending"
+          && !node
+          && currentBeforeUpdate?.classList.contains("pending");
         if (entry.type === "job") {
           const previousStatus = node?.dataset.jobStatus;
           const unchangedTerminal = node
@@ -249,7 +255,7 @@
         }
         if (isNew) {
           layoutChanged = true;
-          if (!this.reducedMotion.matches && index >= entranceStart) {
+          if (!replacingPending && !this.reducedMotion.matches && index >= entranceStart) {
             node.classList.add("timeline-enter");
             const clearEntrance = (event) => {
               if (event.target !== node) return;
