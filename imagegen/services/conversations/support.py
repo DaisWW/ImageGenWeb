@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from time import monotonic
 from typing import Any, Callable
 
 from sqlalchemy import select
@@ -100,6 +101,7 @@ class ConversationSupport:
                 candidates.append(candidate)
         candidates = candidates[: self.settings.runtime().chat_failover_attempts]
         output_seen = False
+        deadline = monotonic() + float(model.timeout_seconds)
 
         def observe_output(delta: str) -> None:
             nonlocal output_seen
@@ -109,9 +111,24 @@ class ConversationSupport:
 
         for index, candidate in enumerate(candidates, 1):
             operation.ensure_active()
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                timeout = OpenAIChatError(
+                    "聊天模型响应超时，请重试",
+                    code="chat_timeout",
+                    status_code=504,
+                    elapsed_seconds=float(model.timeout_seconds),
+                    details={"first_output_seconds": None, "shared_timeout_exhausted": True},
+                )
+                timeout.chat_model = candidate
+                raise timeout
+            request_candidate = replace(
+                candidate,
+                timeout_seconds=min(candidate.timeout_seconds, remaining),
+            )
             try:
                 return candidate, self.client.complete(
-                    candidate,
+                    request_candidate,
                     system=system,
                     messages=messages,
                     max_output_tokens=min(candidate.max_output_tokens, max_output_tokens),
@@ -163,6 +180,12 @@ class ConversationSupport:
             "chat_rate_limited",
             "chat_timeout",
         }:
+            return True
+        if error.code == "chat_upstream_error" and error.details.get(
+            "terminal_event_received"
+        ) is False:
+            return True
+        if error.code == "chat_upstream_error" and error.details.get("empty_completion") is True:
             return True
         status = error.upstream_status
         return error.code == "chat_upstream_error" and bool(

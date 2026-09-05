@@ -216,6 +216,7 @@ class OpenAIChatClient:
         terminal: dict[str, Any] | None = None
         completed: dict[str, Any] | None = None
         invalid_event_count = 0
+        last_event_type = ""
         first_output_seconds: float | None = None
         output_characters = 0
         remaining = deadline - time.monotonic()
@@ -241,7 +242,22 @@ class OpenAIChatClient:
                     continue
                 if not isinstance(event, dict):
                     continue
+                if "error" in event:
+                    raise OpenAIChatError(
+                        "聊天模型服务暂时异常，请稍后重试",
+                        code="chat_upstream_error",
+                        status_code=502,
+                        request_id=_request_id(response, event),
+                        elapsed_seconds=_elapsed(started),
+                        details={
+                            **response_summary(response, event),
+                            "request_body_bytes": request_body_bytes,
+                            "first_output_seconds": first_output_seconds,
+                        },
+                    )
                 event_type = str(event.get("type", "")).strip()
+                if event_type:
+                    last_event_type = event_type
                 if event_type.startswith("response.reasoning_summary"):
                     reporter.emit(
                         "reasoning",
@@ -289,11 +305,28 @@ class OpenAIChatClient:
                     raise OpenAIChatError(
                         "聊天模型服务暂时异常，请稍后重试",
                         code="chat_upstream_error",
+                        status_code=502,
                         request_id=_request_id(response, completed),
-                        upstream_status=response.status_code,
                         elapsed_seconds=_elapsed(started),
                         details={
                             **response_summary(response, completed),
+                            "terminal_event_type": event_type,
+                            "request_body_bytes": request_body_bytes,
+                            "first_output_seconds": first_output_seconds,
+                        },
+                    )
+                completion_status = str(completed.get("status", "")).strip().lower()
+                if completion_status and completion_status != "completed":
+                    raise OpenAIChatError(
+                        "聊天模型服务暂时异常，请稍后重试",
+                        code="chat_upstream_error",
+                        status_code=502,
+                        request_id=_request_id(response, completed),
+                        elapsed_seconds=_elapsed(started),
+                        details={
+                            **response_summary(response, completed),
+                            "completion_status": completion_status,
+                            "terminal_event_type": event_type,
                             "request_body_bytes": request_body_bytes,
                             "first_output_seconds": first_output_seconds,
                         },
@@ -353,13 +386,16 @@ class OpenAIChatClient:
                 )
             raise OpenAIChatError(
                 "聊天服务流式响应未正常结束",
+                code="chat_upstream_error",
+                status_code=502,
                 request_id=_request_id(response),
-                upstream_status=response.status_code,
                 elapsed_seconds=_elapsed(started),
                 details={
                     "status_code": response.status_code,
                     "content_type": str(response.headers.get("content-type", ""))[:120],
                     "invalid_event_count": invalid_event_count,
+                    "last_event_type": last_event_type,
+                    "terminal_event_received": False,
                     "request_body_bytes": request_body_bytes,
                     "first_output_seconds": first_output_seconds,
                 },
@@ -378,19 +414,26 @@ class OpenAIChatClient:
                 first_output_seconds=first_output_seconds,
             )
         content = "".join(text_parts).strip() or _response_output_text(completed).strip()
+        usage = completed.get("usage") or (terminal or {}).get("usage") or {}
         if not content:
+            # Sub2API can attach usage to a completed envelope even when the
+            # response contains no output. That is still a failed empty completion.
+            empty_completion = not completed.get("output")
             raise OpenAIChatError(
                 "聊天服务返回了空内容",
+                code="chat_upstream_error" if empty_completion else "chat_provider_error",
+                status_code=502,
                 request_id=_request_id(response, completed),
-                upstream_status=response.status_code,
+                upstream_status=response.status_code if not empty_completion else None,
                 elapsed_seconds=_elapsed(started),
                 details={
                     **response_summary(response, completed),
+                    "empty_completion": empty_completion,
+                    "terminal_event_received": True,
                     "request_body_bytes": request_body_bytes,
                     "first_output_seconds": first_output_seconds,
                 },
             )
-        usage = completed.get("usage") or (terminal or {}).get("usage") or {}
         return ChatCompletion(
             content=content,
             request_id=_request_id(response, completed),
@@ -465,7 +508,10 @@ def _responses_message(message: dict[str, Any]) -> dict[str, Any]:
 
 def _sse_payloads(response: requests.Response, *, deadline: float):
     lines: list[str] = []
-    for raw_line in response.iter_lines(chunk_size=1, decode_unicode=False):
+    # Sub2API's relay uses a buffered SSE scanner.  Reading one byte at a time
+    # makes long Responses streams needlessly expensive and can amplify latency
+    # when the upstream emits a large reasoning or output event.
+    for raw_line in response.iter_lines(chunk_size=8192, decode_unicode=False):
         if time.monotonic() >= deadline:
             raise requests.Timeout("聊天模型响应超过总超时限制")
         line = (
@@ -526,6 +572,14 @@ def _elapsed(started: float) -> float:
 
 
 def _close_response(response: requests.Response) -> None:
+    raw = getattr(response, "raw", None)
+    shutdown = getattr(raw, "shutdown", None)
+    if callable(shutdown):
+        try:
+            shutdown()
+        except Exception:
+            # urllib3 may already have released or closed the socket.
+            pass
     try:
         response.close()
     except Exception:

@@ -5,6 +5,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
+import yaml
+
 from ..validation import as_bool, bounded_int, required_string
 from .base import ReloadableConfigRegistry
 from .secrets import api_key_hint
@@ -163,6 +165,7 @@ class ChatModelRegistry(ReloadableConfigRegistry[ChatModelSnapshot]):
     def _parse(self, raw: Any, raw_bytes: bytes) -> ChatModelSnapshot:
         if not isinstance(raw, dict) or raw.get("version") != 1:
             raise ValueError("对话模型配置必须包含 version: 1")
+        raw = self._inherit_legacy_fallbacks(raw)
         context_raw = raw.get("context", {})
         if not isinstance(context_raw, dict):
             raise ValueError("context 配置必须是对象")
@@ -259,6 +262,41 @@ class ChatModelRegistry(ReloadableConfigRegistry[ChatModelSnapshot]):
             fallback_model_ids=_fallback_model_ids(raw.get("fallback_model_ids", [])),
             api_key=api_key,
         )
+
+    def _inherit_legacy_fallbacks(self, raw: dict[str, Any]) -> dict[str, Any]:
+        """补齐旧数据库覆盖配置中缺失的备用模型字段。"""
+        try:
+            file_raw = yaml.safe_load(self._path.read_bytes()) or {}
+        except (OSError, TypeError, yaml.YAMLError):
+            return raw
+        file_models = {
+            str(item.get("id", "")): item
+            for item in file_raw.get("models", [])
+            if isinstance(item, dict) and item.get("id")
+        }
+        models = raw.get("models")
+        if not isinstance(models, list):
+            return raw
+        merged_models: list[dict[str, Any]] = []
+        changed = False
+        for item in models:
+            if not isinstance(item, dict):
+                merged_models.append(item)
+                continue
+            merged = dict(item)
+            if "fallback_model_ids" not in merged or merged["fallback_model_ids"] is None:
+                fallback = file_models.get(str(merged.get("id", "")), {}).get(
+                    "fallback_model_ids"
+                )
+                if isinstance(fallback, list):
+                    merged["fallback_model_ids"] = list(fallback)
+                    changed = True
+            merged_models.append(merged)
+        if not changed:
+            return raw
+        result = dict(raw)
+        result["models"] = merged_models
+        return result
 
 
 def _parse_prompts(

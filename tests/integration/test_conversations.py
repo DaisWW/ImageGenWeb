@@ -80,6 +80,173 @@ models:
         self.assertTrue(failed.details["will_retry"])
         self.assertEqual(failed.details["next_model_id"], "fallback")
 
+    def test_chat_switches_after_missing_terminal_event_even_with_http_200(self):
+        self.chat_path.write_text(
+            """\
+version: 1
+context:
+  max_context_tokens: 32000
+models:
+  - id: primary
+    label: Primary
+    enabled: true
+    base_url: https://primary.example
+    api_key_env: TEST_CHAT_KEY
+    model: gpt-primary
+    reasoning_effort: max
+    review_reasoning_effort: medium
+    timeout_seconds: 30
+    max_output_tokens: 1000
+    fallback_model_ids: [fallback]
+  - id: fallback
+    label: Fallback
+    enabled: true
+    base_url: https://fallback.example
+    api_key_env: TEST_CHAT_KEY
+    model: gpt-fallback
+    reasoning_effort: max
+    review_reasoning_effort: medium
+    timeout_seconds: 30
+    max_output_tokens: 1000
+""",
+            encoding="utf-8",
+        )
+        self.app.extensions["chat_model_registry"].reload(force=True)
+        calls = []
+
+        class MissingTerminalChatClient:
+            def complete(
+                self,
+                model,
+                *,
+                system,
+                messages,
+                max_output_tokens=None,
+                reasoning_effort=None,
+                progress=None,
+                output_delta=None,
+            ):
+                calls.append(model.identifier)
+                if len(calls) == 1:
+                    raise OpenAIChatError(
+                        "上游流式响应未正常结束",
+                        code="chat_upstream_error",
+                        status_code=502,
+                        upstream_status=200,
+                        details={
+                            "terminal_event_received": False,
+                            "first_output_seconds": None,
+                        },
+                    )
+                return ChatCompletion(
+                    content=json.dumps(
+                        {
+                            "status": "needs_clarification",
+                            "questions": ["请确认场景。"],
+                            "creative_direction": "other",
+                        },
+                        ensure_ascii=False,
+                    ),
+                    request_id="fallback-request",
+                )
+
+        self.services.conversations.client = MissingTerminalChatClient()
+        workspace = self.create_workspace("HTTP 200 流提前结束")
+
+        _user_message, assistant_message = self.services.conversations.send(
+            workspace,
+            model_id="primary",
+            content="请生成一张人物海报",
+        )
+
+        self.assertEqual(calls, ["primary", "fallback"])
+        self.assertEqual(assistant_message.provider_id, "fallback")
+
+    def test_chat_failover_shares_the_primary_timeout_budget(self):
+        self.chat_path.write_text(
+            """\
+version: 1
+context:
+  max_context_tokens: 32000
+models:
+  - id: primary
+    label: Primary
+    enabled: true
+    base_url: https://primary.example
+    api_key_env: TEST_CHAT_KEY
+    model: gpt-primary
+    reasoning_effort: max
+    review_reasoning_effort: medium
+    timeout_seconds: 30
+    max_output_tokens: 1000
+    fallback_model_ids: [fallback]
+  - id: fallback
+    label: Fallback
+    enabled: true
+    base_url: https://fallback.example
+    api_key_env: TEST_CHAT_KEY
+    model: gpt-fallback
+    reasoning_effort: max
+    review_reasoning_effort: medium
+    timeout_seconds: 30
+    max_output_tokens: 1000
+""",
+            encoding="utf-8",
+        )
+        self.app.extensions["chat_model_registry"].reload(force=True)
+        clock = [0.0]
+        calls = []
+
+        class SharedBudgetChatClient:
+            def complete(
+                self,
+                model,
+                *,
+                system,
+                messages,
+                max_output_tokens=None,
+                reasoning_effort=None,
+                progress=None,
+                output_delta=None,
+            ):
+                calls.append((model.identifier, model.timeout_seconds))
+                if len(calls) == 1:
+                    clock[0] = 25.0
+                    raise OpenAIChatError(
+                        "测试聊天模型超时",
+                        code="chat_timeout",
+                        status_code=504,
+                        elapsed_seconds=25.0,
+                        details={"first_output_seconds": None},
+                    )
+                content = json.dumps(
+                    {
+                        "status": "needs_clarification",
+                        "questions": ["请确认场景。"],
+                        "creative_direction": "other",
+                    },
+                    ensure_ascii=False,
+                )
+                return ChatCompletion(content=content, request_id="fallback-request")
+
+        self.services.conversations.client = SharedBudgetChatClient()
+        workspace = self.create_workspace("共享超时预算")
+
+        with patch(
+            "imagegen.services.conversations.support.monotonic",
+            side_effect=lambda: clock[0],
+        ):
+            _user_message, assistant_message = self.services.conversations.send(
+                workspace,
+                model_id="primary",
+                content="请生成一张人物海报",
+            )
+
+        self.assertEqual(assistant_message.provider_id, "fallback")
+        self.assertEqual([call[0] for call in calls], ["primary", "fallback"])
+        self.assertGreaterEqual(calls[0][1], 29.0)
+        self.assertLessEqual(calls[1][1], 5.0)
+
     def test_chat_does_not_switch_after_non_streaming_output_started(self):
         self.chat_path.write_text(
             """\

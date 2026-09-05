@@ -19,7 +19,7 @@ from imagegen.integrations.images import (
     ProviderError,
     ReferencePayload,
 )
-from imagegen.integrations.openai_chat import OpenAIChatClient, OpenAIChatError
+from imagegen.integrations.openai_chat import OpenAIChatClient, OpenAIChatError, _close_response
 from imagegen.models import (
     ConversationMessage,
     RuntimeLog,
@@ -39,6 +39,23 @@ from tests.support.platform import (
 
 
 class TestProviderAndRuntime(PlatformTestCase):
+    def test_chat_timeout_closes_underlying_stream_before_response(self):
+        calls = []
+
+        class RawResponse:
+            def shutdown(self):
+                calls.append("shutdown")
+
+        class Response:
+            raw = RawResponse()
+
+            def close(self):
+                calls.append("close")
+
+        _close_response(Response())
+
+        self.assertEqual(calls, ["shutdown", "close"])
+
     def test_model_image_payload_is_bounded_and_preserves_transparency(self):
         source = Image.effect_noise((2048, 1536), 100).convert("RGBA")
         source.putalpha(Image.new("L", source.size, 128))
@@ -54,6 +71,75 @@ class TestProviderAndRuntime(PlatformTestCase):
         with Image.open(io.BytesIO(prepared)) as image:
             self.assertLessEqual(max(image.size), 1280)
             self.assertEqual(image.mode, "RGBA")
+
+    def test_legacy_missing_fallbacks_inherit_file_configuration(self):
+        self.chat_path.write_text(
+            """\
+version: 1
+context:
+  max_context_tokens: 32000
+models:
+  - id: test-chat
+    label: 测试 GPT
+    enabled: true
+    base_url: https://chat.example
+    api_key_env: TEST_CHAT_KEY
+    model: gpt-test
+    reasoning_effort: max
+    review_reasoning_effort: medium
+    timeout_seconds: 30
+    max_output_tokens: 1000
+    fallback_model_ids: [fallback-chat]
+  - id: fallback-chat
+    label: 备用 GPT
+    enabled: true
+    base_url: https://fallback.example
+    api_key_env: TEST_CHAT_KEY
+    model: gpt-fallback
+    reasoning_effort: max
+    review_reasoning_effort: medium
+    timeout_seconds: 30
+    max_output_tokens: 1000
+""",
+            encoding="utf-8",
+        )
+        registry = self.app.extensions["chat_model_registry"]
+        legacy = {
+            "version": 1,
+            "context": {"max_context_tokens": 32000},
+            "models": [
+                {
+                    "id": "test-chat",
+                    "label": "测试 GPT",
+                    "enabled": True,
+                    "base_url": "https://chat.example",
+                    "api_key": "test-chat-key-not-secret",
+                    "model": "gpt-test",
+                    "reasoning_effort": "max",
+                    "review_reasoning_effort": "medium",
+                    "timeout_seconds": 30,
+                    "max_output_tokens": 1000,
+                    "fallback_model_ids": None,
+                },
+                {
+                    "id": "fallback-chat",
+                    "label": "备用 GPT",
+                    "enabled": True,
+                    "base_url": "https://fallback.example",
+                    "api_key": "test-chat-key-not-secret",
+                    "model": "gpt-fallback",
+                    "reasoning_effort": "max",
+                    "review_reasoning_effort": "medium",
+                    "timeout_seconds": 30,
+                    "max_output_tokens": 1000,
+                    "fallback_model_ids": [],
+                },
+            ],
+        }
+        inherited = registry._inherit_legacy_fallbacks(legacy)
+
+        self.assertEqual(inherited["models"][0]["fallback_model_ids"], ["fallback-chat"])
+        self.assertEqual(inherited["models"][1]["fallback_model_ids"], [])
 
     def test_channel_exposes_configured_models_and_price_without_key(self):
         channel = self.app.extensions["channel_registry"].get("test")
@@ -395,6 +481,108 @@ class TestProviderAndRuntime(PlatformTestCase):
         self.assertEqual(events[-1].output_characters, 2)
         self.assertEqual(deltas, ["测试"])
         self.assertNotIn("内部内容不应透传", repr(events))
+
+    def test_chat_stream_recognizes_http_200_error_event_without_waiting_for_timeout(self):
+        model = self.app.extensions["chat_model_registry"].get("test-chat")
+        response = FakeChatResponse(
+            headers={
+                "x-request-id": "transport-request",
+                "content-type": "text/event-stream",
+            },
+            lines=[
+                'data: {"error":{"code":"upstream_failed",'
+                '"message":"private prompt echoed by provider"},'
+                '"id":"response-error","model":"gpt-5.6-sol",'
+                '"object":"response","status":"failed"}',
+                "",
+            ],
+        )
+
+        with self.assertRaises(OpenAIChatError) as raised:
+            OpenAIChatClient(RecordingChatSession([response])).complete(
+                model,
+                system="系统提示",
+                messages=[{"role": "user", "content": "你好"}],
+            )
+
+        self.assertEqual(raised.exception.code, "chat_upstream_error")
+        self.assertEqual(raised.exception.status_code, 502)
+        self.assertIsNone(raised.exception.upstream_status)
+        self.assertEqual(raised.exception.request_id, "response-error")
+        self.assertEqual(raised.exception.details["error_code"], "upstream_failed")
+        self.assertIn("error", raised.exception.details["top_level_keys"])
+        self.assertNotIn("private prompt", repr(raised.exception.details))
+        self.assertTrue(response.closed)
+
+    def test_chat_stream_classifies_missing_terminal_event_as_retryable_upstream_error(self):
+        model = self.app.extensions["chat_model_registry"].get("test-chat")
+        response = FakeChatResponse(
+            lines=[
+                'data: {"type":"response.output_text.delta","delta":"部分输出"}',
+                "",
+            ]
+        )
+
+        with self.assertRaises(OpenAIChatError) as raised:
+            OpenAIChatClient(RecordingChatSession([response])).complete(
+                model,
+                system="系统提示",
+                messages=[{"role": "user", "content": "你好"}],
+            )
+
+        self.assertEqual(raised.exception.code, "chat_upstream_error")
+        self.assertEqual(raised.exception.status_code, 502)
+        self.assertIsNone(raised.exception.upstream_status)
+        self.assertEqual(raised.exception.details["last_event_type"], "response.output_text.delta")
+        self.assertFalse(raised.exception.details["terminal_event_received"])
+        self.assertTrue(response.closed)
+
+    def test_chat_stream_rejects_non_completed_terminal_status(self):
+        model = self.app.extensions["chat_model_registry"].get("test-chat")
+        response = FakeChatResponse(
+            lines=[
+                'data: {"type":"response.completed",'
+                '"response":{"id":"failed-response","status":"failed"}}',
+                "",
+            ]
+        )
+
+        with self.assertRaises(OpenAIChatError) as raised:
+            OpenAIChatClient(RecordingChatSession([response])).complete(
+                model,
+                system="系统提示",
+                messages=[{"role": "user", "content": "你好"}],
+            )
+
+        self.assertEqual(raised.exception.code, "chat_upstream_error")
+        self.assertIsNone(raised.exception.upstream_status)
+        self.assertEqual(raised.exception.details["completion_status"], "failed")
+        self.assertEqual(raised.exception.request_id, "failed-response")
+        self.assertTrue(response.closed)
+
+    def test_chat_stream_classifies_empty_completed_as_retryable_upstream_error(self):
+        model = self.app.extensions["chat_model_registry"].get("test-chat")
+        response = FakeChatResponse(
+            lines=[
+                'data: {"type":"response.completed",'
+                '"response":{"id":"empty-response","status":"completed",'
+                '"usage":{"input_tokens":12,"output_tokens":0}}}',
+                "",
+            ]
+        )
+
+        with self.assertRaises(OpenAIChatError) as raised:
+            OpenAIChatClient(RecordingChatSession([response])).complete(
+                model,
+                system="系统提示",
+                messages=[{"role": "user", "content": "你好"}],
+            )
+
+        self.assertEqual(raised.exception.code, "chat_upstream_error")
+        self.assertTrue(raised.exception.details["empty_completion"])
+        self.assertTrue(raised.exception.details["terminal_event_received"])
+        self.assertIsNone(raised.exception.upstream_status)
+        self.assertTrue(response.closed)
 
     def test_chat_progress_callback_cannot_change_chat_result(self):
         model = self.app.extensions["chat_model_registry"].get("test-chat")
