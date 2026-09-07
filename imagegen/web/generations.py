@@ -39,7 +39,6 @@ def _job_payload(generation_service, job):
         channels(),
         queue_position=positions.get(job.id),
         queue_total=len(positions),
-        generation_concurrency=current_user.generation_concurrency,
     )
 
 
@@ -168,7 +167,6 @@ def list_generations():
                 channels(),
                 queue_position=positions.get(job.id),
                 queue_total=len(positions),
-                generation_concurrency=current_user.generation_concurrency,
             )
             for job in jobs
         ],
@@ -189,7 +187,6 @@ def list_active_generations():
                 channels(),
                 queue_position=positions.get(job.id),
                 queue_total=len(positions),
-                generation_concurrency=current_user.generation_concurrency,
             )
             for job in jobs
         ]

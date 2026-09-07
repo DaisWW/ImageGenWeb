@@ -53,6 +53,7 @@ LOGGER = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_RETRY_LIMIT = 5
 TIMEOUT_RETRY_DELAYS = (3, 5, 10, 20, 30)
+SCHEDULING_PAGE_SIZE = 200
 
 
 class GenerationWorker:
@@ -87,6 +88,8 @@ class GenerationWorker:
         self._futures: dict[str, Future] = {}
         self._future_attempt_ids: dict[str, str] = {}
         self._background_removal_futures: dict[str, Future] = {}
+        self._thread_pool_capacity = 0
+        self._retired_thread_pools: list[ThreadPoolExecutor] = []
         self._last_heartbeat = 0.0
         self._last_recovery = 0.0
         self._last_cleanup = 0.0
@@ -168,9 +171,11 @@ class GenerationWorker:
             os._exit(70)
 
     def _shutdown_executor(self) -> None:
-        if not hasattr(self, "_thread_pool"):
-            return
-        self._thread_pool.shutdown(wait=False, cancel_futures=False)
+        pools = [*self._retired_thread_pools]
+        if isinstance(getattr(self, "_thread_pool", None), ThreadPoolExecutor):
+            pools.append(self._thread_pool)
+        for pool in pools:
+            pool.shutdown(wait=False, cancel_futures=False)
         while any(
             not future.done()
             for future in (*self._futures.values(), *self._background_removal_futures.values())
@@ -182,7 +187,8 @@ class GenerationWorker:
                     LOGGER.exception("Worker 退出等待期间刷新租约失败")
                     break
             time.sleep(5)
-        self._thread_pool.shutdown(wait=True, cancel_futures=False)
+        for pool in pools:
+            pool.shutdown(wait=True, cancel_futures=False)
         try:
             self.matting_adapters.close()
         except Exception:
@@ -240,12 +246,110 @@ class GenerationWorker:
         self._stopping.set()
 
     def _executor(self) -> ThreadPoolExecutor:
+        required_capacity = max(
+            1,
+            sum(
+                channel.limits.max_concurrency
+                for channel in self.channels.list(include_disabled=False)
+                if channel.configured
+            )
+            + int(self.app.config["BACKGROUND_REMOVAL_CONCURRENCY"]),
+        )
         if not hasattr(self, "_thread_pool"):
             self._thread_pool = ThreadPoolExecutor(
-                max_workers=64,
-                thread_name_prefix="image-generation",
+                max_workers=required_capacity,
+                thread_name_prefix="image-worker",
             )
+            self._thread_pool_capacity = required_capacity
+        elif (
+            isinstance(self._thread_pool, ThreadPoolExecutor)
+            and required_capacity > self._thread_pool_capacity
+        ):
+            self._thread_pool.shutdown(wait=False, cancel_futures=False)
+            self._retired_thread_pools.append(self._thread_pool)
+            self._thread_pool = ThreadPoolExecutor(
+                max_workers=required_capacity,
+                thread_name_prefix="image-worker",
+            )
+            self._thread_pool_capacity = required_capacity
         return self._thread_pool
+
+    def _generation_candidates(
+        self,
+        now,
+        channel_active: dict[str, int],
+    ):
+        cursor = None
+        while True:
+            channels = [
+                channel.identifier
+                for channel in self.channels.list(include_disabled=False)
+                if channel.configured
+            ]
+            available_channel_ids = [
+                channel.identifier
+                for channel in self.channels.list(include_disabled=False)
+                if channel.configured
+                and channel_active.get(channel.identifier, 0) < channel.limits.max_concurrency
+            ]
+            # When every configured channel is full, still scan the queue so
+            # items that became permanently unroutable can be finalized. A
+            # routable item simply remains queued because channel selection
+            # below still sees no capacity.
+            saturated_channel_ids = (
+                set(channels) - set(available_channel_ids) if available_channel_ids else set()
+            )
+            candidate_conditions = [
+                or_(
+                    GenerationItem.status == "queued",
+                    and_(
+                        GenerationItem.status == "reconnecting",
+                        or_(
+                            GenerationItem.retry_at.is_(None),
+                            GenerationItem.retry_at <= now,
+                        ),
+                    ),
+                )
+            ]
+            if saturated_channel_ids:
+                candidate_conditions.append(GenerationItem.channel_id.not_in(saturated_channel_ids))
+            query = (
+                select(GenerationItem)
+                .options(
+                    selectinload(GenerationItem.job).selectinload(GenerationJob.references),
+                )
+                .where(*candidate_conditions)
+            )
+            if cursor is not None:
+                created_at, position, item_id = cursor
+                query = query.where(
+                    or_(
+                        GenerationItem.created_at > created_at,
+                        and_(
+                            GenerationItem.created_at == created_at,
+                            GenerationItem.position > position,
+                        ),
+                        and_(
+                            GenerationItem.created_at == created_at,
+                            GenerationItem.position == position,
+                            GenerationItem.id > item_id,
+                        ),
+                    )
+                )
+            candidates = list(
+                db.session.scalars(
+                    query.order_by(
+                        GenerationItem.created_at,
+                        GenerationItem.position,
+                        GenerationItem.id,
+                    ).limit(SCHEDULING_PAGE_SIZE)
+                )
+            )
+            if not candidates:
+                return
+            last = candidates[-1]
+            cursor = (last.created_at, last.position, last.id)
+            yield from candidates
 
     def _collect_finished(self) -> None:
         for item_id, future in list(self._futures.items()):
@@ -300,119 +404,67 @@ class GenerationWorker:
             )
             active_rows = db.session.execute(
                 select(
-                    GenerationAttempt.user_id,
                     GenerationAttempt.channel_id,
                     GenerationAttempt.circuit_probe,
                     func.count(GenerationAttempt.id),
                 )
                 .where(capacity_active)
                 .group_by(
-                    GenerationAttempt.user_id,
                     GenerationAttempt.channel_id,
                     GenerationAttempt.circuit_probe,
                 )
             ).all()
-            user_active: dict[int, int] = {}
             channel_active: dict[str, int] = {}
             probe_active: dict[str, int] = {}
-            database_active = 0
-            for user_id, channel_id, circuit_probe, count in active_rows:
-                database_active += int(count)
-                user_active[user_id] = user_active.get(user_id, 0) + count
+            for channel_id, circuit_probe, count in active_rows:
                 channel_active[channel_id] = channel_active.get(channel_id, 0) + count
                 if circuit_probe:
                     probe_active[channel_id] = probe_active.get(channel_id, 0) + count
-            # Futures normally mirror the database rows, but counting both
-            # sources protects the global cap while a crashed or restarted
-            # item is waiting for stale-claim recovery.
-            active = max(len(self._futures), database_active)
-            available = self.channels.queue.global_concurrency - active
-            if available <= 0:
-                db.session.remove()
-                return
 
-            candidates = list(
-                db.session.scalars(
-                    select(GenerationItem)
-                    .options(
-                        selectinload(GenerationItem.user),
-                        selectinload(GenerationItem.job).selectinload(GenerationJob.references),
-                    )
-                    .where(
-                        or_(
-                            GenerationItem.status == "queued",
-                            and_(
-                                GenerationItem.status == "reconnecting",
-                                or_(
-                                    GenerationItem.retry_at.is_(None),
-                                    GenerationItem.retry_at <= now,
-                                ),
-                            ),
-                        )
-                    )
-                    .order_by(GenerationItem.created_at, GenerationItem.position)
-                    .limit(200)
-                )
-            )
             selected: list[tuple[str, str]] = []
             selected_ids: set[str] = set()
             unavailable_ids: set[str] = set()
             circuit_states = {
                 state.channel_id: state for state in db.session.scalars(select(ChannelCircuitState))
             }
-            # Give each user an initial opportunity when several users are
-            # waiting, then use any remaining slots to fill their allowed
-            # per-user concurrency.  This preserves queue fairness without
-            # artificially limiting a single user's large batch to one item.
-            passes = (True, False) if len({item.user_id for item in candidates}) > 1 else (False,)
-            for first_for_user in passes:
-                scheduled_users: set[int] = set()
-                for item in candidates:
-                    if len(selected) >= available:
-                        break
-                    if item.id in selected_ids:
+            for item in self._generation_candidates(now, channel_active):
+                if item.id in selected_ids:
+                    continue
+                if item.id in unavailable_ids:
+                    continue
+                if item.id in self._futures:
+                    continue
+                if item.status == "reconnecting":
+                    channel = self._retry_channel_for_item(item, channel_active)
+                    if channel is None and not self._retry_channel_is_available(item):
+                        self._fail_unavailable_item(item.id)
+                        unavailable_ids.add(item.id)
                         continue
-                    if item.id in unavailable_ids:
+                else:
+                    channel = self._select_channel_for_item(
+                        item,
+                        channel_active,
+                        circuit_states=circuit_states,
+                        probe_active=probe_active,
+                    )
+                    if channel is None and not self._has_routable_channel(item):
+                        self._fail_unavailable_item(item.id)
+                        unavailable_ids.add(item.id)
                         continue
-                    if item.id in self._futures:
-                        continue
-                    if first_for_user and item.user_id in scheduled_users:
-                        continue
-                    if item.status == "reconnecting":
-                        channel = self._retry_channel_for_item(item, channel_active)
-                        if channel is None and not self._retry_channel_is_available(item):
-                            self._fail_unavailable_item(item.id)
-                            unavailable_ids.add(item.id)
-                            continue
-                    else:
-                        channel = self._select_channel_for_item(
-                            item,
-                            channel_active,
-                            circuit_states=circuit_states,
-                            probe_active=probe_active,
+                if channel is None:
+                    continue
+                attempt_id = self._claim(item.id, channel)
+                if attempt_id is not None:
+                    selected.append((item.id, attempt_id))
+                    selected_ids.add(item.id)
+                    channel_active[channel.identifier] = (
+                        channel_active.get(channel.identifier, 0) + 1
+                    )
+                    state = circuit_states.get(channel.identifier)
+                    if self._circuit_is_half_open(state):
+                        probe_active[channel.identifier] = (
+                            probe_active.get(channel.identifier, 0) + 1
                         )
-                        if channel is None and not self._has_routable_channel(item):
-                            self._fail_unavailable_item(item.id)
-                            unavailable_ids.add(item.id)
-                            continue
-                    if channel is None:
-                        continue
-                    if user_active.get(item.user_id, 0) >= item.user.generation_concurrency:
-                        continue
-                    attempt_id = self._claim(item.id, channel)
-                    if attempt_id is not None:
-                        selected.append((item.id, attempt_id))
-                        selected_ids.add(item.id)
-                        scheduled_users.add(item.user_id)
-                        user_active[item.user_id] = user_active.get(item.user_id, 0) + 1
-                        channel_active[channel.identifier] = (
-                            channel_active.get(channel.identifier, 0) + 1
-                        )
-                        state = circuit_states.get(channel.identifier)
-                        if self._circuit_is_half_open(state):
-                            probe_active[channel.identifier] = (
-                                probe_active.get(channel.identifier, 0) + 1
-                            )
             db.session.remove()
 
         for item_id, attempt_id in selected:

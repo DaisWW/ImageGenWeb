@@ -39,7 +39,6 @@ def user_dict(user: User, *, include_private: bool = True) -> dict[str, Any]:
         "display_name": user.display_name,
         "role": user.role,
         "status": user.status,
-        "generation_concurrency": user.generation_concurrency,
     }
     if include_private:
         result.update(
@@ -175,7 +174,6 @@ def job_status_dict(
     *,
     queue_position: int | None = None,
     queue_total: int = 0,
-    generation_concurrency: int | None = None,
 ) -> dict[str, Any]:
     return _job_status_dict(
         job,
@@ -183,7 +181,6 @@ def job_status_dict(
         now=utcnow(),
         queue_position=queue_position,
         queue_total=queue_total,
-        generation_concurrency=generation_concurrency,
     )
 
 
@@ -194,7 +191,6 @@ def _job_status_dict(
     now: datetime,
     queue_position: int | None = None,
     queue_total: int = 0,
-    generation_concurrency: int | None = None,
 ) -> dict[str, Any]:
     item_progress = [_item_progress(item, now) for item in job.items]
     progress = round(sum(item_progress) / len(item_progress)) if item_progress else 0
@@ -206,7 +202,6 @@ def _job_status_dict(
         job,
         channels,
         now,
-        generation_concurrency=generation_concurrency,
     )
     return {
         "id": job.id,
@@ -231,7 +226,6 @@ def job_dict(
     queue_position: int | None = None,
     queue_total: int = 0,
     admin: bool = False,
-    generation_concurrency: int | None = None,
 ) -> dict[str, Any]:
     now = utcnow()
     item_results = [item_dict(item, now=now, admin=admin) for item in job.items]
@@ -242,7 +236,6 @@ def job_dict(
         now=now,
         queue_position=queue_position,
         queue_total=queue_total,
-        generation_concurrency=generation_concurrency,
     )
     succeeded = sum(item.status == "succeeded" for item in job.items)
     failed = sum(item.status in {"failed", "interrupted"} for item in job.items)
@@ -410,8 +403,6 @@ def _job_estimated_end(
     job: GenerationJob,
     channels: ChannelRegistry,
     now: datetime,
-    *,
-    generation_concurrency: int | None = None,
 ) -> datetime | None:
     if job.status not in {"running", "canceling", "reconnecting"} or not job.started_at:
         return None
@@ -424,11 +415,6 @@ def _job_estimated_end(
     ]
     base = max(active_ends, default=now)
     queued = sum(item.status == "queued" for item in job.items)
-    concurrency = (
-        generation_concurrency
-        if generation_concurrency is not None
-        else job.user.generation_concurrency
-    )
     routing = job.workflow.get("channel_routing") if isinstance(job.workflow, dict) else None
     candidate_ids = (
         {
@@ -458,7 +444,7 @@ def _job_estimated_end(
             channel for channel in channels.list(include_disabled=False) if channel.configured
         ]
     provider_slots = sum(channel.limits.max_concurrency for channel in routed_channels)
-    slots = max(1, min(provider_slots or 1, concurrency))
+    slots = max(1, provider_slots or 1)
     waves = math.ceil(queued / slots)
     return base + timedelta(seconds=waves * typical)
 

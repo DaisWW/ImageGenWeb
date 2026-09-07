@@ -37,21 +37,11 @@ def admin_create_user():
     data = json_body()
     application_services = services()
     try:
-        concurrency = int(
-            data.get(
-                "generation_concurrency",
-                application_services.settings.runtime().default_user_concurrency,
-            )
-        )
-    except (TypeError, ValueError) as exc:
-        raise ServiceError("用户并发必须是整数") from exc
-    try:
         user = application_services.users.create(
             username=str(data.get("username", "")),
             display_name=str(data.get("display_name", "")),
             password=str(data.get("password", "")),
             balance_rmb=data.get("balance_rmb", "0"),
-            generation_concurrency=concurrency,
             actor_user_id=current_user.id,
             commit=False,
         )
@@ -67,14 +57,9 @@ def admin_create_user():
 @admin_required
 def admin_update_user(user_id: int):
     data = json_body()
-    try:
-        concurrency = int(data.get("generation_concurrency", 0))
-    except (TypeError, ValueError) as exc:
-        raise ServiceError("用户并发必须是整数") from exc
     user = services().users.update_profile(
         user_id,
         display_name=str(data.get("display_name", "")),
-        generation_concurrency=concurrency,
         actor_user_id=current_user.id,
     )
     return jsonify(user=user_dict(user))

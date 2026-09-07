@@ -143,19 +143,13 @@ class Channel:
 
 @dataclass(frozen=True)
 class QueueLimits:
-    global_concurrency: int = 4
     max_channel_attempts: int = 2
-    max_queued_per_user: int = 20
-    max_queued_global: int = 100
     history_retention_days: int = 30
     stale_running_minutes: int = 20
 
     def as_dict(self) -> dict[str, int]:
         return {
-            "global_concurrency": self.global_concurrency,
             "max_channel_attempts": self.max_channel_attempts,
-            "max_queued_per_user": self.max_queued_per_user,
-            "max_queued_global": self.max_queued_global,
             "history_retention_days": self.history_retention_days,
             "stale_running_minutes": self.stale_running_minutes,
         }
@@ -245,15 +239,10 @@ class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
         if not isinstance(raw, dict):
             raise ValueError("queue 配置必须是对象")
         queue = QueueLimits(
-            global_concurrency=bounded_int(raw, "global_concurrency", 4, 1, 64),
             max_channel_attempts=bounded_int(raw, "max_channel_attempts", 2, 1, 10),
-            max_queued_per_user=bounded_int(raw, "max_queued_per_user", 20, 1, 500),
-            max_queued_global=bounded_int(raw, "max_queued_global", 100, 1, 5000),
             history_retention_days=bounded_int(raw, "history_retention_days", 30, 1, 3650),
             stale_running_minutes=bounded_int(raw, "stale_running_minutes", 20, 5, 1440),
         )
-        if queue.max_queued_global < queue.max_queued_per_user:
-            raise ValueError("全局排队上限不能小于单用户排队上限")
         return queue
 
     def _parse_channel(self, raw: Any) -> Channel:

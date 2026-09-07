@@ -23,7 +23,6 @@ class UserService:
         password: str,
         display_name: str = "",
         balance_rmb: Decimal | str = Decimal("0"),
-        generation_concurrency: int = 2,
         role: str = "user",
         actor_user_id: int | None = None,
         commit: bool = True,
@@ -35,8 +34,6 @@ class UserService:
             raise ServiceError("用户名不能包含空白或控制字符")
         if role not in {"admin", "user"}:
             raise ServiceError("用户角色无效")
-        if not 1 <= generation_concurrency <= 16:
-            raise ServiceError("用户并发必须在 1 到 16 之间")
         if db.session.scalar(select(User.id).where(func.lower(User.username) == username.lower())):
             raise ServiceError("用户名已存在", code="username_exists", status_code=409)
         initial_balance = money(balance_rmb)
@@ -50,7 +47,6 @@ class UserService:
             status="active",
             balance_rmb=initial_balance,
             reserved_rmb=money(0),
-            generation_concurrency=generation_concurrency,
         )
         self.auth.set_password(user, password)
         db.session.add(user)
@@ -109,20 +105,15 @@ class UserService:
         user_id: int,
         *,
         display_name: str,
-        generation_concurrency: int,
         actor_user_id: int,
     ) -> User:
-        if not 1 <= generation_concurrency <= 16:
-            raise ServiceError("用户并发必须在 1 到 16 之间")
         user = db.session.get(User, user_id)
         if user is None:
             raise ServiceError("用户不存在", status_code=404)
         old = {
             "display_name": user.display_name,
-            "generation_concurrency": user.generation_concurrency,
         }
         user.display_name = display_name.strip()[:100]
-        user.generation_concurrency = generation_concurrency
         db.session.add(
             AuditLog(
                 actor_user_id=actor_user_id,
@@ -133,7 +124,6 @@ class UserService:
                     "old": old,
                     "new": {
                         "display_name": user.display_name,
-                        "generation_concurrency": user.generation_concurrency,
                     },
                 },
             )

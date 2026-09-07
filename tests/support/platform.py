@@ -76,9 +76,7 @@ def png_bytes_with_dimensions(width: int, height: int) -> bytes:
 CHANNEL_CONFIG = """\
 version: 1
 queue:
-  global_concurrency: 4
-  max_queued_per_user: 20
-  max_queued_global: 100
+  max_channel_attempts: 2
   history_retention_days: 30
   stale_running_minutes: 20
 channels:

@@ -1,12 +1,8 @@
 version: 1
 
 queue:
-  # 生产并发：刀哥的 2 + Lucen 4；仍受单用户并发限制。
-  global_concurrency: 6
   # 兼容自动调度请求的同一张图片最多尝试两个不同渠道。
   max_channel_attempts: 2
-  max_queued_per_user: 20
-  max_queued_global: 100
   history_retention_days: 30
   stale_running_minutes: 20
 

@@ -456,7 +456,7 @@ class TestWorker(PlatformTestCase):
         self.assertEqual(replacement_attempt.status, "running")
         self.assertEqual(replacement_attempt.claimed_by, worker.worker_id)
 
-    def test_worker_keeps_excess_images_queued_at_user_and_channel_limits(self):
+    def test_worker_keeps_excess_images_queued_at_channel_limit(self):
         workspace = self.create_workspace()
         job = self.submit(workspace, batch_count=4)
         worker = self.create_worker()
@@ -464,14 +464,6 @@ class TestWorker(PlatformTestCase):
         self.assertIs(worker.generations, self.services.generations)
         worker._thread_pool = HoldingExecutor()
 
-        worker._schedule_available()
-        db.session.expire_all()
-        statuses = [item.status for item in db.session.get(GenerationJob, job.id).items]
-        self.assertEqual(statuses.count("running"), 2)
-        self.assertEqual(statuses.count("queued"), 2)
-
-        db.session.get(User, self.user.id).generation_concurrency = 4
-        db.session.commit()
         worker._schedule_available()
         db.session.expire_all()
         statuses = [item.status for item in db.session.get(GenerationJob, job.id).items]

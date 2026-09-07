@@ -42,14 +42,12 @@ class User(UserMixin, TimestampMixin, db.Model):
     status: Mapped[str] = mapped_column(db.String(20), default="active", index=True)
     balance_rmb: Mapped[Decimal] = mapped_column(MONEY_TYPE, default=Decimal("0"))
     reserved_rmb: Mapped[Decimal] = mapped_column(MONEY_TYPE, default=Decimal("0"))
-    generation_concurrency: Mapped[int] = mapped_column(default=2)
     password_version: Mapped[int] = mapped_column(default=1)
     last_login_at: Mapped[datetime | None]
 
     __table_args__ = (
         CheckConstraint("balance_rmb >= 0", name="ck_users_balance_non_negative"),
         CheckConstraint("reserved_rmb >= 0", name="ck_users_reserved_non_negative"),
-        CheckConstraint("generation_concurrency BETWEEN 1 AND 16", name="ck_users_concurrency"),
         Index("uq_users_username_lower", func.lower(username), unique=True),
     )
 
@@ -212,13 +210,6 @@ class GenerationJob(TimestampMixin, db.Model):
     __table_args__ = (
         Index("ix_generation_jobs_workspace_created", "workspace_id", "created_at"),
         Index("ix_generation_jobs_user_status", "user_id", "status"),
-        Index(
-            "uq_generation_jobs_workspace_active",
-            "workspace_id",
-            unique=True,
-            sqlite_where=text("status IN ('queued', 'running', 'canceling', 'reconnecting')"),
-            postgresql_where=text("status IN ('queued', 'running', 'canceling', 'reconnecting')"),
-        ),
     )
 
     id: Mapped[str] = mapped_column(db.String(32), primary_key=True, default=new_public_id)
@@ -544,13 +535,6 @@ class SystemState(db.Model):
 
     key: Mapped[str] = mapped_column(db.String(100), primary_key=True)
     value: Mapped[str] = mapped_column(db.Text, default="")
-    updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow, nullable=False)
-
-
-class GenerationQueueState(db.Model):
-    __tablename__ = "generation_queue_state"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
     updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow, nullable=False)
 
 

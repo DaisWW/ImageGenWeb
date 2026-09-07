@@ -4,7 +4,7 @@ import os
 import threading
 from datetime import timedelta
 from decimal import Decimal
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from sqlalchemy import event, func, insert, select
 
@@ -30,10 +30,7 @@ from tests.support.platform import (
 MULTI_CHANNEL_CONFIG = """\
 version: 1
 queue:
-  global_concurrency: 6
   max_channel_attempts: 2
-  max_queued_per_user: 20
-  max_queued_global: 100
   history_retention_days: 30
   stale_running_minutes: 20
 channels:
@@ -191,8 +188,6 @@ class TestChannelRouting(PlatformTestCase):
     def test_selected_channel_capacity_does_not_fall_back_to_another_channel(self):
         workspace = self.create_workspace()
         job = self.submit(workspace, channel_id="current", batch_count=4)
-        db.session.get(User, self.user.id).generation_concurrency = 4
-        db.session.commit()
 
         worker = self.create_worker()
         worker._thread_pool = HoldingExecutor()
@@ -204,11 +199,71 @@ class TestChannelRouting(PlatformTestCase):
         self.assertEqual(sum(item.status == "queued" for item in saved.items), 2)
         self.assertEqual({item.channel_id for item in saved.items}, {"current"})
 
+    def test_worker_scans_past_a_saturated_channel_page(self):
+        current_job = self.submit(
+            self.create_workspace("刀哥队列"),
+            channel_id="current",
+            batch_count=3,
+        )
+        lucen_job = self.submit(
+            self.create_workspace("Lucen 队列"),
+            channel_id="lucen",
+        )
+        worker = self.create_worker()
+        worker._thread_pool = HoldingExecutor()
+
+        with patch("imagegen.worker.SCHEDULING_PAGE_SIZE", 2):
+            worker._schedule_available()
+
+        db.session.expire_all()
+        current_items = db.session.get(GenerationJob, current_job.id).items
+        lucen_item = db.session.get(GenerationJob, lucen_job.id).items[0]
+        self.assertEqual(sum(item.status == "running" for item in current_items), 2)
+        self.assertEqual(sum(item.status == "queued" for item in current_items), 1)
+        self.assertEqual(lucen_item.status, "running")
+
+    def test_worker_fails_auto_item_when_all_channels_become_unavailable(self):
+        workspace = self.create_workspace("渠道失效队列")
+        job = self.submit(workspace, channel_id="", batch_count=1)
+        self.channel_path.write_text(
+            MULTI_CHANNEL_CONFIG.replace("enabled: true", "enabled: false"),
+            encoding="utf-8",
+        )
+        self.app.extensions["channel_registry"].reload(force=True)
+
+        worker = self.create_worker()
+        worker._schedule_available()
+
+        db.session.expire_all()
+        item = db.session.get(GenerationItem, job.items[0].id)
+        saved_job = db.session.get(GenerationJob, job.id)
+        user = db.session.get(User, self.user.id)
+        self.assertEqual(item.status, "failed")
+        self.assertEqual(item.error_code, "channel_unavailable")
+        self.assertEqual(saved_job.status, "failed")
+        self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
+
+    def test_worker_executor_capacity_covers_all_configured_channels(self):
+        self.channel_path.write_text(
+            MULTI_CHANNEL_CONFIG.replace("max_concurrency: 2", "max_concurrency: 64").replace(
+                "max_concurrency: 4", "max_concurrency: 64"
+            ),
+            encoding="utf-8",
+        )
+        self.app.extensions["channel_registry"].reload(force=True)
+        worker = self.create_worker()
+
+        executor = worker._executor()
+        try:
+            expected = 128 + int(self.app.config["BACKGROUND_REMOVAL_CONCURRENCY"])
+            self.assertEqual(worker._thread_pool_capacity, expected)
+            self.assertGreater(worker._thread_pool_capacity, 64)
+        finally:
+            executor.shutdown(wait=True)
+
     def test_worker_fills_priority_channel_then_falls_back_to_lucen(self):
         workspace = self.create_workspace()
         job = self.submit(workspace, channel_id="", batch_count=4)
-        db.session.get(User, self.user.id).generation_concurrency = 4
-        db.session.commit()
 
         worker = self.create_worker()
         worker._thread_pool = HoldingExecutor()
@@ -228,8 +283,6 @@ class TestChannelRouting(PlatformTestCase):
     def test_large_single_user_batch_fills_all_channel_slots(self):
         workspace = self.create_workspace()
         job = self.submit(workspace, channel_id="", batch_count=8)
-        db.session.get(User, self.user.id).generation_concurrency = 6
-        db.session.commit()
 
         worker = self.create_worker()
         worker._thread_pool = HoldingExecutor()
@@ -244,7 +297,7 @@ class TestChannelRouting(PlatformTestCase):
         )
         self.assertEqual(sum(item.status == "queued" for item in saved.items), 2)
 
-    def test_user_concurrency_still_applies_across_all_channels(self):
+    def test_single_user_batch_fills_all_channel_slots(self):
         workspace = self.create_workspace()
         job = self.submit(workspace, channel_id="", batch_count=4)
         worker = self.create_worker()
@@ -253,7 +306,8 @@ class TestChannelRouting(PlatformTestCase):
 
         db.session.expire_all()
         saved = db.session.get(GenerationJob, job.id)
-        self.assertEqual(sum(item.status == "running" for item in saved.items), 2)
+        self.assertEqual(sum(item.status == "running" for item in saved.items), 4)
+        self.assertEqual(sum(item.status == "queued" for item in saved.items), 0)
 
     def test_success_log_and_charge_use_actual_routed_channel(self):
         workspace = self.create_workspace()
@@ -1013,8 +1067,6 @@ class TestChannelRouting(PlatformTestCase):
     def test_admin_generation_payload_lists_each_routed_channel(self):
         workspace = self.create_workspace()
         job = self.submit(workspace, channel_id="", batch_count=4)
-        db.session.get(User, self.user.id).generation_concurrency = 4
-        db.session.commit()
 
         worker = self.create_worker()
         worker._thread_pool = HoldingExecutor()

@@ -34,14 +34,24 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
-        context.configure(
-            connection=connection,
-            target_metadata=target_metadata,
-            compare_type=True,
-            render_as_batch=connection.dialect.name == "sqlite",
-        )
-        with context.begin_transaction():
-            context.run_migrations()
+        sqlite_foreign_keys_disabled = connection.dialect.name == "sqlite"
+        raw_connection = connection.connection
+        if sqlite_foreign_keys_disabled:
+            # SQLite rebuilds referenced tables for some schema changes. Keep
+            # foreign-key checks disabled for the migration transaction only.
+            raw_connection.execute("PRAGMA foreign_keys=OFF")
+        try:
+            context.configure(
+                connection=connection,
+                target_metadata=target_metadata,
+                compare_type=True,
+                render_as_batch=connection.dialect.name == "sqlite",
+            )
+            with context.begin_transaction():
+                context.run_migrations()
+        finally:
+            if sqlite_foreign_keys_disabled:
+                raw_connection.execute("PRAGMA foreign_keys=ON")
 
 
 if context.is_offline_mode():

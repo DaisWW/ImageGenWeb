@@ -248,32 +248,27 @@ class TestAdminAndMaintenance(PlatformTestCase):
         self.assertEqual(second.json["code"], "config_conflict")
         self.assertEqual(self.services.settings.site_title(), "第一位管理员的标题")
 
-    def test_admin_can_edit_existing_user_display_name_and_concurrency(self):
+    def test_admin_can_edit_existing_user_display_name(self):
         client = self.admin_client()
 
         response = client.put(
             f"/api/admin/users/{self.user.id}",
-            json={"display_name": "视觉设计", "generation_concurrency": 7},
+            json={"display_name": "视觉设计"},
         )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["user"]["display_name"], "视觉设计")
-        self.assertEqual(response.json["user"]["generation_concurrency"], 7)
+        self.assertNotIn("generation_concurrency", response.json["user"])
         db.session.refresh(self.user)
-        self.assertEqual(self.user.generation_concurrency, 7)
+        self.assertEqual(self.user.display_name, "视觉设计")
         audit = db.session.scalar(select(AuditLog).where(AuditLog.action == "user.profile.update"))
-        self.assertEqual(audit.details["new"]["generation_concurrency"], 7)
+        self.assertEqual(audit.details["new"], {"display_name": "视觉设计"})
 
-        invalid = client.put(
-            f"/api/admin/users/{self.user.id}",
-            json={"display_name": "视觉设计", "generation_concurrency": 17},
-        )
-        self.assertEqual(invalid.status_code, 400)
         self.context.pop()
         try:
             forbidden = self.user_client().put(
                 f"/api/admin/users/{self.user.id}",
-                json={"display_name": "无权限", "generation_concurrency": 1},
+                json={"display_name": "无权限"},
             )
             self.assertEqual(forbidden.status_code, 403)
         finally:
@@ -331,12 +326,12 @@ class TestAdminAndMaintenance(PlatformTestCase):
     def test_invalid_admin_channel_config_returns_bad_request(self):
         client = self.admin_client()
         config = client.get("/api/admin/channels").json["config"]
-        config["queue"]["global_concurrency"] = 0
+        config["channels"][0]["limits"]["max_concurrency"] = 0
 
         response = client.put("/api/admin/channels", json=config)
 
         self.assertEqual(response.status_code, 400)
-        self.assertIn("global_concurrency", response.json["error"])
+        self.assertIn("max_concurrency", response.json["error"])
 
     def test_admin_chat_config_replaces_key_without_exposing_it(self):
         client = self.admin_client()

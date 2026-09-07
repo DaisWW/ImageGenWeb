@@ -3,8 +3,7 @@ from __future__ import annotations
 from datetime import timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import func, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from ...config.channels import (
@@ -21,7 +20,6 @@ from ...models import (
     GenerationAttempt,
     GenerationItem,
     GenerationJob,
-    GenerationQueueState,
     GenerationReference,
     User,
     Workspace,
@@ -79,9 +77,6 @@ class GenerationService:
         )
         if locked_workspace_id is None:
             raise ServiceError("工作站不存在", status_code=404)
-        self._ensure_workspace_generation_idle(workspace.id)
-        self._ensure_queue_capacity(user_id, requested_count)
-
         # Reserve the most expensive eligible provider up front.  A routed
         # item later records its concrete provider price and settlement charges
         # that amount while releasing the full per-item reservation.
@@ -122,11 +117,7 @@ class GenerationService:
             status="queued",
         )
         db.session.add(job)
-        try:
-            db.session.flush()
-        except IntegrityError as exc:
-            db.session.rollback()
-            raise self._workspace_active_error() from exc
+        db.session.flush()
         for position, asset in enumerate(references):
             db.session.add(
                 GenerationReference(
@@ -404,47 +395,6 @@ class GenerationService:
     def estimate_seconds(self, job: GenerationJob, channel: Channel) -> Decimal:
         return self.duration_estimator.estimate_seconds(job, channel)
 
-    def _ensure_workspace_generation_idle(self, workspace_id: str) -> None:
-        active_job = db.session.scalar(
-            select(GenerationJob.id)
-            .where(
-                GenerationJob.workspace_id == workspace_id,
-                GenerationJob.status.in_(["queued", "running", "canceling", "reconnecting"]),
-            )
-            .limit(1)
-        )
-        if active_job:
-            raise self._workspace_active_error()
-
-    def _ensure_queue_capacity(self, user_id: int, requested_count: int) -> None:
-        lock_result = db.session.execute(
-            update(GenerationQueueState)
-            .where(GenerationQueueState.id == 1)
-            .values(updated_at=utcnow())
-        )
-        if lock_result.rowcount != 1:
-            raise RuntimeError("生成队列状态未初始化")
-        user_queued = (
-            db.session.scalar(
-                select(func.count(GenerationItem.id)).where(
-                    GenerationItem.user_id == user_id,
-                    GenerationItem.status == "queued",
-                )
-            )
-            or 0
-        )
-        global_queued = (
-            db.session.scalar(
-                select(func.count(GenerationItem.id)).where(GenerationItem.status == "queued")
-            )
-            or 0
-        )
-        queue = self.channels.queue
-        if user_queued + requested_count > queue.max_queued_per_user:
-            raise ServiceError("当前账户排队图片已达到上限", code="queue_full", status_code=429)
-        if global_queued + requested_count > queue.max_queued_global:
-            raise ServiceError("系统排队图片已达到上限", code="queue_full", status_code=429)
-
     def _lock_job_and_owner(
         self,
         job_id: str,
@@ -473,14 +423,6 @@ class GenerationService:
         if job is None:
             raise ServiceError("生成任务不存在", status_code=404)
         return user, job
-
-    @staticmethod
-    def _workspace_active_error() -> ServiceError:
-        return ServiceError(
-            "当前工作站已有生成任务，请等待完成或先取消",
-            code="workspace_generation_active",
-            status_code=409,
-        )
 
     @staticmethod
     def refresh_job_status(job: GenerationJob) -> None:

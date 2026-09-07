@@ -14,6 +14,69 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class TestMigrationCompatibility(unittest.TestCase):
+    def test_generation_limits_are_removed_and_restored(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "generation-limits.sqlite"
+            database_url = f"sqlite:///{database_path.as_posix()}"
+            config = Config(str(PROJECT_ROOT / "alembic.ini"))
+            config.set_main_option("script_location", str(PROJECT_ROOT / "migrations"))
+            config.set_main_option("sqlalchemy.url", database_url)
+
+            with patch.dict(os.environ, {"DATABASE_URL": database_url}):
+                command.upgrade(config, "b7c8d9e0f1a2")
+                command.upgrade(config, "head")
+
+            engine = create_engine(database_url)
+            inspector = inspect(engine)
+            try:
+                self.assertNotIn(
+                    "generation_concurrency",
+                    {column["name"] for column in inspector.get_columns("users")},
+                )
+                self.assertNotIn("generation_queue_state", inspector.get_table_names())
+                self.assertNotIn(
+                    "uq_generation_jobs_workspace_active",
+                    {index["name"] for index in inspector.get_indexes("generation_jobs")},
+                )
+            finally:
+                engine.dispose()
+
+            with patch.dict(os.environ, {"DATABASE_URL": database_url}):
+                command.downgrade(config, "b7c8d9e0f1a2")
+
+            engine = create_engine(database_url)
+            inspector = inspect(engine)
+            try:
+                self.assertIn(
+                    "generation_concurrency",
+                    {column["name"] for column in inspector.get_columns("users")},
+                )
+                self.assertIn("generation_queue_state", inspector.get_table_names())
+                self.assertIn(
+                    "uq_generation_jobs_workspace_active",
+                    {index["name"] for index in inspector.get_indexes("generation_jobs")},
+                )
+            finally:
+                engine.dispose()
+
+            with patch.dict(os.environ, {"DATABASE_URL": database_url}):
+                command.upgrade(config, "head")
+
+            engine = create_engine(database_url)
+            inspector = inspect(engine)
+            try:
+                self.assertNotIn(
+                    "generation_concurrency",
+                    {column["name"] for column in inspector.get_columns("users")},
+                )
+                self.assertNotIn("generation_queue_state", inspector.get_table_names())
+                self.assertNotIn(
+                    "uq_generation_jobs_workspace_active",
+                    {index["name"] for index in inspector.get_indexes("generation_jobs")},
+                )
+            finally:
+                engine.dispose()
+
     def test_legacy_generation_merge_is_repaired(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             database_path = Path(temporary_directory) / "legacy.sqlite"

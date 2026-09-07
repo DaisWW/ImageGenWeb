@@ -261,7 +261,6 @@
           <td class="money-cell">${UI.money(user.balance_rmb)}</td>
           <td class="spending-cell"><strong>${UI.money(user.spending?.total_rmb)}</strong><small>今日 ${UI.money(user.spending?.today_rmb)}</small></td>
           <td>${UI.money(user.reserved_rmb)}</td>
-          <td>${user.generation_concurrency}</td>
           <td>${UI.dateTime(user.last_login_at)}</td>
           <td class="actions-cell"><div class="row-actions">
             <button class="icon-button" type="button" data-edit-user="${user.id}" title="编辑用户" aria-label="编辑用户"><i data-lucide="pencil"></i></button>
@@ -295,7 +294,6 @@
         this.el.editUserDialogTitle.textContent = `编辑 ${user.display_name || user.username}`;
         this.el.editUserForm.elements.user_id.value = user.id;
         this.el.editUserForm.elements.display_name.value = user.display_name || "";
-        this.el.editUserForm.elements.generation_concurrency.value = user.generation_concurrency;
         UI.openDialog(this.el.editUserDialog);
         return;
       }
@@ -338,8 +336,6 @@
 
     openCreateUserDialog() {
       this.el.userForm.reset();
-      this.el.userForm.elements.generation_concurrency.value =
-        this.systemConfig?.runtime?.default_user_concurrency ?? 2;
       UI.openDialog(this.el.userDialog);
     }
 
@@ -349,7 +345,6 @@
       submit.disabled = true;
       try {
         const form = Object.fromEntries(new FormData(this.el.userForm));
-        form.generation_concurrency = Number(form.generation_concurrency);
         await UI.api("/api/admin/users", { method: "POST", body: form });
         this.el.userForm.reset();
         UI.closeDialog(this.el.userDialog);
@@ -372,7 +367,6 @@
           method: "PUT",
           body: {
             display_name: form.display_name,
-            generation_concurrency: Number(form.generation_concurrency),
           },
         });
         UI.closeDialog(this.el.editUserDialog);
@@ -751,7 +745,7 @@
       const config = this.channelConfig;
       if (!config) return;
       const origin = config.managed ? "数据库管理" : "启动默认";
-      this.el.configVersion.textContent = `${origin} · 版本 ${config.version} · 全局并发 ${config.queue.global_concurrency}`;
+      this.el.configVersion.textContent = `${origin} · 版本 ${config.version}`;
       this.el.configError.hidden = !config.last_error;
       this.el.configError.textContent = config.last_error || "";
       this.el.channelTableBody.innerHTML = config.channels.map((channel) => `
@@ -1268,10 +1262,6 @@
         if (input.type === "checkbox") input.checked = value === true;
         else input.value = value;
       });
-      if (!this.el.userDialog.open) {
-        this.el.userForm.elements.generation_concurrency.value =
-          data.runtime?.default_user_concurrency ?? 2;
-      }
     }
 
     async loadSettings(notify = true) {

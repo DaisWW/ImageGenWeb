@@ -159,10 +159,7 @@ class RuntimeConfigService:
         return {
             "version": 1,
             "queue": {
-                "global_concurrency": queue.get("global_concurrency"),
                 "max_channel_attempts": queue.get("max_channel_attempts"),
-                "max_queued_per_user": queue.get("max_queued_per_user"),
-                "max_queued_global": queue.get("max_queued_global"),
                 "history_retention_days": queue.get("history_retention_days"),
                 "stale_running_minutes": queue.get("stale_running_minutes"),
             },

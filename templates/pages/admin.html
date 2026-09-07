@@ -26,7 +26,7 @@
       <span><small>今日消费</small><strong id="companyTodaySpending">¥0.00</strong></span>
       <span><small>累计消费</small><strong id="companyTotalSpending">¥0.00</strong></span>
     </div>
-    <div class="table-wrap"><table><thead><tr><th>用户</th><th>状态</th><th>余额</th><th>消费</th><th>预占</th><th>并发</th><th>最近登录</th><th class="actions-cell">操作</th></tr></thead><tbody id="userTableBody"></tbody></table></div>
+    <div class="table-wrap"><table><thead><tr><th>用户</th><th>状态</th><th>余额</th><th>消费</th><th>预占</th><th>最近登录</th><th class="actions-cell">操作</th></tr></thead><tbody id="userTableBody"></tbody></table></div>
   </section>
 
   <section class="admin-view" data-view="generations">
@@ -131,7 +131,6 @@
       <fieldset class="settings-group">
         <legend>用户与工作站</legend>
         <div class="form-grid three-columns">
-          <label class="field"><span>新用户默认并发</span><input type="number" name="default_user_concurrency" min="1" max="16" required></label>
           <label class="field"><span>每用户工作站</span><input type="number" name="max_workspaces_per_user" min="2" max="100" required></label>
           <label class="field"><span>每工作站素材</span><input type="number" name="max_assets_per_workspace" min="1" max="32" required></label>
         </div>
@@ -144,11 +143,7 @@
           <label class="field"><span>单消息附件数</span><input type="number" name="max_chat_attachments" min="1" max="32" required></label>
           <label class="field"><span>单张附件 MiB</span><input type="number" name="max_attachment_mb" min="1" max="40" required></label>
           <label class="field"><span>附件合计 MiB</span><input type="number" name="max_attachment_total_mb" min="1" max="40" required></label>
-          <label class="field"><span>全局对话并发</span><input type="number" name="max_concurrent_chats" min="1" max="64" required></label>
-          <label class="field"><span>单用户对话并发</span><input type="number" name="max_concurrent_chats_per_user" min="1" max="16" required></label>
           <label class="field"><span>对话故障尝试数</span><input type="number" name="chat_failover_attempts" min="1" max="5" required></label>
-          <label class="field"><span>全局预览连接</span><input type="number" name="max_preview_streams" min="1" max="32" required></label>
-          <label class="field"><span>单用户预览连接</span><input type="number" name="max_preview_streams_per_user" min="1" max="8" required></label>
           <label class="field"><span>预览预约秒数</span><input type="number" name="preview_reservation_seconds" min="5" max="60" required></label>
         </div>
       </fieldset>
@@ -239,10 +234,7 @@
   <form class="modal-form" id="queueForm">
     <div class="modal-header"><div><span class="eyebrow">Queue</span><h2>队列设置</h2></div><button class="icon-button" type="button" data-close-dialog="queueDialog" aria-label="关闭"><i data-lucide="x"></i></button></div>
     <div class="form-grid two-columns">
-      <label class="field"><span>全局并发</span><input type="number" name="global_concurrency" min="1" max="64" required></label>
       <label class="field"><span>单图最多渠道尝试</span><input type="number" name="max_channel_attempts" min="1" max="10" required></label>
-      <label class="field"><span>单用户排队上限</span><input type="number" name="max_queued_per_user" min="1" max="500" required></label>
-      <label class="field"><span>全局排队上限</span><input type="number" name="max_queued_global" min="1" max="5000" required></label>
       <label class="field"><span>记录保留天数</span><input type="number" name="history_retention_days" min="1" max="3650" required></label>
       <label class="field"><span>异常任务分钟数</span><input type="number" name="stale_running_minutes" min="5" max="1440" required></label>
     </div>
@@ -329,7 +321,6 @@
       <label class="field"><span>显示名称</span><input name="display_name" maxlength="100"></label>
       <label class="field"><span>初始密码</span><input type="password" name="password" minlength="6" required></label>
       <label class="field"><span>初始余额（RMB）</span><input type="number" name="balance_rmb" min="0" step="0.0001" value="0"></label>
-      <label class="field"><span>用户并发</span><input type="number" name="generation_concurrency" min="1" max="16" value="2"></label>
     </div>
     <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="userDialog">取消</button><button class="button primary" type="submit"><i data-lucide="user-plus"></i>创建</button></div>
   </form>
@@ -340,7 +331,6 @@
     <div class="modal-header"><div><span class="eyebrow">Account</span><h2 id="editUserDialogTitle">编辑用户</h2></div><button class="icon-button" type="button" data-close-dialog="editUserDialog" aria-label="关闭"><i data-lucide="x"></i></button></div>
     <input type="hidden" name="user_id">
     <label class="field"><span>显示名称</span><input name="display_name" maxlength="100"></label>
-    <label class="field"><span>生成并发</span><input type="number" name="generation_concurrency" min="1" max="16" required></label>
     <div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="editUserDialog">取消</button><button class="button primary" type="submit"><i data-lucide="save"></i>保存用户</button></div>
   </form>
 </dialog>

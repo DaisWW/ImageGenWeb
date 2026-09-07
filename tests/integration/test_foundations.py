@@ -19,7 +19,6 @@ from imagegen.integrations.images import (
 )
 from imagegen.models import (
     GenerationItem,
-    GenerationQueueState,
     User,
     WorkerState,
     Workspace,
@@ -75,7 +74,6 @@ class TestFoundations(PlatformTestCase):
         )
 
     def test_internal_state_rows_are_bootstrapped(self):
-        self.assertIsNotNone(db.session.get(GenerationQueueState, 1))
         self.assertIsNotNone(db.session.get(WorkerState, 1))
 
     def test_database_rejects_case_insensitive_duplicate_usernames(self):
@@ -87,7 +85,6 @@ class TestFoundations(PlatformTestCase):
             status="active",
             balance_rmb=Decimal("0"),
             reserved_rmb=Decimal("0"),
-            generation_concurrency=2,
             password_version=1,
         )
         db.session.add(duplicate)
@@ -96,16 +93,9 @@ class TestFoundations(PlatformTestCase):
             db.session.commit()
         db.session.rollback()
 
-    def test_postgresql_global_queue_admission_is_atomic(self):
+    def test_postgresql_queue_admission_accepts_concurrent_submissions(self):
         if db.engine.dialect.name != "postgresql":
             self.skipTest("PostgreSQL row-lock regression")
-        self.channel_path.write_text(
-            CHANNEL_CONFIG.replace("max_queued_per_user: 20", "max_queued_per_user: 1").replace(
-                "max_queued_global: 100", "max_queued_global: 1"
-            ),
-            encoding="utf-8",
-        )
-        self.assertTrue(self.app.extensions["channel_registry"].reload(force=True))
         second_user = self.services.users.create(
             username="second-artist",
             password="StrongPass123!",
@@ -153,12 +143,12 @@ class TestFoundations(PlatformTestCase):
             thread.join(15)
 
         self.assertTrue(all(not thread.is_alive() for thread in threads))
-        self.assertCountEqual(outcomes, ["accepted", "queue_full"])
+        self.assertCountEqual(outcomes, ["accepted", "accepted"])
         self.assertEqual(
             db.session.scalar(
                 select(func.count(GenerationItem.id)).where(GenerationItem.status == "queued")
             ),
-            1,
+            2,
         )
 
     def test_postgresql_workspace_delete_serializes_with_submission(self):
@@ -168,17 +158,17 @@ class TestFoundations(PlatformTestCase):
         workspace_id = workspace.id
         user_id = self.user.id
         generation_service = self.services.generations
-        original_capacity_check = generation_service._ensure_queue_capacity
+        original_reserve = generation_service.billing.reserve
         submission_locked = threading.Event()
         continue_submission = threading.Event()
         delete_started = threading.Event()
         errors = []
 
-        def blocking_capacity_check(locked_user_id, requested_count):
+        def blocking_reserve(user, amount):
             submission_locked.set()
             if not continue_submission.wait(10):
                 raise RuntimeError("并发测试等待提交超时")
-            return original_capacity_check(locked_user_id, requested_count)
+            return original_reserve(user, amount)
 
         def submit_in_thread():
             with self.app.app_context():
@@ -212,7 +202,7 @@ class TestFoundations(PlatformTestCase):
                 finally:
                     db.session.remove()
 
-        generation_service._ensure_queue_capacity = blocking_capacity_check
+        generation_service.billing.reserve = blocking_reserve
         try:
             submit_thread = threading.Thread(target=submit_in_thread)
             submit_thread.start()
@@ -224,7 +214,7 @@ class TestFoundations(PlatformTestCase):
             submit_thread.join(15)
             delete_thread.join(15)
         finally:
-            generation_service._ensure_queue_capacity = original_capacity_check
+            generation_service.billing.reserve = original_reserve
             continue_submission.set()
 
         self.assertFalse(submit_thread.is_alive())

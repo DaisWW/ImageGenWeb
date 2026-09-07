@@ -22,7 +22,7 @@ from .container import ApplicationServices
 from .errors import ServiceError
 from .extensions import compress, csrf, db, login_manager
 from .integrations.background_removal import MattingAdapterFactory
-from .models import GenerationQueueState, User, WorkerState
+from .models import User, WorkerState
 from .serializers import display_amount
 from .services import (
     AuthService,
@@ -301,8 +301,6 @@ def _bootstrap_admin(app: Flask, users: UserService, workspaces: WorkspaceServic
 
 
 def _bootstrap_internal_state() -> None:
-    if db.session.get(GenerationQueueState, 1) is None:
-        db.session.add(GenerationQueueState(id=1))
     if db.session.get(WorkerState, 1) is None:
         db.session.add(WorkerState(id=1))
     db.session.commit()
