@@ -226,18 +226,3 @@ class ConversationService:
         label: str,
     ) -> AbstractContextManager[None]:
         return self.operations.workspace_mutation(workspace, label)
-
-    def _workspace_operation(
-        self,
-        workspace: Workspace,
-        kind: str,
-        label: str,
-        *,
-        enforce_chat_capacity: bool = True,
-    ) -> AbstractContextManager[None]:
-        return self.operations.workspace_operation(
-            workspace,
-            kind,
-            label,
-            enforce_chat_capacity=enforce_chat_capacity,
-        )

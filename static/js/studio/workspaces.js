@@ -17,13 +17,29 @@
         this.maxWorkspaces,
         this.workspaceOrderSaving,
         ...this.workspaces.map((workspace) => {
-          const operation = this.chatOperations.get(workspace.id);
+          const operations = this.chatOperationList(workspace.id);
+          const jobs = this.workspaceJobList(workspace.id);
           return [
             workspace.id,
             workspace.name,
             workspace.kind,
-            operation?.kind || "",
-            operation?.stage_label || operation?.label || "",
+            operations
+              .sort((left, right) => this.operationKey(left).localeCompare(this.operationKey(right)))
+              .map((operation) => [
+                this.operationKey(operation),
+                operation.kind,
+                operation.stage,
+                operation.stage_label || operation.label,
+              ]),
+            ...jobs
+              .sort((left, right) => String(left.id).localeCompare(String(right.id)))
+              .map((job) => [
+                job.id,
+                job.status,
+                job.progress_percent,
+                job.queue_position,
+                job.estimated_end_at,
+              ]),
           ];
         }),
       ]);
@@ -34,9 +50,11 @@
       this.workspaceListSignature = signature;
       this.el.workspaceList.replaceChildren(
         ...this.workspaces.map((workspace) => {
-          const operation = this.chatOperations.get(workspace.id);
+          const operations = this.chatOperationList(workspace.id);
+          const hasOperation = operations.length > 0;
+          const jobs = this.workspaceJobList(workspace.id);
           const item = document.createElement("div");
-          item.className = `workspace-item${workspace.id === this.activeWorkspace?.id ? " active" : ""}${operation ? " waiting" : ""}`;
+          item.className = `workspace-item${workspace.id === this.activeWorkspace?.id ? " active" : ""}${hasOperation ? " waiting" : ""}`;
           item.dataset.workspaceId = workspace.id;
           item.dataset.workspaceKind = workspace.kind;
           const drag = document.createElement("button");
@@ -57,7 +75,7 @@
           const icon = document.createElement("span");
           icon.className = "workspace-icon";
           const workspaceIcon = workspace.kind === "image" ? "image" : "box";
-          icon.innerHTML = `<i data-lucide="${operation ? "loader-circle" : workspaceIcon}"></i>`;
+          icon.innerHTML = `<i data-lucide="${hasOperation ? "loader-circle" : workspaceIcon}"></i>`;
           const copy = document.createElement("span");
           copy.className = "workspace-copy";
           const name = document.createElement("strong");
@@ -89,7 +107,9 @@
           remove.type = "button";
           remove.className = "workspace-action danger";
           remove.dataset.deleteWorkspace = workspace.id;
-          remove.disabled = Boolean(operation);
+          remove.disabled = Boolean(
+            hasOperation || jobs.length || this.workspaceHasGenerationSubmission(workspace.id),
+          );
           remove.title = `删除“${workspace.name}”`;
           remove.setAttribute("aria-label", remove.title);
           remove.innerHTML = '<i data-lucide="trash-2"></i>';
@@ -103,7 +123,7 @@
             endLabel,
             remainingLabel,
           });
-          this.updateWorkspaceJobDisplay(item, workspace, operation);
+          this.updateWorkspaceJobDisplay(item, workspace, operations);
           return item;
         }),
       );
@@ -117,36 +137,79 @@
       this.el.workspaceList.querySelectorAll(".workspace-item").forEach((item) => {
         const workspace = workspaces.get(item.dataset.workspaceId);
         if (workspace) {
-          this.updateWorkspaceJobDisplay(item, workspace, this.chatOperations.get(workspace.id));
+          this.updateWorkspaceJobDisplay(item, workspace, this.chatOperationList(workspace.id));
         }
       });
       this.updateChatOperationDisplays();
     },
 
-    updateWorkspaceJobDisplay(item, workspace, operation) {
-      const job = this.workspaceJobs.get(workspace.id);
+    updateWorkspaceJobDisplay(item, workspace, operations = this.chatOperationList(workspace.id)) {
+      const operation = this.workspacePrimaryChatOperation(workspace.id);
+      const chatOperations = operations.filter((item) => (
+        ["reply", "prompt_draft"].includes(item.kind)
+      ));
+      const jobs = this.workspaceJobList(workspace.id);
+      const statusPriority = { running: 0, reconnecting: 1, canceling: 2, queued: 3 };
+      const job = jobs
+        .slice()
+        .sort((left, right) => (
+          (statusPriority[left.status] ?? 99) - (statusPriority[right.status] ?? 99)
+          || String(left.created_at || "").localeCompare(String(right.created_at || ""))
+        ))[0];
       const elements = this.workspaceElementCache.get(item);
       if (!elements) return;
       const { meta, progress, progressFill, timing, endLabel, remainingLabel } = elements;
       ["queued", "running", "reconnecting", "canceling"].forEach((status) => {
-        item.classList.toggle(`job-${status}`, job?.status === status && !operation);
+        item.classList.toggle(`job-${status}`, job?.status === status);
       });
       if (operation) {
-        const operationLabel = this.chatOperationAwaitingMessageAcceptance(operation, workspace.id)
+        const baseLabel = this.chatOperationAwaitingMessageAcceptance(operation, workspace.id)
           ? "正在发送消息"
           : operation.stage_label || operation.label;
+        const operationCountLabel = operations.length > 1
+          ? chatOperations.length === operations.length
+            ? `${chatOperations.length} 个对话请求`
+            : `${operations.length} 个活动请求`
+          : "";
+        const operationLabel = [
+          baseLabel,
+          operationCountLabel,
+          jobs.length ? `${jobs.length} 个生成任务` : "",
+        ].filter(Boolean).join(" · ");
         setHidden(progress, true);
         setHidden(timing, true);
         setText(meta, operationLabel);
         setAttribute(meta, "title", operationLabel);
         return;
       }
-      if (!job) {
+      if (!jobs.length) {
         setHidden(progress, true);
         setHidden(timing, true);
         const typeLabel = workspace.kind === "image" ? "图片" : "工作站";
         setText(meta, typeLabel);
         setAttribute(meta, "title", typeLabel);
+        return;
+      }
+      if (jobs.length > 1) {
+        const statusLabels = {
+          running: "生成中",
+          reconnecting: "重连中",
+          canceling: "取消中",
+          queued: "排队中",
+        };
+        const statusCounts = jobs.reduce((counts, current) => {
+          counts[current.status] = (counts[current.status] || 0) + 1;
+          return counts;
+        }, {});
+        const statusText = Object.entries(statusLabels)
+          .filter(([status]) => statusCounts[status])
+          .map(([status, label]) => `${statusCounts[status]} 个${label}`)
+          .join("，");
+        const jobsLabel = `${jobs.length} 个生成任务${statusText ? ` · ${statusText}` : ""}`;
+        setHidden(progress, true);
+        setHidden(timing, true);
+        setText(meta, jobsLabel);
+        setAttribute(meta, "title", jobsLabel);
         return;
       }
       if (job.status === "queued") {
@@ -359,7 +422,6 @@
       const selection = ++this.workspaceLoadSequence;
       if (this.activeWorkspace) {
         const outgoingWorkspaceId = this.activeWorkspace.id;
-        this.cancelGenerationSubmission?.(outgoingWorkspaceId);
         this.chatDrafts.set(outgoingWorkspaceId, this.el.chatInput.value);
         void this.flushSettings(outgoingWorkspaceId);
       }

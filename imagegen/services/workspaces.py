@@ -99,6 +99,7 @@ class WorkspaceService:
             position=0 if minimum_position is None else minimum_position - 1,
             settings=default_workspace_settings(),
         )
+        workspace.conversation_state = ConversationState(summary="")
         db.session.add(workspace)
         self._commit_name_change()
         return workspace
@@ -137,6 +138,8 @@ class WorkspaceService:
             created_at=text_time,
             updated_at=text_time,
         )
+        reference_workspace.conversation_state = ConversationState(summary="")
+        text_workspace.conversation_state = ConversationState(summary="")
         stored_paths: list[str] = []
         try:
             asset = self._reference_asset(

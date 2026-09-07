@@ -7,6 +7,7 @@ from datetime import datetime
 from threading import Condition, Event, Lock
 from time import monotonic
 from typing import Any, ClassVar
+from uuid import uuid4
 
 from ...errors import ServiceError
 from ...integrations.openai_chat import ChatProgress
@@ -179,31 +180,37 @@ class ConversationOperationRegistry:
         self.settings = settings
         self._operation_lock = Lock()
         self._operation_condition = Condition(self._operation_lock)
-        self._operations: dict[str, ConversationOperation] = {}
-        self._inflight_chats: dict[int, ConversationOperation] = {}
+        self._operations: dict[str, dict[str, ConversationOperation]] = {}
+        self._mutation_workspaces: set[str] = set()
         self._canceled_operations: dict[tuple[str, str], float] = {}
         self._preview_reservations: dict[tuple[str, str], tuple[int, float]] = {}
         self._preview_streams: dict[tuple[str, str], int] = {}
 
     def state(self, workspace_id: str) -> dict[str, Any]:
         with self._operation_lock:
-            operation = self._operations.get(workspace_id)
-        if operation is None:
-            return {
-                "busy": False,
-                "kind": "",
-                "label": "",
-                "stage": "",
-                "stage_label": "",
-                "elapsed_seconds": 0,
-                "first_output_seconds": None,
-                "output_characters": 0,
-                "request_body_bytes": None,
-                "last_event_at": None,
-                "cancel_requested": False,
-                "started_at": None,
-            }
-        return operation.public_dict()
+            operations = list(self._operations.get(workspace_id, {}).values())
+        public_operations = [operation.public_dict() for operation in operations]
+        state = {
+            "busy": bool(public_operations),
+            "operations": public_operations,
+            "kind": "",
+            "label": "",
+            "stage": "",
+            "stage_label": "",
+            "elapsed_seconds": 0,
+            "first_output_seconds": None,
+            "output_characters": 0,
+            "request_body_bytes": None,
+            "last_event_at": None,
+            "cancel_requested": False,
+            "started_at": None,
+            "operation_id": "",
+            "message_id": "",
+        }
+        if public_operations:
+            state.update(public_operations[0])
+            state["operations"] = public_operations
+        return state
 
     def cancel(self, workspace_id: str, operation_id: str) -> bool:
         """Mark one operation canceled; release the workspace when it returns.
@@ -216,11 +223,8 @@ class ConversationOperationRegistry:
             return False
         with self._operation_lock:
             self._prune_canceled_locked()
-            operation = self._operations.get(workspace_id)
-            if operation is not None and operation_id in {
-                operation.operation_id,
-                operation.message_id,
-            }:
+            operation = self._find_operation_locked(workspace_id, operation_id)
+            if operation is not None:
                 operation.cancel_event.set()
                 return True
             self._canceled_operations[(workspace_id, operation_id)] = monotonic()
@@ -232,38 +236,11 @@ class ConversationOperationRegistry:
         key = (workspace_id, operation_id)
         with self._operation_condition:
             self._prune_preview_reservations_locked()
-            operation = self._operations.get(workspace_id)
-            if operation is not None and operation_id not in {
-                operation.operation_id,
-                operation.message_id,
-            }:
-                raise ServiceError("预览操作不存在", status_code=404)
             if key in self._preview_streams:
                 raise ServiceError(
                     "该操作已有预览连接",
                     code="preview_stream_exists",
                     status_code=409,
-                )
-            if (
-                key not in self._preview_reservations
-                and len(self._preview_streams) + len(self._preview_reservations)
-                >= runtime.max_preview_streams
-            ):
-                raise ServiceError(
-                    "预览连接已满",
-                    code="preview_capacity",
-                    status_code=503,
-                )
-            user_reservations = sum(
-                owner_id == user_id for owner_id, _expires_at in self._preview_reservations.values()
-            )
-            if key not in self._preview_reservations and (
-                user_reservations >= runtime.max_preview_streams_per_user
-            ):
-                raise ServiceError(
-                    "预览连接预约过多",
-                    code="preview_user_limit",
-                    status_code=429,
                 )
             self._preview_reservations[key] = (
                 user_id,
@@ -281,12 +258,7 @@ class ConversationOperationRegistry:
         key = (workspace_id, operation_id)
         with self._operation_condition:
             self._prune_preview_reservations_locked()
-            operation = self._operations.get(workspace_id)
-            if operation is not None and operation_id not in {
-                operation.operation_id,
-                operation.message_id,
-            }:
-                raise ServiceError("预览操作不存在", status_code=404)
+            operation = self._find_operation_locked(workspace_id, operation_id)
             reservation = self._preview_reservations.pop(key, None)
             if operation is None and (reservation is None or reservation[0] != user_id):
                 raise ServiceError("预览操作不存在", status_code=404)
@@ -295,19 +267,6 @@ class ConversationOperationRegistry:
                     "该操作已有预览连接",
                     code="preview_stream_exists",
                     status_code=409,
-                )
-            if len(self._preview_streams) >= runtime.max_preview_streams:
-                raise ServiceError(
-                    "预览连接已满",
-                    code="preview_capacity",
-                    status_code=503,
-                )
-            user_streams = sum(owner_id == user_id for owner_id in self._preview_streams.values())
-            if user_streams >= runtime.max_preview_streams_per_user:
-                raise ServiceError(
-                    "当前账户预览连接已满",
-                    code="preview_user_limit",
-                    status_code=429,
                 )
             self._preview_streams[key] = user_id
         return self._preview_event_iterator(
@@ -374,7 +333,6 @@ class ConversationOperationRegistry:
             workspace,
             "generation_submission",
             "正在提交生成任务",
-            enforce_chat_capacity=False,
             operation_id=operation_id,
         ) as operation:
             yield operation
@@ -385,7 +343,6 @@ class ConversationOperationRegistry:
             workspace,
             "workspace_mutation",
             label,
-            enforce_chat_capacity=False,
         ):
             yield
 
@@ -396,19 +353,16 @@ class ConversationOperationRegistry:
         kind: str,
         label: str,
         *,
-        enforce_chat_capacity: bool = True,
         operation_id: str = "",
         message_id: str = "",
     ) -> Iterator[ConversationOperation]:
-        if enforce_chat_capacity:
-            runtime = self.settings.runtime()
         operation = ConversationOperation(
             user_id=workspace.user_id,
             kind=kind,
             label=label,
             started_at=utcnow(),
             stage_label=label,
-            operation_id=str(operation_id or "").strip().lower(),
+            operation_id=str(operation_id or "").strip().lower() or uuid4().hex,
             message_id=str(message_id or "").strip().lower(),
         )
         with self._operation_condition:
@@ -421,37 +375,42 @@ class ConversationOperationRegistry:
             if any(created is not None for created in canceled):
                 operation.cancel_event.set()
                 operation.ensure_active()
-            active = self._operations.get(workspace.id)
-            if active is not None:
-                raise self._busy_error(active)
-            if enforce_chat_capacity:
-                chat_operations = tuple(self._inflight_chats.values())
-                user_operations = sum(
-                    active.user_id == workspace.user_id for active in chat_operations
+            identifiers = (operation.operation_id, operation.message_id)
+            if any(
+                self._find_operation_locked(workspace.id, identifier) is not None
+                for identifier in identifiers
+                if identifier
+            ):
+                raise ServiceError(
+                    "操作 ID 已在使用",
+                    code="conversation_operation_conflict",
+                    status_code=409,
                 )
-                if user_operations >= runtime.max_concurrent_chats_per_user:
-                    raise ServiceError(
-                        f"同一账户最多同时进行 {runtime.max_concurrent_chats_per_user} 个 AI 对话请求",
-                        code="conversation_user_limit",
-                        status_code=429,
-                    )
-                if len(chat_operations) >= runtime.max_concurrent_chats:
-                    raise ServiceError(
-                        "当前 AI 对话请求较多，请稍后重试",
-                        code="conversation_capacity",
-                        status_code=503,
-                    )
-                self._inflight_chats[id(operation)] = operation
-            self._operations[workspace.id] = operation
+            active = self._operations.get(workspace.id, {})
+            if kind == "workspace_mutation":
+                if active:
+                    raise self._busy_error(next(iter(active.values())))
+                self._mutation_workspaces.add(workspace.id)
+            elif workspace.id in self._mutation_workspaces:
+                raise ServiceError(
+                    "工作站正在变更，请稍后再试",
+                    code="conversation_busy",
+                    status_code=409,
+                )
+            self._operations.setdefault(workspace.id, {})[operation.operation_id] = operation
             self._operation_condition.notify_all()
         try:
             yield operation
         finally:
             operation.finish()
             with self._operation_condition:
-                if self._operations.get(workspace.id) is operation:
+                operations = self._operations.get(workspace.id, {})
+                if operations.get(operation.operation_id) is operation:
+                    operations.pop(operation.operation_id, None)
+                if not operations:
                     self._operations.pop(workspace.id, None)
-                self._inflight_chats.pop(id(operation), None)
+                if kind == "workspace_mutation":
+                    self._mutation_workspaces.discard(workspace.id)
                 self._operation_condition.notify_all()
 
     def _wait_for_operation(
@@ -467,15 +426,23 @@ class ConversationOperationRegistry:
         deadline = monotonic() + timeout
         with self._operation_condition:
             while True:
-                operation = self._operations.get(workspace_id)
+                operation = self._find_operation_locked(workspace_id, operation_id)
                 if operation is not None:
-                    if operation_id in {operation.operation_id, operation.message_id}:
-                        return operation
-                    return None
+                    return operation
                 remaining = deadline - monotonic()
                 if remaining <= 0:
                     return None
                 self._operation_condition.wait(remaining)
+
+    def _find_operation_locked(
+        self,
+        workspace_id: str,
+        operation_id: str,
+    ) -> ConversationOperation | None:
+        for operation in self._operations.get(workspace_id, {}).values():
+            if operation_id in {operation.operation_id, operation.message_id}:
+                return operation
+        return None
 
     @staticmethod
     def _busy_error(operation: ConversationOperation) -> ServiceError:

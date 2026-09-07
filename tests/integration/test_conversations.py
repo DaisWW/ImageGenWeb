@@ -859,13 +859,8 @@ models:
             self.assertIn("预约成功", next(iter(response.response)).decode("utf-8"))
             response.close()
 
-    def test_chat_preview_connection_limit_releases_on_disconnect(self):
-        workspace = self.create_workspace("预览限流")
-        other = self.create_workspace("预览限流二")
-        settings = self.services.settings.editable_config()
-        settings["runtime"]["max_preview_streams"] = 1
-        settings["runtime"]["max_preview_streams_per_user"] = 1
-        self.services.settings.save(settings, self.admin.id)
+    def test_chat_preview_connections_can_run_in_one_workspace(self):
+        workspace = self.create_workspace("并行预览")
         first_id = "1" * 32
         second_id = "2" * 32
         client = self.user_client()
@@ -879,35 +874,31 @@ models:
                     operation_id=first_id,
                 )
             )
-            stack.enter_context(
+            second = stack.enter_context(
                 self.services.conversations.operations.workspace_operation(
-                    other,
+                    workspace,
                     "reply",
                     "第二个预览",
                     operation_id=second_id,
-                    enforce_chat_capacity=False,
                 )
             )
             first.update_preview("第一条")
-            response = client.get(
+            second.update_preview("第二条")
+            first_response = client.get(
                 f"/api/workspaces/{workspace.id}/operations/{first_id}/events",
                 buffered=False,
             )
-            next(iter(response.response))
-            full = client.get(f"/api/workspaces/{other.id}/operations/{second_id}/events")
-            self.assertEqual(full.status_code, 503)
-            response.close()
-
-            recovered = client.get(
-                f"/api/workspaces/{other.id}/operations/{second_id}/events",
+            second_response = client.get(
+                f"/api/workspaces/{workspace.id}/operations/{second_id}/events",
                 buffered=False,
             )
-            self.assertEqual(recovered.status_code, 200)
-            recovered.close()
+            self.assertIn("第一条", next(iter(first_response.response)).decode("utf-8"))
+            self.assertIn("第二条", next(iter(second_response.response)).decode("utf-8"))
+            first_response.close()
+            second_response.close()
 
-    def test_chat_is_serial_per_workspace_and_parallel_across_workspaces(self):
-        workspace = self.create_workspace("串行工作站")
-        other_workspace = self.create_workspace("并行工作站")
+    def test_chat_allows_parallel_requests_in_one_workspace(self):
+        workspace = self.create_workspace("并行工作站")
         client = BlockingFirstChatClient()
         conversations = self.services.conversations
         conversations.client = client
@@ -936,22 +927,16 @@ models:
             self.assertEqual(operation["stage_label"], "已连接上游，等待模型首个输出")
             self.assertEqual(operation["request_body_bytes"], 1024)
 
-            with self.assertRaises(ServiceError) as raised:
-                conversations.send(
-                    workspace,
-                    model_id="test-chat",
-                    content="不应并行的第二条消息",
-                )
-            self.assertEqual(raised.exception.code, "conversation_busy")
-            self.assertEqual(raised.exception.status_code, 409)
-
             _user_message, assistant_message = conversations.send(
-                other_workspace,
+                workspace,
                 model_id="test-chat",
-                content="另一个工作站的消息",
+                content="同一工作站的第二条消息",
             )
             self.assertIn("并行回复 2", assistant_message.content)
             self.assertEqual(len(client.calls), 2)
+            active = conversations.operation_state(workspace.id)
+            self.assertEqual(len(active["operations"]), 1)
+            self.assertEqual(active["operations"][0]["kind"], "reply")
         finally:
             client.release.set()
             thread.join(10)
@@ -1013,7 +998,7 @@ models:
         )
         self.assertEqual(assistant_message.role, "assistant")
 
-    def test_canceled_chat_keeps_counting_toward_capacity_until_request_returns(self):
+    def test_canceled_chat_does_not_block_other_workspaces(self):
         workspaces = [self.create_workspace(f"取消容量 {index}") for index in range(3)]
         conversations = self.services.conversations
 
@@ -1031,17 +1016,15 @@ models:
                 self.assertTrue(conversations.cancel_operation(workspace.id, operation_id))
                 self.assertTrue(conversations.operation_state(workspace.id)["busy"])
 
-            with self.assertRaises(ServiceError) as raised:
-                with conversations.operations.workspace_operation(
+            active_requests.enter_context(
+                conversations.operations.workspace_operation(
                     workspaces[2],
                     "reply",
                     "等待回复",
                     operation_id="3" * 32,
-                ):
-                    pass
-
-        self.assertEqual(raised.exception.code, "conversation_user_limit")
-        self.assertEqual(raised.exception.status_code, 429)
+                )
+            )
+            self.assertTrue(conversations.operation_state(workspaces[2].id)["busy"])
 
     def test_chat_cancel_tombstones_are_consumed_at_zero_timestamp(self):
         workspace = self.create_workspace("零时间取消")
@@ -1114,36 +1097,34 @@ models:
         self.assertEqual(observed_operations[0]["kind"], "generation_submission")
         self.assertFalse(conversations.operation_state(workspace.id)["busy"])
 
-    def test_generation_submission_rejects_an_active_conversation(self):
-        workspace = self.create_workspace("对话优先工作站")
+    def test_generation_submission_runs_with_an_active_conversation(self):
+        workspace = self.create_workspace("聊天生图并行工作站")
         conversations = self.services.conversations
 
-        with conversations._workspace_operation(workspace, "reply", "正在等待 AI 回复"):
-            with self.assertRaises(ServiceError) as raised:
-                with conversations.generation_submission(workspace):
-                    pass
+        with conversations.operations.workspace_operation(
+            workspace,
+            "reply",
+            "正在等待 AI 回复",
+            operation_id="a" * 32,
+        ):
+            with conversations.generation_submission(
+                workspace,
+                operation_id="b" * 32,
+            ):
+                state = conversations.operation_state(workspace.id)
+                self.assertEqual(
+                    {operation["kind"] for operation in state["operations"]},
+                    {"reply", "generation_submission"},
+                )
+                self.assertEqual(len(state["operations"]), 2)
 
-        self.assertEqual(raised.exception.code, "conversation_busy")
-        self.assertEqual(raised.exception.status_code, 409)
-
-    def test_chat_operations_enforce_user_and_global_capacity(self):
+    def test_chat_operations_allow_multiple_workspaces_and_accounts(self):
         conversations = self.services.conversations
         own_workspaces = [
             self.create_workspace("并发工作站一"),
             self.create_workspace("并发工作站二"),
             self.create_workspace("并发工作站三"),
         ]
-        with ExitStack() as operations:
-            for workspace in own_workspaces[:2]:
-                operations.enter_context(
-                    conversations._workspace_operation(workspace, "reply", "等待回复")
-                )
-            with self.assertRaises(ServiceError) as raised:
-                with conversations._workspace_operation(own_workspaces[2], "reply", "等待回复"):
-                    pass
-            self.assertEqual(raised.exception.code, "conversation_user_limit")
-            self.assertEqual(raised.exception.status_code, 429)
-
         other = self.services.users.create(
             username="parallel-user",
             password="StrongPass123!",
@@ -1162,12 +1143,13 @@ models:
         ]
         capacity_workspace = self.services.workspaces.create(third.id, "容量工作站")
         with ExitStack() as operations:
-            for workspace in [*own_workspaces[:2], *other_workspaces]:
+            for workspace in [*own_workspaces, *other_workspaces, capacity_workspace]:
                 operations.enter_context(
-                    conversations._workspace_operation(workspace, "reply", "等待回复")
+                    conversations.operations.workspace_operation(workspace, "reply", "等待回复")
                 )
-            with self.assertRaises(ServiceError) as raised:
-                with conversations._workspace_operation(capacity_workspace, "reply", "等待回复"):
-                    pass
-            self.assertEqual(raised.exception.code, "conversation_capacity")
-            self.assertEqual(raised.exception.status_code, 503)
+            self.assertTrue(
+                all(
+                    conversations.operation_state(workspace.id)["busy"]
+                    for workspace in [*own_workspaces, *other_workspaces, capacity_workspace]
+                )
+            )

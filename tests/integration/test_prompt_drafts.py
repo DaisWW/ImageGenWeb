@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 
 from sqlalchemy import func, select
 
@@ -21,12 +22,63 @@ from imagegen.services.creative import (
 )
 from imagegen.services.prompt_drafts import PromptDraftReview, PromptDraftStreamPreview
 from tests.support.platform import (
+    BlockingFirstChatClient,
     PlatformTestCase,
     png_bytes,
 )
 
 
 class TestPromptDrafts(PlatformTestCase):
+    def test_canceled_prompt_draft_discards_late_model_result(self):
+        workspace = self.create_workspace("取消提示词草稿")
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="生成一张人物海报",
+        )
+        client = BlockingFirstChatClient()
+        conversations = self.services.conversations
+        conversations.client = client
+        errors = []
+
+        def create_draft():
+            with self.app.app_context():
+                thread_workspace = db.session.get(type(workspace), workspace.id)
+                try:
+                    conversations.create_prompt_draft(
+                        thread_workspace,
+                        model_id="test-chat",
+                        translate_to_english=False,
+                    )
+                except Exception as exc:  # pragma: no cover - assertions inspect it
+                    errors.append(exc)
+
+        thread = threading.Thread(target=create_draft)
+        thread.start()
+        try:
+            self.assertTrue(client.started.wait(5))
+            operation = conversations.operation_state(workspace.id)
+            operation_id = operation["operations"][0]["operation_id"]
+            self.assertTrue(conversations.cancel_operation(workspace.id, operation_id))
+        finally:
+            client.release.set()
+            thread.join(10)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(getattr(errors[0], "code", ""), "conversation_canceled")
+        db.session.expire_all()
+        self.assertEqual(
+            db.session.scalar(
+                select(func.count(ConversationMessage.id)).where(
+                    ConversationMessage.workspace_id == workspace.id,
+                    ConversationMessage.role == "assistant",
+                    ConversationMessage.kind == "prompt_draft",
+                )
+            ),
+            0,
+        )
+
     def test_prompt_draft_classifies_repairable_output_failures(self):
         review = PromptDraftReview(
             translate_to_english=False,
@@ -1149,15 +1201,15 @@ class TestPromptDrafts(PlatformTestCase):
         self.assertEqual(draft.provider_id, "creative-chat")
         self.assertEqual(workspace.settings["chat_model_id"], "creative-chat")
 
-    def test_active_generation_blocks_chat_until_job_is_terminal(self):
+    def test_active_generation_allows_chat_while_job_is_pending(self):
         workspace = self.create_workspace()
         self.submit(workspace)
-        with self.assertRaisesRegex(ServiceError, "图片尚未生成完成"):
-            self.services.conversations.send(
-                workspace,
-                model_id="test-chat",
-                content="继续调整画面",
-            )
+        _user_message, assistant_message = self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="继续调整画面",
+        )
+        self.assertEqual(assistant_message.role, "assistant")
 
     def test_first_chat_message_keeps_workspace_name_and_clear_removes_transcript(
         self,

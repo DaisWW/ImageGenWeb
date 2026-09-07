@@ -91,7 +91,26 @@ class OpenAIChatClient:
     """面向兼容 OpenAI 的 Responses 流式接口的轻量客户端。"""
 
     def __init__(self, session: requests.Session | None = None):
-        self.session = session or requests.Session()
+        # A client is shared by all conversation requests. Keep injected
+        # sessions intact for tests/custom transports, while giving the
+        # default requests transport one session per calling thread.
+        self._shared_session = session
+        self._thread_sessions = threading.local()
+
+    @property
+    def session(self) -> requests.Session:
+        if self._shared_session is not None:
+            return self._shared_session
+        session = getattr(self._thread_sessions, "session", None)
+        if session is None:
+            session = requests.Session()
+            self._thread_sessions.session = session
+        return session
+
+    @session.setter
+    def session(self, value: requests.Session | None) -> None:
+        self._shared_session = value
+        self._thread_sessions = threading.local()
 
     def complete(
         self,

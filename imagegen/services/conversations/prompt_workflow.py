@@ -62,7 +62,6 @@ class PromptDraftWorkflow(ConversationSupport):
         operation: ConversationOperation,
     ) -> ConversationMessage:
         gallery_category_id = str(gallery_category_id or "auto").strip().lower()
-        self._ensure_workspace_unlocked(workspace)
         model = self._model(model_id)
         if not db.session.scalar(
             select(ConversationMessage.id)
@@ -138,7 +137,9 @@ class PromptDraftWorkflow(ConversationSupport):
                 operation=operation,
                 output_delta=stream_preview.feed,
             )
+            operation.ensure_active()
         except OpenAIChatError as exc:
+            operation.ensure_active()
             self._raise_chat_error(
                 workspace,
                 getattr(exc, "chat_model", model),
@@ -148,6 +149,7 @@ class PromptDraftWorkflow(ConversationSupport):
         except ServiceError as exc:
             if exc.code != "context_budget_exceeded":
                 raise
+            operation.ensure_active()
             self._raise_chat_error(
                 workspace,
                 model,
@@ -177,6 +179,7 @@ class PromptDraftWorkflow(ConversationSupport):
                 reference_ids=[asset.id for asset in attachments],
             )
         except OpenAIChatError as exc:
+            operation.ensure_active()
             self._raise_chat_error(
                 workspace,
                 getattr(exc, "chat_model", model),
@@ -184,6 +187,7 @@ class PromptDraftWorkflow(ConversationSupport):
                 exc,
             )
         except ServiceError as exc:
+            operation.ensure_active()
             self._raise_chat_error(
                 workspace,
                 model,
@@ -194,6 +198,7 @@ class PromptDraftWorkflow(ConversationSupport):
                     model=getattr(exc, "chat_model", model),
                 ),
             )
+        operation.ensure_active()
         generation_references = self._draft_references(draft, attachments)
         content, message_kind = review.message_content(draft)
         operation.update_preview(content)
@@ -211,6 +216,7 @@ class PromptDraftWorkflow(ConversationSupport):
             payload=draft,
         )
         self._attach(message, generation_references)
+        operation.ensure_active()
         db.session.add(message)
         operation.update_progress("saving", "正在保存提示词草稿")
         self._record_chat_success(

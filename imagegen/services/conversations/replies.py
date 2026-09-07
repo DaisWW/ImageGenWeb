@@ -4,6 +4,7 @@ from dataclasses import replace
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from ...config.chat_models import ChatModelConfig
@@ -116,7 +117,6 @@ class ConversationReplyService(ConversationSupport):
             current_reply = self._linked_reply(workspace, user_message)
             if current_reply is not None and current_reply.id != error_message_id:
                 return current_reply
-            self._ensure_workspace_unlocked(workspace)
             model = self._model(model_id)
             return self._complete_reply(
                 workspace,
@@ -169,7 +169,6 @@ class ConversationReplyService(ConversationSupport):
             reply = self._linked_reply(workspace, existing)
             if reply is not None:
                 return existing, reply
-            self._ensure_workspace_unlocked(workspace)
             model = self._model(model_id)
             return existing, self._complete_reply(
                 workspace,
@@ -179,7 +178,6 @@ class ConversationReplyService(ConversationSupport):
             )
 
         operation.ensure_active()
-        self._ensure_workspace_unlocked(workspace)
         model = self._model(model_id)
         attachments = self._load_assets(workspace, attachment_ids)
         generation_references = self._load_assets(workspace, generation_reference_ids)
@@ -203,7 +201,26 @@ class ConversationReplyService(ConversationSupport):
         db.session.add(user_message)
         workspace.settings = {**(workspace.settings or {}), "prompt_draft_id": ""}
         workspace.updated_at = sent_at
-        db.session.commit()
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            existing = self._matching_user_message(
+                workspace,
+                message_id=message_id,
+                model_id=model_id,
+                content=content,
+                attachment_ids=attachment_ids,
+                generation_reference_ids=generation_reference_ids,
+                generation_mode=generation_mode,
+                clarification_reply_to_id=clarification_reply_to_id,
+            )
+            if existing is None:
+                raise
+            reply = self._linked_reply(workspace, existing)
+            if reply is not None:
+                return existing, reply
+            user_message = existing
         assistant_message = self._complete_reply(
             workspace,
             model,

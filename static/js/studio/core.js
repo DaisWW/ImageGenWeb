@@ -191,12 +191,20 @@
       this.pollTimer = null;
       this.scrollFrame = null;
       this.workspaces.forEach((workspace) => {
-        if (workspace.conversation_operation?.busy) {
-          this.chatOperations.set(workspace.id, {
-            ...workspace.conversation_operation,
-            local: false,
-          });
-        }
+        const state = workspace.conversation_operation;
+        const operations = Array.isArray(state?.operations)
+          ? state.operations
+          : state?.busy ? [state] : [];
+        const active = new Map(
+          operations
+            .filter((operation) => operation?.busy !== false)
+            .map((operation) => [
+              String(operation.operation_id || operation.message_id || "").toLowerCase(),
+              { ...operation, local: false },
+            ])
+            .filter(([key]) => key),
+        );
+        if (active.size) this.chatOperations.set(workspace.id, active);
       });
       this.cacheElements();
       this.renderCreativeDirectionOptions();
@@ -440,17 +448,11 @@
       document.addEventListener("keydown", (event) => this.handleWorkspaceShortcut(event));
       document.addEventListener("keydown", (event) => {
         if (event.key === "Escape" && !this.el.generationForm.hidden
-          && !document.querySelector("dialog[open]")
-          && !this.generationSubmissions.get(this.activeWorkspace?.id)) {
+          && !document.querySelector("dialog[open]")) {
           this.setComposerMode("chat");
         }
       });
       this.el.chatForm.addEventListener("submit", (event) => this.sendChatMessage(event));
-      this.el.chatSendButton.addEventListener("click", (event) => {
-        if (!this.workspaceChatBusy()) return;
-        event.preventDefault();
-        this.cancelChatOperation();
-      });
       this.el.chatInput.addEventListener("keydown", (event) => {
         if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
           event.preventDefault();
@@ -528,9 +530,7 @@
       });
       [this.el.generationBackdrop, this.el.generationBackButton].forEach((button) => {
         button.addEventListener("click", () => {
-          if (!this.generationSubmissions.get(this.activeWorkspace?.id)) {
-            this.setComposerMode("chat");
-          }
+          this.setComposerMode("chat");
         });
       });
       ["animationend", "animationcancel"].forEach((eventName) => {

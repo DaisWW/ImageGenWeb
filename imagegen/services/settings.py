@@ -21,7 +21,6 @@ MIB = 1024 * 1024
 
 @dataclass(frozen=True, slots=True)
 class RuntimeSettings:
-    default_user_concurrency: int = 2
     max_workspaces_per_user: int = 10
     max_assets_per_workspace: int = 20
     create_starter_workspaces: bool = True
@@ -29,11 +28,7 @@ class RuntimeSettings:
     max_chat_attachments: int = 20
     max_attachment_mb: int = 10
     max_attachment_total_mb: int = 40
-    max_concurrent_chats: int = 4
-    max_concurrent_chats_per_user: int = 2
     chat_failover_attempts: int = 2
-    max_preview_streams: int = 4
-    max_preview_streams_per_user: int = 2
     preview_reservation_seconds: int = 15
     max_prompt_characters: int = 8000
     max_batch_images: int = 20
@@ -288,7 +283,6 @@ class SystemSettingsService:
 
 def _parse_runtime_settings(raw: dict[str, Any]) -> RuntimeSettings:
     settings = RuntimeSettings(
-        default_user_concurrency=_bounded_int(raw, "default_user_concurrency", 2, 1, 16),
         max_workspaces_per_user=_bounded_int(raw, "max_workspaces_per_user", 10, 2, 100),
         max_assets_per_workspace=_bounded_int(raw, "max_assets_per_workspace", 20, 1, 32),
         create_starter_workspaces=as_bool(raw.get("create_starter_workspaces", True)),
@@ -296,11 +290,7 @@ def _parse_runtime_settings(raw: dict[str, Any]) -> RuntimeSettings:
         max_chat_attachments=_bounded_int(raw, "max_chat_attachments", 20, 1, 32),
         max_attachment_mb=_bounded_int(raw, "max_attachment_mb", 10, 1, 40),
         max_attachment_total_mb=_bounded_int(raw, "max_attachment_total_mb", 40, 1, 40),
-        max_concurrent_chats=_bounded_int(raw, "max_concurrent_chats", 4, 1, 64),
-        max_concurrent_chats_per_user=_bounded_int(raw, "max_concurrent_chats_per_user", 2, 1, 16),
         chat_failover_attempts=_bounded_int(raw, "chat_failover_attempts", 2, 1, 5),
-        max_preview_streams=_bounded_int(raw, "max_preview_streams", 4, 1, 32),
-        max_preview_streams_per_user=_bounded_int(raw, "max_preview_streams_per_user", 2, 1, 8),
         preview_reservation_seconds=_bounded_int(raw, "preview_reservation_seconds", 15, 5, 60),
         max_prompt_characters=_bounded_int(raw, "max_prompt_characters", 8000, 1000, 12000),
         max_batch_images=_bounded_int(raw, "max_batch_images", 20, 1, 100),
@@ -317,10 +307,6 @@ def _parse_runtime_settings(raw: dict[str, Any]) -> RuntimeSettings:
         raise ValueError("单条消息附件数不能超过每个工作站素材数")
     if settings.max_attachment_mb > settings.max_attachment_total_mb:
         raise ValueError("单张附件上限不能超过附件合计上限")
-    if settings.max_concurrent_chats_per_user > settings.max_concurrent_chats:
-        raise ValueError("单用户对话并发不能超过全局对话并发")
-    if settings.max_preview_streams_per_user > settings.max_preview_streams:
-        raise ValueError("单用户预览连接数不能超过全局预览连接数")
     if settings.worker_watchdog_seconds <= settings.worker_heartbeat_seconds * 3:
         raise ValueError("Worker 看门狗秒数必须大于心跳秒数的三倍")
     return settings

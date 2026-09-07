@@ -19,7 +19,6 @@ from ...models import (
     Asset,
     ConversationAttachment,
     ConversationMessage,
-    GenerationJob,
     Workspace,
     new_public_id,
 )
@@ -181,9 +180,10 @@ class ConversationSupport:
             "chat_timeout",
         }:
             return True
-        if error.code == "chat_upstream_error" and error.details.get(
-            "terminal_event_received"
-        ) is False:
+        if (
+            error.code == "chat_upstream_error"
+            and error.details.get("terminal_event_received") is False
+        ):
             return True
         if error.code == "chat_upstream_error" and error.details.get("empty_completion") is True:
             return True
@@ -650,23 +650,6 @@ class ConversationSupport:
         if gallery_category_id is not None:
             settings["gallery_category_id"] = gallery_category_id
         workspace.settings = settings
-
-    @staticmethod
-    def _ensure_workspace_unlocked(workspace: Workspace) -> None:
-        active = db.session.scalar(
-            select(GenerationJob.id)
-            .where(
-                GenerationJob.workspace_id == workspace.id,
-                GenerationJob.status.in_(["queued", "running", "canceling", "reconnecting"]),
-            )
-            .limit(1)
-        )
-        if active:
-            raise ServiceError(
-                "当前图片尚未生成完成，请等待完成或先取消任务",
-                code="workspace_generation_active",
-                status_code=409,
-            )
 
     def _record_chat_success(
         self,

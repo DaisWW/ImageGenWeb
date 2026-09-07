@@ -84,7 +84,7 @@
 
     async sendChatMessage(event) {
       event.preventDefault();
-      if (!this.activeWorkspace || this.workspaceChatBusy() || this.workspaceHasActiveJob()) return;
+      if (!this.activeWorkspace) return;
       if (this.referenceUploadPending) {
         UI.toast("请等待图片上传完成或取消上传", "info");
         return;
@@ -150,14 +150,13 @@
     async retryFailedChatMessage(messageId) {
       const message = this.outgoingMessages.get(messageId);
       if (!message || !["failed", "canceled"].includes(message.delivery_state)
-        || this.activeWorkspace?.id !== message.workspace_id
-        || this.workspaceChatBusy() || this.workspaceHasActiveJob()) return;
+        || this.activeWorkspace?.id !== message.workspace_id) return;
       await this.submitOutgoingMessage(message);
     },
 
     async resendChatMessage(messageId) {
       const workspace = this.activeWorkspace;
-      if (!workspace || this.workspaceChatBusy() || this.workspaceHasActiveJob()) return;
+      if (!workspace) return;
       if (this.referenceUploadPending) {
         UI.toast("请等待图片上传完成或取消上传", "info");
         return;
@@ -227,8 +226,8 @@
       );
       const { operation, data, failure, canceled } = result;
       if (canceled) {
-        const stillOwnMessage = message.operation_id === operation.operation_id
-          || this.chatOperations.get(message.workspace_id) === operation;
+        const stillOwnMessage = String(message.operation_id || "").toLowerCase()
+          === this.operationKey(operation);
         if (stillOwnMessage) {
           message.delivery_state = "canceled";
           message.delivery_error = "";
@@ -266,7 +265,7 @@
     },
 
     async retryChatMessage(errorMessageId) {
-      if (!this.activeWorkspace || this.workspaceChatBusy() || this.workspaceHasActiveJob()) return;
+      if (!this.activeWorkspace) return;
       const workspaceId = this.activeWorkspace.id;
       const modelId = this.el.chatModelSelect.value;
       if (!modelId) {
@@ -297,10 +296,10 @@
     },
 
     openGenerationComposer(referenceIds = null) {
-      if (!this.activeWorkspace || this.workspaceChatBusy() || this.workspaceHasActiveJob()
-        || this.referenceUploadPending) return;
+      if (!this.activeWorkspace || this.referenceUploadPending) return;
       const hadReviewedDraft = Boolean(this.activeWorkspace.settings.prompt_draft_id);
       this.activeWorkspace.settings.prompt_draft_id = "";
+      this.activeWorkspace.settings.generation_stage = "final";
       const draft = this.el.chatInput.value.trim();
       const prompt = draft.slice(0, this.limits.max_prompt_characters);
       const requested = referenceIds === null
@@ -357,11 +356,58 @@
       }
     },
 
-    workspaceChatBusy(workspaceId = this.activeWorkspace?.id) {
+    operationKey(operation) {
+      return String(operation?.operation_id || operation?.message_id || "").trim().toLowerCase();
+    },
+
+    chatOperationMap(workspaceId, create = false) {
+      if (!workspaceId) return null;
+      let operations = this.chatOperations.get(workspaceId);
+      if (operations && typeof operations.get !== "function") {
+        const key = this.operationKey(operations);
+        operations = key ? new Map([[key, operations]]) : new Map();
+        this.chatOperations.set(workspaceId, operations);
+      }
+      if (!operations && create) {
+        operations = new Map();
+        this.chatOperations.set(workspaceId, operations);
+      }
+      return operations || null;
+    },
+
+    chatOperationList(workspaceId = this.activeWorkspace?.id) {
+      return [...(this.chatOperationMap(workspaceId)?.values() || [])];
+    },
+
+    chatOperationForId(workspaceId, operationId = "") {
+      const operations = this.chatOperationMap(workspaceId);
+      if (!operations) return null;
+      const normalized = String(operationId || "").trim().toLowerCase();
+      if (normalized && operations.has(normalized)) return operations.get(normalized);
+      return [...operations.values()].find((operation) => (
+        [operation.operation_id, operation.message_id]
+          .filter(Boolean)
+          .map((value) => String(value).toLowerCase())
+          .includes(normalized)
+      )) || null;
+    },
+
+    workspacePrimaryChatOperation(workspaceId = this.activeWorkspace?.id) {
+      return this.chatOperationList(workspaceId)
+        .filter((operation) => ["reply", "prompt_draft"].includes(operation.kind))
+        .sort((left, right) => String(left.started_at || "").localeCompare(String(right.started_at || "")))[0]
+        || null;
+    },
+
+    workspaceHasActiveConversationOperation(workspaceId = this.activeWorkspace?.id) {
       return Boolean(workspaceId && (
-        this.chatOperations.has(workspaceId)
+        this.chatOperationList(workspaceId).length
         || this.canceledChatOperationIds.get(workspaceId)?.size
       ));
+    },
+
+    workspaceChatBusy(workspaceId = this.activeWorkspace?.id) {
+      return this.workspaceHasActiveConversationOperation(workspaceId);
     },
 
     chatOperationAwaitingMessageAcceptance(
@@ -423,22 +469,41 @@
 
     chatPreviewForOperation(workspaceId, operation) {
       if (!workspaceId || !operation) return null;
-      const preview = this.chatPreviews.get(workspaceId);
-      const operationIds = [operation.operation_id, operation.message_id].filter(Boolean);
-      return preview && operationIds.includes(preview.operationId) ? preview : null;
+      const previews = this.chatPreviewMap(workspaceId);
+      const operationIds = [operation.operation_id, operation.message_id]
+        .filter(Boolean)
+        .map((value) => String(value).toLowerCase());
+      return operationIds.map((id) => previews?.get(id)).find(Boolean)
+        || [...(previews?.values() || [])].find((preview) => operationIds.includes(preview.operationId))
+        || null;
+    },
+
+    chatPreviewMap(workspaceId, create = false) {
+      if (!workspaceId) return null;
+      let previews = this.chatPreviews.get(workspaceId);
+      if (previews && typeof previews.get !== "function") {
+        const key = String(previews.operationId || "").toLowerCase();
+        previews = key ? new Map([[key, previews]]) : new Map();
+        this.chatPreviews.set(workspaceId, previews);
+      }
+      if (!previews && create) {
+        previews = new Map();
+        this.chatPreviews.set(workspaceId, previews);
+      }
+      return previews || null;
     },
 
     async startChatPreviewStream(workspaceId, operation) {
-      const operationId = operation?.operation_id || operation?.message_id;
+      const operationId = this.operationKey(operation);
       if (!workspaceId || !operationId
         || !["reply", "prompt_draft"].includes(operation.kind)
         || typeof window.EventSource !== "function") return;
-      const existing = this.chatPreviews.get(workspaceId);
-      if (existing?.operationId === operationId && (existing.source || existing.finished)) return;
-      if (existing) this.stopChatPreviewStream(workspaceId);
+      const previews = this.chatPreviewMap(workspaceId, true);
+      const existing = previews.get(operationId);
+      if (existing && (existing.source || existing.finished)) return;
       const state = {
         workspaceId,
-        operationId,
+        operationId: operationId.toLowerCase(),
         source: null,
         targetText: "",
         displayedText: "",
@@ -447,7 +512,7 @@
         finalText: "",
         finished: false,
       };
-      this.chatPreviews.set(workspaceId, state);
+      previews.set(operationId, state);
       try {
         await UI.api(
           `/api/workspaces/${encodeURIComponent(workspaceId)}`
@@ -455,17 +520,18 @@
           { method: "POST", body: {} },
         );
       } catch (_error) {
-        if (this.chatPreviews.get(workspaceId) === state) this.chatPreviews.delete(workspaceId);
+        if (previews.get(operationId) === state) previews.delete(operationId);
+        if (!previews.size) this.chatPreviews.delete(workspaceId);
         return;
       }
-      if (this.chatPreviews.get(workspaceId) !== state || operation.canceled) return;
+      if (previews.get(operationId) !== state || operation.canceled) return;
       const source = new EventSource(
         `/api/workspaces/${encodeURIComponent(workspaceId)}`
           + `/operations/${encodeURIComponent(operationId)}/events`,
       );
       state.source = source;
       source.addEventListener("preview", (event) => {
-        if (this.chatPreviews.get(workspaceId) !== state) return;
+        if (this.chatPreviewMap(workspaceId)?.get(operationId) !== state) return;
         try {
           const payload = JSON.parse(event.data);
           this.queueChatPreview(state, String(payload.text || ""));
@@ -474,13 +540,13 @@
         }
       });
       source.addEventListener("close", () => {
-        if (this.chatPreviews.get(workspaceId) !== state) return;
+        if (this.chatPreviewMap(workspaceId)?.get(operationId) !== state) return;
         source.close();
         state.source = null;
         state.finished = true;
       });
       source.onerror = () => {
-        if (this.chatPreviews.get(workspaceId) !== state) return;
+        if (this.chatPreviewMap(workspaceId)?.get(operationId) !== state) return;
         source.close();
         state.source = null;
         state.finished = true;
@@ -488,13 +554,14 @@
     },
 
     queueChatPreview(state, text) {
-      if (!text || state.targetText === text || this.chatPreviews.get(state.workspaceId) !== state) {
+      if (!text || state.targetText === text
+        || this.chatPreviewMap(state.workspaceId)?.get(state.operationId) !== state) {
         return;
       }
       if (state.finalText && text !== state.finalText) return;
       state.targetText = text;
       state.displayedText = text;
-      const operation = this.chatOperations.get(state.workspaceId);
+      const operation = this.chatOperationForId(state.workspaceId, state.operationId);
       const outgoing = operation?.message_id
         ? this.outgoingMessages.get(operation.message_id)
         : null;
@@ -540,7 +607,8 @@
     updateChatPreviewText(state) {
       if (this.activeWorkspace?.id !== state.workspaceId) return;
       const row = [...this.el.messageList.querySelectorAll(".message-row.assistant.pending")]
-        .find((node) => node.dataset.workspaceId === state.workspaceId);
+        .find((node) => node.dataset.workspaceId === state.workspaceId
+          && node.dataset.operationId === state.operationId);
       const content = row?.querySelector(".message-stream-text");
       if (!content) return;
       const scrollGap = this.el.conversationScroll.scrollHeight
@@ -551,15 +619,21 @@
     },
 
     stopChatPreviewStream(workspaceId, operationId = "") {
-      const state = this.chatPreviews.get(workspaceId);
-      if (!state || (operationId && state.operationId !== operationId)) return;
-      state.source?.close();
-      if (state.handoffTimer !== null) window.clearTimeout(state.handoffTimer);
-      const finish = state.drainResolve;
-      state.handoffTimer = null;
-      state.drainResolve = null;
-      finish?.();
-      this.chatPreviews.delete(workspaceId);
+      const previews = this.chatPreviewMap(workspaceId);
+      if (!previews) return;
+      const targets = operationId
+        ? [previews.get(String(operationId).toLowerCase())].filter(Boolean)
+        : [...previews.values()];
+      targets.forEach((state) => {
+        state.source?.close();
+        if (state.handoffTimer !== null) window.clearTimeout(state.handoffTimer);
+        const finish = state.drainResolve;
+        state.handoffTimer = null;
+        state.drainResolve = null;
+        finish?.();
+        previews.delete(state.operationId);
+      });
+      if (!previews.size) this.chatPreviews.delete(workspaceId);
     },
 
     mergeConversationMessages(messages, context) {
@@ -589,7 +663,7 @@
       };
       const message = messageId ? this.outgoingMessages.get(messageId) : null;
       if (message) message.operation_id = operation.operation_id;
-      this.chatOperations.set(workspaceId, operation);
+      this.chatOperationMap(workspaceId, true).set(operation.operation_id, operation);
       this.renderWorkspaceList();
       if (this.activeWorkspace?.id === workspaceId) this.renderMessages();
       this.schedulePoll(ACTIVE_POLL_INTERVAL);
@@ -597,11 +671,13 @@
     },
 
     finishLocalChatOperation(workspaceId, operation) {
-      const current = this.chatOperations.get(workspaceId);
-      if (current === operation
-        || (current?.local && current.operation_id === operation.operation_id)) {
-        this.chatOperations.delete(workspaceId);
+      const operations = this.chatOperationMap(workspaceId);
+      const key = this.operationKey(operation);
+      if (operations?.get(key) === operation
+        || operations?.get(key)?.local && operations.get(key).operation_id === operation.operation_id) {
+        operations.delete(key);
       }
+      if (operations && !operations.size) this.chatOperations.delete(workspaceId);
       this.renderWorkspaceList();
     },
 
@@ -616,17 +692,23 @@
 
     cancelChatOperation(workspaceId = this.activeWorkspace?.id, operationId = "") {
       if (!workspaceId) return;
-      const operation = this.chatOperations.get(workspaceId);
-      const targetId = operationId || operation?.operation_id || operation?.message_id;
+      const requestedId = String(operationId || "").trim().toLowerCase();
+      const operation = requestedId
+        ? this.chatOperationForId(workspaceId, requestedId)
+        : this.workspacePrimaryChatOperation(workspaceId);
+      const targetId = requestedId || this.operationKey(operation);
       if (!targetId) return;
-      const operationIds = [operation?.operation_id, operation?.message_id].filter(Boolean);
+      const operationIds = [operation?.operation_id, operation?.message_id]
+        .filter(Boolean)
+        .map((id) => String(id).toLowerCase());
       if (operation && operationIds.length && !operationIds.includes(targetId)) return;
       if (operation) {
         operation.canceled = true;
         operation.controller?.abort();
-        if (this.chatOperations.get(workspaceId) === operation) {
-          this.chatOperations.delete(workspaceId);
-        }
+        const operations = this.chatOperationMap(workspaceId);
+        const key = this.operationKey(operation);
+        if (operations?.get(key) === operation) operations.delete(key);
+        if (operations && !operations.size) this.chatOperations.delete(workspaceId);
         const message = operation.message_id
           ? this.outgoingMessages.get(operation.message_id)
           : null;
@@ -644,72 +726,86 @@
       canceled.add(targetId);
       operationIds.forEach((id) => canceled.add(id));
       this.requestOperationCancellation(workspaceId, targetId);
-      this.stopChatPreviewStream(workspaceId);
+      this.stopChatPreviewStream(workspaceId, this.operationKey(operation) || targetId);
       this.renderWorkspaceList();
       if (this.activeWorkspace?.id === workspaceId) this.renderMessages();
     },
 
     syncServerChatOperation(workspaceId, operation) {
-      const previous = this.chatOperations.get(workspaceId);
-      if (previous?.local && operation?.busy) {
-        const sameOperation = previous.operation_id && operation.operation_id
-          ? String(previous.operation_id).toLowerCase() === String(operation.operation_id).toLowerCase()
-          : previous.message_id && operation.message_id
-            ? String(previous.message_id).toLowerCase() === String(operation.message_id).toLowerCase()
-            : false;
-        if (!sameOperation) return false;
-        const next = {
-          ...previous,
-          ...operation,
-          local: true,
-          controller: previous.controller,
-          canceled: previous.canceled,
-        };
-        const changed = previous.stage !== next.stage
-          || previous.stage_label !== next.stage_label
-          || previous.first_output_seconds !== next.first_output_seconds
-          || previous.output_characters !== next.output_characters
-          || previous.request_body_bytes !== next.request_body_bytes;
-        this.chatOperations.set(workspaceId, next);
-        void this.startChatPreviewStream(workspaceId, next);
-        return changed;
-      }
-      if (previous?.local) return false;
+      const previous = new Map(this.chatOperationMap(workspaceId) || []);
+      const rawOperations = Array.isArray(operation?.operations)
+        ? operation.operations
+        : operation?.busy ? [operation] : [];
+      const serverOperations = rawOperations.filter((item) => item?.busy !== false);
       const canceled = this.canceledChatOperationIds.get(workspaceId);
-      if (operation?.busy && canceled?.size) {
-        if (!operation.operation_id || canceled.has(operation.operation_id)) return false;
+      const next = new Map();
+      const sameId = (left, right) => String(left || "").toLowerCase() === String(right || "").toLowerCase();
+      for (const serverOperation of serverOperations) {
+        const operationId = this.operationKey(serverOperation);
+        if (!operationId) continue;
+        const canceledIds = [serverOperation.operation_id, serverOperation.message_id]
+          .filter(Boolean)
+          .map((id) => String(id).toLowerCase());
+        if (canceled?.size && canceledIds.some((id) => canceled.has(id))) continue;
+        const previousOperation = previous.get(operationId)
+          || [...previous.values()].find((item) => sameId(item.message_id, serverOperation.message_id));
+        if (previousOperation?.local
+          && previousOperation.operation_id
+          && serverOperation.operation_id
+          && !sameId(previousOperation.operation_id, serverOperation.operation_id)) {
+          continue;
+        }
+        const nextOperation = previousOperation?.local
+          ? {
+            ...previousOperation,
+            ...serverOperation,
+            local: true,
+            controller: previousOperation.controller,
+            canceled: previousOperation.canceled,
+          }
+          : { ...serverOperation, local: false };
+        next.set(this.operationKey(nextOperation), nextOperation);
       }
-      if (!operation?.busy && canceled?.size) {
-        this.canceledChatOperationIds.delete(workspaceId);
+      for (const [key, previousOperation] of previous) {
+        if (previousOperation.local && !next.has(key)) next.set(key, previousOperation);
       }
-      const next = operation?.busy ? { ...operation, local: false } : null;
-      const unchanged = Boolean(previous) === Boolean(next)
-        && (!next || (
-          previous.kind === next.kind
-          && previous.label === next.label
-          && previous.started_at === next.started_at
-          && previous.operation_id === next.operation_id
-          && previous.message_id === next.message_id
-          && previous.stage === next.stage
-          && previous.stage_label === next.stage_label
-          && previous.first_output_seconds === next.first_output_seconds
-          && previous.output_characters === next.output_characters
-          && previous.request_body_bytes === next.request_body_bytes
-        ));
-      if (next) void this.startChatPreviewStream(workspaceId, next);
-      else this.stopChatPreviewStream(workspaceId);
-      if (unchanged) return false;
-      if (operation?.busy) {
-        this.chatOperations.set(workspaceId, next);
-      } else {
-        this.chatOperations.delete(workspaceId);
+      if (canceled?.size) {
+        const serverIds = new Set(
+          rawOperations.flatMap((item) => [item?.operation_id, item?.message_id])
+            .filter(Boolean)
+            .map((id) => String(id).toLowerCase()),
+        );
+        for (const id of canceled) {
+          if (!serverIds.has(id)) canceled.delete(id);
+        }
+        if (!canceled.size) this.canceledChatOperationIds.delete(workspaceId);
       }
-      return true;
+      const signature = (items) => JSON.stringify([...items.entries()].map(([key, item]) => [
+        key,
+        item.kind,
+        item.label,
+        item.started_at,
+        item.operation_id,
+        item.message_id,
+        item.stage,
+        item.stage_label,
+        item.first_output_seconds,
+        item.output_characters,
+        item.request_body_bytes,
+      ]));
+      const changed = signature(previous) !== signature(next);
+      if (next.size) this.chatOperations.set(workspaceId, next);
+      else this.chatOperations.delete(workspaceId);
+      for (const nextOperation of next.values()) void this.startChatPreviewStream(workspaceId, nextOperation);
+      for (const [key, previousOperation] of previous) {
+        if (!next.has(key)) this.stopChatPreviewStream(workspaceId, this.operationKey(previousOperation));
+      }
+      return changed;
     },
 
     workspaceHasActiveJob(workspaceId = this.activeWorkspace?.id) {
       if (!workspaceId) return false;
-      return this.workspaceJobs.has(workspaceId)
+      return Boolean(this.workspaceJobMap(workspaceId)?.size)
         || (
           workspaceId === this.activeWorkspace?.id
           && this.jobs.some((job) => !TERMINAL.has(job.status))
@@ -729,46 +825,32 @@
     updateInteractionState() {
       this.renderCanvasConflict();
       const noWorkspace = !this.activeWorkspace;
-      const generationBusy = this.workspaceHasActiveJob();
-      const operation = this.chatOperations.get(this.activeWorkspace?.id);
-      const chatBusy = Boolean(operation);
-      const cancelPending = !operation && Boolean(
-        this.canceledChatOperationIds.get(this.activeWorkspace?.id)?.size,
-      );
-      const messageSending = this.chatOperationAwaitingMessageAcceptance(operation);
-      const generationSubmission = this.generationSubmissions.get(this.activeWorkspace?.id);
-      const submissionBusy = Boolean(generationSubmission);
+      const submissionCount = this.generationSubmissionList().length;
+      const submissionBusy = submissionCount > 0;
       const canvasConflictPending = Boolean(
         this.canvasConflict && !this.canvasConflict.resolution,
       );
-      const locked = noWorkspace || generationBusy || chatBusy || submissionBusy;
+      const generationLocked = noWorkspace;
       const referenceUploading = this.referenceUploadPending;
       const hasModel = Boolean(this.el.chatModelSelect.value);
-      setDisabled(this.el.chatInput, locked);
-      const chatCanCancel = chatBusy && !generationBusy && !submissionBusy;
+      this.el.generateButton.classList.toggle("loading", submissionBusy);
+      setDisabled(this.el.chatInput, noWorkspace);
       setDisabled(
         this.el.chatSendButton,
-        noWorkspace || generationBusy || submissionBusy
-          || referenceUploading || cancelPending || (!chatCanCancel && !hasModel),
+        noWorkspace || referenceUploading || !hasModel,
       );
-      this.el.chatSendButton.type = chatCanCancel ? "button" : "submit";
-      this.setActionIcon(
-        this.el.chatSendButton,
-        chatCanCancel ? "square" : "arrow-up",
-        chatCanCancel ? "cancel" : "send",
-      );
-      const sendTitle = chatCanCancel
-        ? (messageSending ? "取消发送" : "取消等待")
-        : referenceUploading ? "等待图片上传完成" : "发送消息";
+      this.el.chatSendButton.type = "submit";
+      this.setActionIcon(this.el.chatSendButton, "arrow-up", "send");
+      const sendTitle = referenceUploading ? "等待图片上传完成" : "发送消息";
       setAttribute(this.el.chatSendButton, "title", sendTitle);
       setAttribute(this.el.chatSendButton, "aria-label", sendTitle);
-      setDisabled(this.el.chatModelSelect, locked || !hasModel);
-      setDisabled(this.el.creativeDirectionSelect, locked);
-      setDisabled(this.el.galleryCategorySelect, locked);
-      setDisabled(this.el.translatePrompt, locked);
-      setDisabled(this.el.chatReferenceButton, locked || referenceUploading);
-      setDisabled(this.el.directGenerationButton, locked || referenceUploading);
-      setDisabled(this.el.generationStrategy, locked || referenceUploading);
+      setDisabled(this.el.chatModelSelect, noWorkspace || !hasModel);
+      setDisabled(this.el.creativeDirectionSelect, noWorkspace);
+      setDisabled(this.el.galleryCategorySelect, noWorkspace);
+      setDisabled(this.el.translatePrompt, noWorkspace);
+      setDisabled(this.el.chatReferenceButton, noWorkspace || referenceUploading);
+      setDisabled(this.el.directGenerationButton, generationLocked || referenceUploading);
+      setDisabled(this.el.generationStrategy, generationLocked || referenceUploading);
       const promptReviewed = Boolean(this.currentPromptDraft());
       this.el.promptReviewStatus.classList.toggle("is-reviewed", promptReviewed);
       setText(
@@ -777,76 +859,65 @@
       );
       setDisabled(
         this.el.generateButton,
-        submissionBusy
-          ? false
-          : locked || referenceUploading || !this.currentChannel() || canvasConflictPending,
+        generationLocked || referenceUploading || !this.currentChannel() || canvasConflictPending,
       );
-      this.setActionIcon(
-        this.el.generateButton,
-        submissionBusy ? "square" : "sparkles",
-        submissionBusy ? "cancel" : "generate",
-      );
-      setText(this.el.generateButtonLabel, submissionBusy ? "取消生成" : "开始生成");
+      this.setActionIcon(this.el.generateButton, "sparkles", "generate");
+      setText(this.el.generateButtonLabel, "开始生成");
       setDisabled(
         this.el.canvasConflictApply,
-        locked
+        generationLocked
           || !this.canvasConflict
           || !this.canvasRequestTargetSize(this.canvasConflict.request)
           || this.canvasConflict.resolution === "conversation",
       );
       setDisabled(
         this.el.canvasConflictKeep,
-        locked || !this.canvasConflict || this.canvasConflict.resolution === "panel",
+        generationLocked || !this.canvasConflict || this.canvasConflict.resolution === "panel",
       );
-      const generateTitle = submissionBusy ? "取消生成" : "";
+      const generateTitle = submissionBusy ? `已有 ${submissionCount} 笔正在提交` : "";
       setAttribute(this.el.generateButton, "title", generateTitle);
-      setDisabled(this.el.generationBackButton, submissionBusy);
+      setDisabled(this.el.generationBackButton, noWorkspace);
       setDisabled(
         this.el.referenceAdd,
         referenceUploading
           || (this.activeWorkspace?.assets.length || 0) >= this.limits.max_assets_per_workspace,
       );
       setDisabled(this.el.referenceLibrary, referenceUploading);
-      setDisabled(this.el.clearWorkspaceButton, locked || referenceUploading);
+      setDisabled(
+        this.el.clearWorkspaceButton,
+        this.workspaceHasActiveJob()
+          || this.workspaceHasActiveConversationOperation()
+          || this.workspaceHasGenerationSubmission()
+          || generationLocked
+          || referenceUploading,
+      );
       setDisabled(this.el.libraryButton, noWorkspace);
       this.el.workspaceList.querySelectorAll("[data-delete-workspace]").forEach((button) => {
         const workspaceId = button.dataset.deleteWorkspace;
         const activeLocked = workspaceId === this.activeWorkspace?.id
-          && (locked || referenceUploading);
-        setDisabled(button, this.chatOperations.has(workspaceId) || activeLocked);
+          && (generationLocked || referenceUploading);
+        setDisabled(
+          button,
+          this.workspaceHasActiveConversationOperation(workspaceId)
+            || this.workspaceHasActiveJob(workspaceId)
+            || this.workspaceHasGenerationSubmission(workspaceId)
+            || activeLocked,
+        );
       });
       this.el.messageList.querySelectorAll(
         "[data-retry-message], [data-retry-send], [data-resend-message]",
       ).forEach((button) => {
-        setDisabled(button, locked || referenceUploading || !hasModel);
+        setDisabled(button, noWorkspace || referenceUploading || !hasModel);
       });
       this.el.messageList.querySelectorAll("[data-cancel-chat]").forEach((button) => {
         const buttonWorkspace = button.dataset.cancelWorkspace || this.activeWorkspace?.id;
         const buttonOperation = button.dataset.cancelOperation;
-        const activeOperation = this.chatOperations.get(buttonWorkspace);
-        const activeOperationIds = [
-          activeOperation?.operation_id,
-          activeOperation?.message_id,
-        ].filter(Boolean);
-        setDisabled(
-          button,
-          !activeOperation && !buttonOperation
-            || Boolean(activeOperation && buttonOperation
-              && !activeOperationIds.includes(buttonOperation)),
-        );
+        setDisabled(button, !this.chatOperationForId(buttonWorkspace, buttonOperation));
       });
       this.el.messageList.querySelectorAll("[data-use-prompt-draft]").forEach((button) => {
-        setDisabled(button, locked);
+        setDisabled(button, noWorkspace);
       });
-      const placeholder = noWorkspace ? "暂无工作站"
-        : generationBusy
-        ? "当前生成完成前不能继续对话，可在生成记录中取消任务"
-        : submissionBusy ? "正在提交生成，可立即取消"
-        : cancelPending ? "正在结束上一条请求，请稍候"
-        : chatBusy ? messageSending
-          ? "正在发送消息，等待服务端确认"
-          : `${operation.label}，可切换到其他工作站继续`
-        : "描述你想生成的画面...";
+      const placeholder = noWorkspace ? "暂无工作站" : "描述你想生成的画面...";
       if (this.el.chatInput.placeholder !== placeholder) this.el.chatInput.placeholder = placeholder;
     },
 
@@ -874,7 +945,6 @@
     },
 
     toggleChatReferences() {
-      if (this.workspaceChatBusy() || this.workspaceHasActiveJob()) return;
       this.chatReferencePickerOpen = !this.chatReferencePickerOpen;
       this.renderChatReferences();
     },
@@ -887,8 +957,6 @@
 
     chatCanAcceptImages() {
       return Boolean(this.activeWorkspace)
-        && !this.workspaceChatBusy()
-        && !this.workspaceHasActiveJob()
         && !this.referenceUploadPending;
     },
 

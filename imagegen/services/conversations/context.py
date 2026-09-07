@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import selectinload
 
 from ...config.chat_models import ChatModelRegistry
@@ -92,10 +94,7 @@ class ConversationContextManager:
     ) -> list[dict[str, Any]]:
         pending_message, pending_image_hashes = self._normalize_pending_message(pending_message)
         events = self._load_events(workspace, self._load_messages(workspace))
-        state = db.session.get(ConversationState, workspace.id)
-        if state is None:
-            state = ConversationState(workspace_id=workspace.id, summary="")
-            db.session.add(state)
+        state = self._ensure_state(workspace.id)
 
         # Summaries were used by the previous context policy. Restore the bounded
         # history and let the deterministic packer truncate it.
@@ -124,6 +123,38 @@ class ConversationContextManager:
         )
         state.estimated_context_tokens = system_tokens + self._message_tokens(messages)
         return messages
+
+    @staticmethod
+    def _ensure_state(workspace_id: str) -> ConversationState:
+        state = db.session.get(ConversationState, workspace_id)
+        if state is not None:
+            return state
+
+        values = {
+            "workspace_id": workspace_id,
+            "summary": "",
+            "summary_through_message_id": "",
+            "estimated_context_tokens": 0,
+        }
+        dialect = db.session.get_bind().dialect.name
+        if dialect == "postgresql":
+            statement = postgresql_insert(ConversationState).values(values)
+        elif dialect == "sqlite":
+            statement = sqlite_insert(ConversationState).values(values)
+        else:
+            state = ConversationState(**values)
+            db.session.add(state)
+            db.session.flush()
+            return state
+        db.session.execute(
+            statement.on_conflict_do_nothing(
+                index_elements=[ConversationState.workspace_id],
+            )
+        )
+        state = db.session.get(ConversationState, workspace_id)
+        if state is None:  # pragma: no cover - the insert and read share a transaction
+            raise RuntimeError("无法创建对话状态")
+        return state
 
     def _normalize_pending_message(
         self,

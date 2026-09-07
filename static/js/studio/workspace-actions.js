@@ -67,7 +67,8 @@
         UI.toast("请先等待图片上传完成或取消上传", "error");
         return;
       }
-      if (this.workspaceHasActiveJob() || this.workspaceChatBusy(id)) {
+      if (this.workspaceHasActiveJob() || this.workspaceChatBusy(id)
+        || this.workspaceHasGenerationSubmission(id)) {
         UI.toast("请等待当前任务完成后再删除工作站", "error");
         return;
       }
@@ -93,9 +94,9 @@
         this.chatReferenceSelections.delete(workspaceId);
         this.clarificationReplies.delete(workspaceId);
         this.chatDrafts.delete(workspaceId);
+        this.stopChatPreviewStream(workspaceId);
         this.chatOperations.delete(workspaceId);
         this.canceledChatOperationIds.delete(workspaceId);
-        this.cancelGenerationSubmission?.(workspaceId);
         this.workspaceJobs.delete(workspaceId);
         this.clearOutgoingMessages(workspaceId);
         this.workspaces.splice(index, 1);
@@ -114,7 +115,9 @@
 
     requestClearWorkspace() {
       if (!this.activeWorkspace || this.workspaceHasActiveJob()
-        || this.workspaceChatBusy() || this.referenceUploadPending) {
+        || this.workspaceChatBusy()
+        || this.workspaceHasGenerationSubmission()
+        || this.referenceUploadPending) {
         UI.toast("当前任务完成前不能清空会话", "error");
         return;
       }
@@ -126,7 +129,8 @@
       event.preventDefault();
       const workspace = this.activeWorkspace;
       if (!workspace || this.workspaceHasActiveJob()
-        || this.workspaceChatBusy() || this.referenceUploadPending) {
+        || this.workspaceChatBusy() || this.workspaceHasGenerationSubmission(workspace.id)
+        || this.referenceUploadPending) {
         UI.closeDialog(this.el.workspaceClearDialog);
         UI.toast("当前任务完成前不能清空会话", "error");
         return;
@@ -145,6 +149,8 @@
         this.chatReferenceSelections.set(workspace.id, new Set());
         this.clarificationReplies.delete(workspace.id);
         this.chatDrafts.set(workspace.id, "");
+        this.stopChatPreviewStream(workspace.id);
+        this.chatOperations.delete(workspace.id);
         this.canceledChatOperationIds.delete(workspace.id);
         this.clearOutgoingMessages(workspace.id);
         this.chatReferencePickerOpen = false;

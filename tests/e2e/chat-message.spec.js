@@ -96,10 +96,7 @@ test("chat waits for message persistence and resends stored messages with new ID
 
   await expect(page.locator("#chatModelSelect")).toHaveValue("e2e-chat");
   await page.locator("#chatInput").fill(content);
-  await page.locator("#chatForm").evaluate((form) => {
-    form.requestSubmit();
-    form.requestSubmit();
-  });
+  await page.locator("#chatForm").evaluate((form) => form.requestSubmit());
 
   await expect.poll(() => requests.length).toBe(1);
   const userId = requests[0].message_id;
@@ -126,7 +123,7 @@ test("chat waits for message persistence and resends stored messages with new ID
   await expect(sendingActions.getByRole("button", { name: "取消发送" })).toBeVisible();
   await expect(sendingActions.getByRole("button", { name: "复制消息" })).toBeVisible();
   await expect(page.locator(".message-row.assistant.pending")).toHaveCount(0);
-  await expect(page.locator("#chatSendButton")).toHaveAttribute("aria-label", "取消发送");
+  await expect(page.locator("#chatSendButton")).toHaveAttribute("aria-label", "发送消息");
   await expect(workspaceMeta).toHaveText("正在发送消息");
 
   acceptedMessageId = userId;
@@ -134,9 +131,9 @@ test("chat waits for message persistence and resends stored messages with new ID
   await expect(userRow).toContainText("已发送");
   await expect(page.locator(".message-row.assistant.pending"))
     .toContainText("正在确认需求并整理最终提示词");
-  await expect(page.locator("#chatSendButton")).toHaveAttribute("aria-label", "取消等待");
+  await expect(page.locator("#chatSendButton")).toHaveAttribute("aria-label", "发送消息");
   await expect(workspaceMeta).toHaveText("正在确认需求并整理最终提示词");
-  await expect(userRow.getByRole("button", { name: "重新发送" })).toBeDisabled();
+  await expect(userRow.getByRole("button", { name: "重新发送" })).toBeEnabled();
   await expect(page.locator(".message-row.user", { hasText: content })).toHaveCount(1);
 
   releaseReply();
@@ -223,6 +220,137 @@ test("server chat operation does not show an assistant before its message is sto
   await expect(page.locator("#workspaceList .workspace-item.active .workspace-meta"))
     .not.toHaveText("正在发送消息");
   await expect(page.locator(".message-row.assistant")).toHaveCount(0);
+});
+
+test("multiple chat operations keep independent previews and cancellation", async ({ page }) => {
+  const firstOperationId = "4".repeat(32);
+  const secondOperationId = "5".repeat(32);
+  const firstMessageId = "6".repeat(32);
+  const secondMessageId = "7".repeat(32);
+  const sentAt = new Date().toISOString();
+  const context = {
+    compacted: false,
+    estimated_context_tokens: 0,
+    max_context_tokens: 32000,
+  };
+  const canceled = new Set();
+  const cancelRequests = [];
+  const submitted = [];
+
+  const operation = (operationId, messageId, label, offset) => ({
+    busy: true,
+    kind: "reply",
+    label,
+    stage: "output",
+    stage_label: label,
+    operation_id: operationId,
+    message_id: messageId,
+    started_at: new Date(Date.now() + offset).toISOString(),
+  });
+  const activeOperations = () => [
+    operation(firstOperationId, firstMessageId, "第一条请求正在输出", 0),
+    operation(secondOperationId, secondMessageId, "第二条请求正在输出", 1),
+  ].filter((item) => !canceled.has(item.operation_id));
+  const storedMessages = [firstMessageId, secondMessageId].map((id, index) => ({
+    id,
+    role: "user",
+    kind: "message",
+    content: `并发消息 ${index + 1}`,
+    payload: {},
+    created_at: sentAt,
+    attachments: [],
+  }));
+
+  await mockConfiguredChatModel(page);
+  await page.unroute("**/api/workspaces/*/operations/*/events");
+  await page.route("**/api/workspaces/*/operations/*/events", async (route) => {
+    const operationId = new URL(route.request().url()).pathname.split("/").at(-2);
+    const preview = operationId === firstOperationId ? "第一条独立预览"
+      : operationId === secondOperationId ? "第二条独立预览" : "";
+    await route.fulfill({
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+      body: preview
+        ? `event: preview\ndata: ${JSON.stringify({ text: preview })}\n\nevent: close\ndata: {}\n\n`
+        : "event: close\ndata: {}\n\n",
+    });
+  });
+  await page.route("**/api/workspaces/*/operations/*/cancel", async (route) => {
+    const operationId = new URL(route.request().url()).pathname.split("/").at(-2);
+    cancelRequests.push(operationId);
+    canceled.add(operationId);
+    await route.fulfill({ json: { canceled: true, operation_id: operationId } });
+  });
+  await page.route("**/api/workspaces/*/messages*", async (route) => {
+    if (route.request().method() === "POST") {
+      const body = route.request().postDataJSON();
+      submitted.push(body);
+      const assistantId = "8".repeat(31) + submitted.length;
+      await route.fulfill({
+        status: 201,
+        json: {
+          messages: [
+            {
+              id: body.message_id,
+              role: "user",
+              kind: "message",
+              content: body.content,
+              payload: { reply_message_id: assistantId },
+              created_at: new Date().toISOString(),
+              attachments: [],
+            },
+            {
+              id: assistantId,
+              role: "assistant",
+              kind: "message",
+              content: "第三条请求已接收",
+              payload: { reply_to_message_id: body.message_id },
+              created_at: new Date().toISOString(),
+              attachments: [],
+            },
+          ],
+          context,
+        },
+      });
+      return;
+    }
+    const operations = activeOperations();
+    await route.fulfill({
+      json: {
+        messages: storedMessages,
+        total: storedMessages.length,
+        has_more: false,
+        context,
+        conversation_operation: {
+          busy: operations.length > 0,
+          operations,
+        },
+      },
+    });
+  });
+
+  await loginAsAdmin(page);
+
+  const firstRow = page.locator(`[data-operation-id="${firstOperationId}"]`);
+  const secondRow = page.locator(`[data-operation-id="${secondOperationId}"]`);
+  await expect(firstRow.locator(".message-stream-text")).toHaveText("第一条独立预览");
+  await expect(secondRow.locator(".message-stream-text")).toHaveText("第二条独立预览");
+  await expect(page.locator(".message-row.assistant.pending")).toHaveCount(2);
+  await expect(page.locator("#workspaceList .workspace-item.active .workspace-meta"))
+    .toContainText("2 个对话请求");
+  await expect(page.locator("#chatInput")).toBeEditable();
+  await expect(page.locator("#chatSendButton")).toHaveAttribute("aria-label", "发送消息");
+
+  await firstRow.getByRole("button", { name: "取消等待" }).click();
+  await expect.poll(() => cancelRequests).toEqual([firstOperationId]);
+  await expect(firstRow).toHaveCount(0);
+  await expect(secondRow).toBeVisible();
+
+  await page.locator("#chatInput").fill("第三条并发消息");
+  await page.locator("#chatForm").evaluate((form) => form.requestSubmit());
+  await expect.poll(() => submitted.length).toBe(1);
+  expect(submitted[0].content).toBe("第三条并发消息");
+  await expect(secondRow).toBeVisible();
 });
 
 test("chat displays each server preview immediately before the final response", {

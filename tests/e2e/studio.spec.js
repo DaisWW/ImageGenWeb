@@ -63,21 +63,30 @@ test("stale chat progress cannot replace the active operation", async ({
       stage: "output",
       controller: new AbortController(),
     };
-    const state = { chatOperations: new Map([["workspace", operation]]) };
-    const changed = window.ImageGenStudio.StudioApp.prototype.syncServerChatOperation.call(
-      state,
-      "workspace",
+    const state = Object.assign(
+      Object.create(window.ImageGenStudio.StudioApp.prototype),
       {
+        chatOperations: new Map([[
+          "workspace",
+          new Map([[operation.operation_id, operation]]),
+        ]]),
+        chatPreviews: new Map(),
+        canceledChatOperationIds: new Map(),
+        startChatPreviewStream: () => {},
+        stopChatPreviewStream: () => {},
+      },
+    );
+    const changed = state.syncServerChatOperation("workspace", {
         busy: true,
         operation_id: "old-operation",
         message_id: "same-message",
         stage: "reasoning",
-      },
-    );
+      });
+    const active = state.chatOperations.get("workspace").get("new-operation");
     return {
       changed,
-      stage: state.chatOperations.get("workspace").stage,
-      operationId: state.chatOperations.get("workspace").operation_id,
+      stage: active.stage,
+      operationId: active.operation_id,
     };
   });
 
@@ -315,7 +324,7 @@ test("switching workspaces stays interactive and pending chat remains cancelable
   await deleteWorkspace(page, name);
 });
 
-test("switching to a known active workspace stays locked while history loads", async ({
+test("switching to a known active workspace keeps chat editable while history loads", async ({
   studioPage: page,
 }) => {
   const initial = page.locator("#workspaceList .workspace-item.active");
@@ -351,7 +360,7 @@ test("switching to a known active workspace stays locked while history loads", a
     const target = page.locator(`[data-workspace-id="${initialId}"]`);
     await expect(target.locator(".workspace-meta")).toContainText("生成中 35%");
     await target.locator("[data-select-workspace]").click();
-    await expect(page.locator("#chatInput")).toBeDisabled({ timeout: 1000 });
+    await expect(page.locator("#chatInput")).toBeEditable({ timeout: 1000 });
   } finally {
     history.resolve();
   }
@@ -538,41 +547,100 @@ test("open generation composer does not block workspace switching", {
   await deleteWorkspace(page, workspaceName);
 });
 
-test("workspace switching cancels a stalled generation submission", {
+test("generation submissions queue independently across workspace switching", {
   tag: "@responsive",
 }, async ({ studioPage: page }, testInfo) => {
   await mockConfiguredImageChannel(page);
   await page.reload();
   const workspaceName = `E2E-Stalled-${testInfo.project.name}-${Date.now()}`;
   await createWorkspace(page, workspaceName);
+  const workspace = page.locator("#workspaceList .workspace-item.active");
+  const workspaceId = await workspace.getAttribute("data-workspace-id");
   const target = page.locator("#workspaceList .workspace-item:not(.active)").first();
   const targetName = await target.locator(".workspace-copy strong").textContent();
-  const runtimeSettings = deferred();
+  const generationResponses = deferred();
+  const requests = [];
 
-  await page.route("**/api/runtime-settings", async (route) => {
-    await runtimeSettings.promise;
-    await route.abort();
+  await page.route("**/api/generations", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    const body = route.request().postDataJSON();
+    const index = requests.push(body);
+    await generationResponses.promise;
+    await route.fulfill({
+      status: 202,
+      json: {
+        job: {
+          id: `e2e-submission-${index}`,
+          workspace_id: body.workspace_id,
+          status: "canceled",
+          progress_percent: 0,
+          queue_position: null,
+          queue_total: 0,
+          estimated_end_at: null,
+          is_over_estimate: false,
+          kind: "image",
+          channel_id: body.channel_id,
+          channel: "E2E 渠道",
+          mode: body.mode,
+          prompt: body.prompt,
+          model: body.model,
+          size: body.size,
+          quality: "high",
+          output_format: body.output_format,
+          compression: body.compression,
+          requested_count: body.batch_count,
+          price_per_image_rmb: "0.0300",
+          reserved_amount_rmb: "0.0000",
+          charged_amount_rmb: "0.0000",
+          created_at: new Date().toISOString(),
+          started_at: null,
+          finished_at: new Date().toISOString(),
+          error_message: "",
+          items: [],
+        },
+      },
+    });
   });
 
   try {
     await page.locator("#directGenerationButton").click();
     await expect(page.locator("#generationForm")).toBeVisible();
-    await page.locator("#promptInput").fill("卡住请求时仍可切换工作站");
+    await page.locator("#promptInput").fill("同一工作站连续提交两笔生成");
     await page.locator("#generateButton").click();
-    await expect(page.locator("#generateButtonLabel")).toHaveText("取消生成");
+    await page.locator("#generateButton").click();
+    await expect(page.locator("#generateButtonLabel")).toHaveText("开始生成");
+    await expect(page.locator("#generateButton")).toBeEnabled();
+    await expect(page.locator("#generateButton")).toHaveAttribute(
+      "title",
+      "已有 2 笔正在提交",
+    );
+    await expect.poll(() => requests.length).toBe(2);
+    expect(requests.map((body) => body.workspace_id)).toEqual([workspaceId, workspaceId]);
+    expect(requests.map((body) => body.prompt)).toEqual([
+      "同一工作站连续提交两笔生成",
+      "同一工作站连续提交两笔生成",
+    ]);
+    expect(requests[0].operation_id).not.toBe(requests[1].operation_id);
     await target.locator("[data-select-workspace]").click();
     await expect(page.locator("#workspaceTitle")).toHaveText(targetName);
     await expect(page.locator("#generationForm")).toBeHidden();
+    await expect(page.locator("#workspaceList .workspace-item", { hasText: workspaceName })
+      .locator("[data-delete-workspace]")).toBeDisabled();
   } finally {
-    runtimeSettings.resolve();
+    generationResponses.resolve();
   }
 
+  await expect(page.locator("#workspaceList .workspace-item", { hasText: workspaceName })
+    .locator("[data-delete-workspace]")).toBeEnabled();
   await page.locator("#workspaceList .workspace-item", { hasText: workspaceName })
     .locator("[data-select-workspace]").click();
   await deleteWorkspace(page, workspaceName);
 });
 
-test("active generation locks prompt reuse and cancellation unlocks immediately", {
+test("active generation permits prompt reuse and cancellation remains available", {
   tag: "@responsive",
 }, async ({ studioPage: page }) => {
   const workspace = page.locator("#workspaceList .workspace-item.active");
@@ -669,12 +737,8 @@ test("active generation locks prompt reuse and cancellation unlocks immediately"
 
   await page.reload();
   const reusePrompt = page.locator("[data-use-prompt-draft]");
-  await expect(reusePrompt).toBeDisabled();
-
-  await reusePrompt.evaluate((button) => {
-    button.disabled = false;
-    button.click();
-  });
+  await expect(reusePrompt).toBeEnabled();
+  await reusePrompt.click();
   await expect(page.locator("#generationForm")).toBeVisible();
   if (page.viewportSize().width >= 640) {
     await expect(page.locator("#generationBackButton")).toBeHidden();

@@ -121,8 +121,7 @@
         await this.saveLibrarySource({ asset_id: save.dataset.saveLibraryAsset }, save);
         return;
       }
-      if (this.workspaceChatBusy() || this.workspaceHasActiveJob()
-        || this.referenceUploadPending) return;
+      if (this.referenceUploadPending) return;
       const library = event.target.closest("[data-open-library]");
       if (library) {
         this.openLibrary("chat");

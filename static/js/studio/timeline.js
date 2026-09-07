@@ -116,38 +116,43 @@
             id: message.id,
             value: message,
           })),
-      ].sort((left, right) => {
+      ];
+      this.chatOperationList(workspaceId)
+        .filter((operation) => ["reply", "prompt_draft"].includes(operation.kind))
+        .sort((left, right) => String(left.started_at || "").localeCompare(String(right.started_at || "")))
+        .forEach((operation) => {
+          const preview = this.chatPreviewForOperation(workspaceId, operation);
+          if (this.chatOperationAwaitingMessageAcceptance(operation, workspaceId)
+            || this.chatOperationHasReply(operation)) return;
+          const operationId = this.operationKey(operation);
+          timeline.push({
+            type: "message",
+            createdAt: operation.started_at || null,
+            id: `pending-assistant-${workspaceId}-${operationId}`,
+            value: {
+              role: "assistant",
+              kind: "pending",
+              content: operation.stage_label || operation.label,
+              stage: operation.stage || "preparing",
+              stage_label: operation.stage_label || operation.label,
+              elapsed_seconds: operation.elapsed_seconds,
+              first_output_seconds: operation.first_output_seconds,
+              output_characters: operation.output_characters,
+              request_body_bytes: operation.request_body_bytes,
+              preview_active: Boolean(preview?.targetText),
+              preview_text: preview?.displayedText || "",
+              created_at: operation.started_at || null,
+              provider_label: operation.provider_label
+                || this.el.chatModelSelect.selectedOptions[0]?.textContent || "",
+              workspace_id: workspaceId,
+              operation_id: operationId,
+            },
+          });
+        });
+      timeline.sort((left, right) => {
         const time = new Date(left.createdAt || 0).getTime() - new Date(right.createdAt || 0).getTime();
         return time || String(left.id).localeCompare(String(right.id));
       });
-      const operation = this.chatOperations.get(workspaceId);
-      const preview = this.chatPreviewForOperation(workspaceId, operation);
-      if (operation
-        && !this.chatOperationAwaitingMessageAcceptance(operation)
-        && !this.chatOperationHasReply(operation)) {
-        timeline.push({
-          type: "message",
-          createdAt: null,
-          id: `pending-assistant-${workspaceId}`,
-          value: {
-            role: "assistant",
-            kind: "pending",
-            content: operation.stage_label || operation.label,
-            stage: operation.stage || "preparing",
-            stage_label: operation.stage_label || operation.label,
-            elapsed_seconds: operation.elapsed_seconds,
-            first_output_seconds: operation.first_output_seconds,
-            output_characters: operation.output_characters,
-            request_body_bytes: operation.request_body_bytes,
-            preview_active: Boolean(preview?.targetText),
-            preview_text: preview?.displayedText || "",
-            created_at: operation.started_at || null,
-            provider_label: this.el.chatModelSelect.selectedOptions[0]?.textContent || "",
-            workspace_id: workspaceId,
-            operation_id: operation.operation_id || operation.message_id || "",
-          },
-        });
-      }
       const timelineChanged = this.reconcileTimeline(timeline);
       setHidden(this.el.conversationEmpty, timeline.length > 0);
       this.renderContextStatus();
@@ -316,6 +321,7 @@
       row.dataset.messageState = this.messageRenderState(message);
       if (message.id) row.dataset.messageId = message.id;
       if (message.workspace_id) row.dataset.workspaceId = message.workspace_id;
+      if (message.operation_id) row.dataset.operationId = message.operation_id;
 
       const avatar = document.createElement("span");
       avatar.className = "message-avatar";
@@ -601,10 +607,12 @@
     },
 
     updateChatOperationDisplays() {
-      const operations = this.chatOperations;
       this.el.messageList.querySelectorAll("[data-pending-progress]").forEach((node) => {
-        const workspaceId = node.closest(".message-row")?.dataset.workspaceId;
-        const operation = workspaceId ? operations.get(workspaceId) : null;
+        const row = node.closest(".message-row");
+        const workspaceId = row?.dataset.workspaceId;
+        const operation = workspaceId
+          ? this.chatOperationForId(workspaceId, row.dataset.operationId)
+          : null;
         if (operation) this.updatePendingOperation(node, operation);
       });
     },

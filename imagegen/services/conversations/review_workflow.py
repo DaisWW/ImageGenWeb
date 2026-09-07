@@ -128,7 +128,9 @@ class ImageReviewWorkflow(ConversationSupport):
                 max_output_tokens=min(model.max_output_tokens, 1800),
                 operation=operation,
             )
+            operation.ensure_active()
         except OpenAIChatError as exc:
+            operation.ensure_active()
             self._raise_chat_error(
                 workspace,
                 getattr(exc, "chat_model", model),

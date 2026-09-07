@@ -14,6 +14,61 @@
   } = window.ImageGenStudio;
 
   Object.assign(StudioApp.prototype, {
+    generationSubmissionMap(workspaceId, create = false) {
+      if (!workspaceId) return null;
+      let submissions = this.generationSubmissions.get(workspaceId);
+      if (!submissions && create) {
+        submissions = new Map();
+        this.generationSubmissions.set(workspaceId, submissions);
+      }
+      return submissions || null;
+    },
+
+    generationSubmissionList(workspaceId = this.activeWorkspace?.id) {
+      return [...(this.generationSubmissionMap(workspaceId)?.values() || [])];
+    },
+
+    workspaceHasGenerationSubmission(workspaceId = this.activeWorkspace?.id) {
+      return Boolean(this.generationSubmissionMap(workspaceId)?.size);
+    },
+
+    removeGenerationSubmission(workspaceId, operationId) {
+      const submissions = this.generationSubmissionMap(workspaceId);
+      if (!submissions) return;
+      submissions.delete(operationId);
+      if (!submissions.size) this.generationSubmissions.delete(workspaceId);
+    },
+
+    workspaceJobMap(workspaceId, create = false) {
+      if (!workspaceId) return null;
+      let jobs = this.workspaceJobs.get(workspaceId);
+      if (!jobs && create) {
+        jobs = new Map();
+        this.workspaceJobs.set(workspaceId, jobs);
+      }
+      return jobs || null;
+    },
+
+    workspaceJobList(workspaceId = this.activeWorkspace?.id) {
+      return [...(this.workspaceJobMap(workspaceId) || new Map()).values()];
+    },
+
+    setWorkspaceJob(job) {
+      if (!job?.workspace_id || !job?.id) return;
+      if (TERMINAL.has(job.status)) {
+        this.removeWorkspaceJob(job.workspace_id, job.id);
+        return;
+      }
+      this.workspaceJobMap(job.workspace_id, true).set(String(job.id), job);
+    },
+
+    removeWorkspaceJob(workspaceId, jobId) {
+      const jobs = this.workspaceJobMap(workspaceId);
+      if (!jobs) return;
+      jobs.delete(String(jobId));
+      if (!jobs.size) this.workspaceJobs.delete(workspaceId);
+    },
+
     updatePrice() {
       const count = this.generationCount();
       const unit = "张";
@@ -48,107 +103,81 @@
         return;
       }
       const workspace = this.activeWorkspace;
-      const activeSubmission = this.generationSubmissions.get(workspace.id);
-      if (activeSubmission) {
-        this.cancelGenerationSubmission(workspace.id);
-        return;
-      }
       if (this.referenceUploadPending) {
         UI.toast("请等待图片上传完成或取消上传", "info");
         return;
       }
-      if (this.workspaceChatBusy()) {
-        UI.toast("请等待当前 AI 回复完成后再开始生成", "error");
+      if (!this.currentChannel()) {
+        UI.toast("暂无可用渠道", "error");
         return;
       }
-      const button = this.el.generateButton;
-      if (button.classList.contains("loading")) return;
-      const controller = new AbortController();
-      const operation = {
-        controller,
-        canceled: false,
-        postStarted: false,
-        operation_id: this.newMessageId(),
+      if (!this.validateSizeInput(true)) return;
+      const selection = this.currentSelection(workspace.id);
+      this.ensureSeriesAnchorSelection(selection);
+      const omitted = this.trimReferenceSelection(selection, this.generationReferenceLimit());
+      if (omitted) {
+        this.renderReferences();
+        UI.toast(`渠道垫图上限已更新，已取消 ${omitted} 张超限图片`, "info");
+      }
+      const referenceIds = [...selection];
+      const reviewedDraft = this.currentPromptDraft();
+      const settings = {
+        ...this.collectSettings(),
+        series_anchor: { ...(workspace.settings?.series_anchor || {}) },
+        reference_ids: [...referenceIds],
       };
-      this.generationSubmissions.set(workspace.id, operation);
-      button.disabled = true;
-      button.classList.add("loading");
+      if (["explore", "series"].includes(settings.generation_strategy) && !reviewedDraft) {
+        UI.toast(
+          settings.generation_strategy === "series"
+            ? "系列延续需要先使用 AI 整理当前需求"
+            : "探索方案需要先使用 AI 整理最终提示词",
+          "error",
+        );
+        return;
+      }
+      if (settings.generation_strategy === "series"
+        && !workspace.settings?.series_anchor?.asset_id) {
+        UI.toast("请先选择一张生成结果作为系列基准", "error");
+        return;
+      }
+      this.updatePromptReviewState();
+      const canvasResolution = this.canvasConflict?.resolution || "";
+      if (this.canvasConflict && !canvasResolution) {
+        UI.toast("请先处理对话画幅与当前尺寸的冲突", "error");
+        return;
+      }
+      if (!settings.prompt.trim()) {
+        UI.toast("请输入提示词", "error");
+        this.el.promptInput.focus();
+        return;
+      }
+      if (settings.mode === "img2img" && !referenceIds.length) {
+        UI.toast("垫图生图至少选择一张垫图", "error");
+        return;
+      }
+      if (!this.generationRoutingCandidates(settings, workspace.id).length) {
+        UI.toast("所选渠道不支持当前模型、模式、格式或垫图数量", "error");
+        return;
+      }
+      settings.prompt_draft_id = reviewedDraft?.id || "";
+      const operationId = this.newMessageId();
+      const operation = { operation_id: operationId };
+      const requestBody = {
+        workspace_id: workspace.id,
+        ...settings,
+        canvas_resolution: canvasResolution,
+        reference_ids: settings.mode === "img2img" ? [...referenceIds] : [],
+        operation_id: operationId,
+      };
+      this.generationSubmissionMap(workspace.id, true).set(operationId, operation);
       this.updateInteractionState();
       try {
-        const requestOptions = { signal: controller.signal };
-        await Promise.all([
-          this.loadChannels(false, requestOptions),
-          this.loadRuntimeSettings(false, requestOptions),
-        ]);
-        if (operation.canceled || this.activeWorkspace?.id !== workspace.id) return;
-        if (!this.currentChannel()) {
-          UI.toast("暂无可用渠道", "error");
-          return;
-        }
-        if (!this.validateSizeInput(true)) return;
-        const selection = this.currentSelection(workspace.id);
-        this.ensureSeriesAnchorSelection(selection);
-        const omitted = this.trimReferenceSelection(selection, this.generationReferenceLimit());
-        if (omitted) {
-          this.renderReferences();
-          UI.toast(`渠道垫图上限已更新，已取消 ${omitted} 张超限图片`, "info");
-        }
-        const referenceIds = [...selection];
-        const reviewedDraft = this.currentPromptDraft();
-        const settings = this.collectSettings();
-        if (["explore", "series"].includes(settings.generation_strategy) && !reviewedDraft) {
-          UI.toast(
-            settings.generation_strategy === "series"
-              ? "系列延续需要先使用 AI 整理当前需求"
-              : "探索方案需要先使用 AI 整理最终提示词",
-            "error",
-          );
-          return;
-        }
-        if (settings.generation_strategy === "series"
-          && !workspace.settings?.series_anchor?.asset_id) {
-          UI.toast("请先选择一张生成结果作为系列基准", "error");
-          return;
-        }
-        this.updatePromptReviewState();
-        const canvasResolution = this.canvasConflict?.resolution || "";
-        if (this.canvasConflict && !canvasResolution) {
-          UI.toast("请先处理对话画幅与当前尺寸的冲突", "error");
-          return;
-        }
-        if (!settings.prompt.trim()) {
-          UI.toast("请输入提示词", "error");
-          this.el.promptInput.focus();
-          return;
-        }
-        if (settings.mode === "img2img" && !referenceIds.length) {
-          UI.toast("垫图生图至少选择一张垫图", "error");
-          return;
-        }
-        if (!this.generationRoutingCandidates(settings, workspace.id).length) {
-          UI.toast("所选渠道不支持当前模型、模式、格式或垫图数量", "error");
-          return;
-        }
-        settings.prompt_draft_id = reviewedDraft?.id || "";
-        await this.flushSettings(workspace.id, requestOptions);
-        if (operation.canceled) return;
-        operation.postStarted = true;
+        await this.flushSettings(workspace.id);
         const data = await UI.api("/api/generations", {
           method: "POST",
-          body: {
-            workspace_id: workspace.id,
-            ...settings,
-            canvas_resolution: canvasResolution,
-            reference_ids: settings.mode === "img2img" ? referenceIds : [],
-            operation_id: operation.operation_id,
-          },
+          body: requestBody,
         });
-        if (operation.canceled) {
-          void this.cancelGenerationJob(data.job);
-          return;
-        }
-        workspace.settings = settings;
-        this.workspaceJobs.set(workspace.id, data.job);
+        this.setWorkspaceJob(data.job);
         this.schedulePoll(ACTIVE_POLL_INTERVAL);
         this.updateWorkspaceJobDisplays();
         if (this.activeWorkspace?.id === workspace.id) {
@@ -160,35 +189,16 @@
         UI.toast(`任务已提交，${UI.money(Number(data.job.price_per_image_rmb) * data.job.requested_count)} 已预占`, "success");
       } catch (error) {
         if (error?.code === "prompt_canvas_conflict") {
-          if (this.canvasConflict) this.canvasConflict.resolution = "";
-          this.updatePromptReviewState();
+          if (this.activeWorkspace?.id === workspace.id) {
+            if (this.canvasConflict) this.canvasConflict.resolution = "";
+            this.updatePromptReviewState();
+          }
         }
-        if (!operation.canceled && error?.name !== "AbortError") UI.toast(error.message, "error");
+        UI.toast(error.message, "error");
       } finally {
-        const stillCurrent = this.generationSubmissions.get(workspace.id) === operation;
-        if (stillCurrent) {
-          this.generationSubmissions.delete(workspace.id);
-          button.classList.remove("loading");
-          this.updateInteractionState();
-        }
+        this.removeGenerationSubmission(workspace.id, operationId);
+        this.updateInteractionState();
       }
-    },
-
-    cancelGenerationSubmission(workspaceId = this.activeWorkspace?.id) {
-      const operation = this.generationSubmissions.get(workspaceId);
-      if (!operation) return;
-      operation.canceled = true;
-      if (operation.postStarted) {
-        this.requestOperationCancellation(workspaceId, operation.operation_id);
-      } else {
-        operation.controller?.abort();
-      }
-      if (this.generationSubmissions.get(workspaceId) === operation) {
-        this.generationSubmissions.delete(workspaceId);
-      }
-      this.el.generateButton.classList.remove("loading");
-      this.updateInteractionState();
-      UI.toast("生成提交已取消，可立即修改后重试", "success");
     },
 
     async cancelGenerationJob(job) {
@@ -197,19 +207,13 @@
       const optimistic = this.optimisticCanceledJob(job);
       if (visible) {
         if (!this.jobs.some((entry) => entry.id === job.id)) this.jobs.unshift(job);
-        this.applyJobUpdate(optimistic);
       }
+      this.applyJobUpdate(optimistic);
       try {
         const canceledJob = await this.requestGenerationCancellation(job.id);
-        if (this.activeWorkspace?.id === canceledJob.workspace_id) {
-          this.applyJobUpdate(canceledJob);
-        } else if (this.workspaceJobs.get(canceledJob.workspace_id)?.id === canceledJob.id) {
-          this.workspaceJobs.delete(canceledJob.workspace_id);
-          this.updateWorkspaceJobDisplays();
-        }
+        this.applyJobUpdate(canceledJob);
       } catch (error) {
-        const current = this.jobs.find((entry) => entry.id === job.id);
-        if (visible && current?.status === optimistic.status) this.applyJobUpdate(job);
+        this.applyJobUpdate(job);
         UI.toast(error.message, "error");
       }
     },
@@ -232,9 +236,16 @@
               ? current
               : job;
           });
-          const activeJob = jobs.find((job) => !TERMINAL.has(job.status));
-          if (activeJob) this.workspaceJobs.set(workspaceId, activeJob);
-          else this.workspaceJobs.delete(workspaceId);
+          const activeJobs = jobs.filter((job) => (
+            !TERMINAL.has(job.status) && !this.cancelingJobs.has(job.id)
+          ));
+          if (activeJobs.length) {
+            this.workspaceJobs.set(workspaceId, new Map(
+              activeJobs.map((job) => [String(job.id), job]),
+            ));
+          } else {
+            this.workspaceJobs.delete(workspaceId);
+          }
           this.updateWorkspaceJobDisplays();
           if (this.activeWorkspace?.id === workspaceId) {
             this.jobs = jobs;
@@ -250,11 +261,18 @@
       return this.runSingleFlight(this.loadingWorkspaceJobs, "active", async () => {
         try {
           const data = await UI.api("/api/generations/active");
-          this.workspaceJobs = new Map(
-            data.jobs
-              .filter((job) => !this.cancelingJobs.has(job.id))
-              .map((job) => [job.workspace_id, job]),
-          );
+          const grouped = new Map();
+          data.jobs
+            .filter((job) => !this.cancelingJobs.has(job.id) && !TERMINAL.has(job.status))
+            .forEach((job) => {
+              let jobs = grouped.get(job.workspace_id);
+              if (!jobs) {
+                jobs = new Map();
+                grouped.set(job.workspace_id, jobs);
+              }
+              jobs.set(String(job.id), job);
+            });
+          this.workspaceJobs = grouped;
           this.updateWorkspaceJobDisplays();
         } catch {
           // 当前工作站请求会显示持续性的 API 错误。
@@ -476,14 +494,7 @@
     applyJobUpdate(job) {
       const index = this.jobs.findIndex((entry) => entry.id === job.id);
       if (index >= 0) this.jobs[index] = job;
-      const activeWorkspaceJob = this.workspaceJobs.get(job.workspace_id);
-      if (TERMINAL.has(job.status)) {
-        if (!activeWorkspaceJob || activeWorkspaceJob.id === job.id) {
-          this.workspaceJobs.delete(job.workspace_id);
-        }
-      } else {
-        this.workspaceJobs.set(job.workspace_id, job);
-      }
+      this.setWorkspaceJob(job);
       this.updateWorkspaceJobDisplays();
       this.renderJobs();
     },
@@ -514,7 +525,7 @@
         const jobId = cancel.dataset.cancelJob;
         if (this.cancelingJobs.has(jobId)) return;
         const job = this.jobs.find((entry) => entry.id === jobId)
-          || this.workspaceJobs.get(this.activeWorkspace?.id);
+          || this.workspaceJobList(this.activeWorkspace?.id).find((entry) => String(entry.id) === String(jobId));
         if (!job || job.id !== jobId) return;
         this.cancelingJobs.add(jobId);
         UI.toast("任务已取消，可立即开始新的生成", "success");

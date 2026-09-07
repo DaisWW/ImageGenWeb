@@ -389,7 +389,7 @@
 
     async applyLibrarySelection() {
       if (!this.activeWorkspace || this.referenceUploadPending
-        || this.workspaceChatBusy() || this.workspaceHasActiveJob() || this.libraryBusy) {
+        || this.libraryBusy) {
         UI.toast("当前工作站忙碌，请稍后选择图片", "error");
         return;
       }
