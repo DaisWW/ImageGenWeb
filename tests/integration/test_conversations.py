@@ -162,7 +162,7 @@ models:
         self.assertEqual(calls, ["primary", "fallback"])
         self.assertEqual(assistant_message.provider_id, "fallback")
 
-    def test_chat_failover_shares_the_primary_timeout_budget(self):
+    def test_chat_failover_uses_each_model_timeout_budget(self):
         self.chat_path.write_text(
             """\
 version: 1
@@ -188,13 +188,12 @@ models:
     model: gpt-fallback
     reasoning_effort: max
     review_reasoning_effort: medium
-    timeout_seconds: 30
+    timeout_seconds: 45
     max_output_tokens: 1000
 """,
             encoding="utf-8",
         )
         self.app.extensions["chat_model_registry"].reload(force=True)
-        clock = [0.0]
         calls = []
 
         class SharedBudgetChatClient:
@@ -211,7 +210,6 @@ models:
             ):
                 calls.append((model.identifier, model.timeout_seconds))
                 if len(calls) == 1:
-                    clock[0] = 25.0
                     raise OpenAIChatError(
                         "测试聊天模型超时",
                         code="chat_timeout",
@@ -232,20 +230,15 @@ models:
         self.services.conversations.client = SharedBudgetChatClient()
         workspace = self.create_workspace("共享超时预算")
 
-        with patch(
-            "imagegen.services.conversations.support.monotonic",
-            side_effect=lambda: clock[0],
-        ):
-            _user_message, assistant_message = self.services.conversations.send(
-                workspace,
-                model_id="primary",
-                content="请生成一张人物海报",
-            )
+        _user_message, assistant_message = self.services.conversations.send(
+            workspace,
+            model_id="primary",
+            content="请生成一张人物海报",
+        )
 
         self.assertEqual(assistant_message.provider_id, "fallback")
         self.assertEqual([call[0] for call in calls], ["primary", "fallback"])
-        self.assertGreaterEqual(calls[0][1], 29.0)
-        self.assertLessEqual(calls[1][1], 5.0)
+        self.assertEqual(calls, [("primary", 30), ("fallback", 45)])
 
     def test_chat_does_not_switch_after_non_streaming_output_started(self):
         self.chat_path.write_text(
