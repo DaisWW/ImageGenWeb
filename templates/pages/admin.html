@@ -144,6 +144,7 @@
           <label class="field"><span>单张附件 MiB</span><input type="number" name="max_attachment_mb" min="1" max="40" required></label>
           <label class="field"><span>附件合计 MiB</span><input type="number" name="max_attachment_total_mb" min="1" max="40" required></label>
           <label class="field"><span>当前模型重试次数</span><input type="number" name="chat_same_model_retry_attempts" min="0" max="5" required></label>
+          <label class="field"><span>当前模型重试间隔（秒）</span><input type="number" name="chat_same_model_retry_delay_seconds" min="0" max="60" required></label>
           <label class="field"><span>故障切换模型数（含当前）</span><input type="number" name="chat_failover_attempts" min="1" max="5" required></label>
           <label class="field"><span>预览预约秒数</span><input type="number" name="preview_reservation_seconds" min="5" max="60" required></label>
         </div>

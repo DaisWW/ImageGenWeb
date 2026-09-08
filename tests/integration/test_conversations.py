@@ -140,13 +140,15 @@ models:
         self.services.conversations.client = RetryThenFallbackChatClient()
         workspace = self.create_workspace("当前模型重试后切换")
 
-        _user_message, assistant_message = self.services.conversations.send(
-            workspace,
-            model_id="test-chat",
-            content="请生成一张人物海报",
-        )
+        with patch.object(threading.Event, "wait", autospec=True, return_value=False) as wait:
+            _user_message, assistant_message = self.services.conversations.send(
+                workspace,
+                model_id="test-chat",
+                content="请生成一张人物海报",
+            )
 
         self.assertEqual(calls, ["test-chat", "test-chat", "fallback"])
+        self.assertEqual([call.args[1] for call in wait.call_args_list], [3])
         self.assertEqual(assistant_message.provider_id, "fallback")
         failures = list(
             db.session.scalars(
@@ -186,6 +188,7 @@ models:
         settings["runtime"].update(
             {
                 "chat_same_model_retry_attempts": 2,
+                "chat_same_model_retry_delay_seconds": 0,
                 "chat_failover_attempts": 2,
             }
         )
@@ -289,13 +292,15 @@ models:
         self.services.conversations.client = AlwaysFailingChatClient()
         workspace = self.create_workspace("备用模型不重复重试")
 
-        _user_message, assistant_message = self.services.conversations.send(
-            workspace,
-            model_id="primary",
-            content="请生成一张人物海报",
-        )
+        with patch.object(threading.Event, "wait", autospec=True, return_value=False) as wait:
+            _user_message, assistant_message = self.services.conversations.send(
+                workspace,
+                model_id="primary",
+                content="请生成一张人物海报",
+            )
 
         self.assertEqual(calls, ["primary", "primary", "primary", "fallback"])
+        self.assertEqual([call.args[1] for call in wait.call_args_list], [3, 3])
         self.assertEqual(assistant_message.kind, "error")
 
     def test_chat_switches_after_missing_terminal_event_even_with_http_200(self):

@@ -173,6 +173,8 @@ class ConversationSupport:
                     else:
                         operation.start_retry(next_model.label, same_model=retry_same_model)
                     if retry_same_model:
+                        operation.cancel_event.wait(runtime.chat_same_model_retry_delay_seconds)
+                        operation.ensure_active()
                         continue
                     break
         raise AssertionError("unreachable")

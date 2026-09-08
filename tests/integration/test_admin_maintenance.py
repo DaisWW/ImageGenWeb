@@ -184,6 +184,7 @@ class TestAdminAndMaintenance(PlatformTestCase):
         self.assertFalse(initial["managed"])
         self.assertEqual(initial["runtime"]["max_workspaces_per_user"], 10)
         self.assertEqual(initial["runtime"]["chat_same_model_retry_attempts"], 0)
+        self.assertEqual(initial["runtime"]["chat_same_model_retry_delay_seconds"], 3)
         initial["site_title"] = "运行参数测试站"
         initial["runtime"].update(
             {
@@ -191,6 +192,7 @@ class TestAdminAndMaintenance(PlatformTestCase):
                 "max_message_characters": 100,
                 "max_batch_images": 2,
                 "chat_same_model_retry_attempts": 1,
+                "chat_same_model_retry_delay_seconds": 4,
                 "worker_poll_milliseconds": 900,
             }
         )
@@ -203,12 +205,14 @@ class TestAdminAndMaintenance(PlatformTestCase):
         self.assertTrue(saved["revision"])
         self.assertEqual(self.services.settings.runtime().max_batch_images, 2)
         self.assertEqual(self.services.settings.runtime().chat_same_model_retry_attempts, 1)
+        self.assertEqual(self.services.settings.runtime().chat_same_model_retry_delay_seconds, 4)
         self.assertIsNotNone(db.session.get(SystemState, SYSTEM_SETTINGS_KEY))
         audit = db.session.scalar(
             select(AuditLog).where(AuditLog.action == "system.settings.update")
         )
         self.assertIn("max_batch_images", audit.details["changed"])
         self.assertIn("chat_same_model_retry_attempts", audit.details["changed"])
+        self.assertIn("chat_same_model_retry_delay_seconds", audit.details["changed"])
 
         first = self.create_workspace("限制一")
         self.create_workspace("限制二")

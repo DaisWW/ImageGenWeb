@@ -30,6 +30,7 @@ class RuntimeSettings:
     max_attachment_total_mb: int = 40
     chat_failover_attempts: int = 2
     chat_same_model_retry_attempts: int = 0
+    chat_same_model_retry_delay_seconds: int = 3
     preview_reservation_seconds: int = 15
     max_prompt_characters: int = 8000
     max_batch_images: int = 20
@@ -293,6 +294,9 @@ def _parse_runtime_settings(raw: dict[str, Any]) -> RuntimeSettings:
         max_attachment_total_mb=_bounded_int(raw, "max_attachment_total_mb", 40, 1, 40),
         chat_failover_attempts=_bounded_int(raw, "chat_failover_attempts", 2, 1, 5),
         chat_same_model_retry_attempts=_bounded_int(raw, "chat_same_model_retry_attempts", 0, 0, 5),
+        chat_same_model_retry_delay_seconds=_bounded_int(
+            raw, "chat_same_model_retry_delay_seconds", 3, 0, 60
+        ),
         preview_reservation_seconds=_bounded_int(raw, "preview_reservation_seconds", 15, 5, 60),
         max_prompt_characters=_bounded_int(raw, "max_prompt_characters", 8000, 1000, 12000),
         max_batch_images=_bounded_int(raw, "max_batch_images", 20, 1, 100),
