@@ -183,12 +183,14 @@ class TestAdminAndMaintenance(PlatformTestCase):
         initial = client.get("/api/admin/settings").json
         self.assertFalse(initial["managed"])
         self.assertEqual(initial["runtime"]["max_workspaces_per_user"], 10)
+        self.assertEqual(initial["runtime"]["chat_same_model_retry_attempts"], 0)
         initial["site_title"] = "运行参数测试站"
         initial["runtime"].update(
             {
                 "max_workspaces_per_user": 2,
                 "max_message_characters": 100,
                 "max_batch_images": 2,
+                "chat_same_model_retry_attempts": 1,
                 "worker_poll_milliseconds": 900,
             }
         )
@@ -200,11 +202,13 @@ class TestAdminAndMaintenance(PlatformTestCase):
         self.assertTrue(saved["managed"])
         self.assertTrue(saved["revision"])
         self.assertEqual(self.services.settings.runtime().max_batch_images, 2)
+        self.assertEqual(self.services.settings.runtime().chat_same_model_retry_attempts, 1)
         self.assertIsNotNone(db.session.get(SystemState, SYSTEM_SETTINGS_KEY))
         audit = db.session.scalar(
             select(AuditLog).where(AuditLog.action == "system.settings.update")
         )
         self.assertIn("max_batch_images", audit.details["changed"])
+        self.assertIn("chat_same_model_retry_attempts", audit.details["changed"])
 
         first = self.create_workspace("限制一")
         self.create_workspace("限制二")
@@ -354,6 +358,54 @@ class TestAdminAndMaintenance(PlatformTestCase):
         self.assertEqual(model.review_reasoning_effort, "low")
         stored = db.session.get(SystemState, CHAT_CONFIG_KEY)
         self.assertNotIn("replacement-chat-key", stored.value)
+
+    def test_admin_can_explicitly_clear_chat_fallbacks(self):
+        self.chat_path.write_text(
+            """\
+version: 1
+context:
+  max_context_tokens: 32000
+models:
+  - id: test-chat
+    label: 测试 GPT
+    enabled: true
+    base_url: https://chat.example
+    api_key_env: TEST_CHAT_KEY
+    model: gpt-test
+    reasoning_effort: max
+    review_reasoning_effort: medium
+    timeout_seconds: 30
+    max_output_tokens: 1000
+    fallback_model_ids: [fallback-chat]
+  - id: fallback-chat
+    label: 备用 GPT
+    enabled: true
+    base_url: https://fallback.example
+    api_key_env: TEST_CHAT_KEY
+    model: gpt-fallback
+    reasoning_effort: max
+    review_reasoning_effort: medium
+    timeout_seconds: 30
+    max_output_tokens: 1000
+""",
+            encoding="utf-8",
+        )
+        self.app.extensions["chat_model_registry"].reload(force=True)
+        client = self.admin_client()
+        config = client.get("/api/admin/chat-models").json["config"]
+        config["models"][0]["fallback_model_ids"] = []
+
+        response = client.put("/api/admin/chat-models", json=config)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["config"]["models"][0]["fallback_model_ids"], [])
+        self.assertEqual(
+            self.app.extensions["chat_model_registry"].get("test-chat").fallback_model_ids,
+            (),
+        )
+        stored = db.session.get(SystemState, CHAT_CONFIG_KEY)
+        document = json.loads(stored.value)["document"]
+        self.assertEqual(document["models"][0]["fallback_model_ids"], [])
 
     def test_admin_matting_config_preserves_order_without_recommendation_metadata(self):
         client = self.admin_client()

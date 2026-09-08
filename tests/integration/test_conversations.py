@@ -80,6 +80,224 @@ models:
         self.assertTrue(failed.details["will_retry"])
         self.assertEqual(failed.details["next_model_id"], "fallback")
 
+    def test_chat_retries_current_model_before_switching_to_fallback(self):
+        client = self.admin_client()
+        config = client.get("/api/admin/chat-models").json["config"]
+        config["models"][0]["fallback_model_ids"] = ["fallback"]
+        config["models"].append(
+            {
+                "id": "fallback",
+                "label": "备用 GPT",
+                "enabled": True,
+                "base_url": "https://fallback.example",
+                "api_key": "test-chat-key-not-secret",
+                "model": "gpt-fallback",
+                "reasoning_effort": "max",
+                "review_reasoning_effort": "medium",
+                "timeout_seconds": 30,
+                "max_output_tokens": 1000,
+                "fallback_model_ids": [],
+            }
+        )
+        self.assertEqual(client.put("/api/admin/chat-models", json=config).status_code, 200)
+        settings = self.services.settings.editable_config()
+        settings["runtime"]["chat_same_model_retry_attempts"] = 1
+        self.services.settings.save(settings, self.admin.id)
+        calls = []
+
+        class RetryThenFallbackChatClient:
+            def complete(
+                self,
+                model,
+                *,
+                system,
+                messages,
+                max_output_tokens=None,
+                reasoning_effort=None,
+                progress=None,
+                output_delta=None,
+            ):
+                calls.append(model.identifier)
+                if model.identifier == "test-chat":
+                    raise OpenAIChatError(
+                        "测试聊天模型超时",
+                        code="chat_timeout",
+                        status_code=504,
+                        details={"first_output_seconds": None},
+                    )
+                return ChatCompletion(
+                    content=json.dumps(
+                        {
+                            "status": "needs_clarification",
+                            "questions": ["请确认场景。"],
+                            "creative_direction": "other",
+                        },
+                        ensure_ascii=False,
+                    ),
+                    request_id="fallback-request",
+                )
+
+        self.services.conversations.client = RetryThenFallbackChatClient()
+        workspace = self.create_workspace("当前模型重试后切换")
+
+        _user_message, assistant_message = self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="请生成一张人物海报",
+        )
+
+        self.assertEqual(calls, ["test-chat", "test-chat", "fallback"])
+        self.assertEqual(assistant_message.provider_id, "fallback")
+        failures = list(
+            db.session.scalars(
+                select(RuntimeLog)
+                .where(RuntimeLog.event == "chat.reply", RuntimeLog.status == "error")
+                .order_by(RuntimeLog.id)
+            )
+        )
+        self.assertCountEqual(
+            [entry.details["retry_kind"] for entry in failures],
+            ["same_model", "fallback"],
+        )
+
+    def test_chat_retries_current_model_without_routing_to_fallback(self):
+        client = self.admin_client()
+        config = client.get("/api/admin/chat-models").json["config"]
+        config["models"][0]["fallback_model_ids"] = []
+        config["models"].append(
+            {
+                "id": "astra",
+                "label": "Astra",
+                "enabled": True,
+                "base_url": "https://astra.example",
+                "api_key": "test-chat-key-not-secret",
+                "model": "astra-test",
+                "reasoning_effort": "max",
+                "review_reasoning_effort": "medium",
+                "timeout_seconds": 30,
+                "max_output_tokens": 1000,
+                "fallback_model_ids": [],
+            }
+        )
+        self.assertEqual(client.put("/api/admin/chat-models", json=config).status_code, 200)
+        saved_config = client.get("/api/admin/chat-models").json["config"]
+        self.assertEqual(saved_config["models"][0]["fallback_model_ids"], [])
+        settings = self.services.settings.editable_config()
+        settings["runtime"].update(
+            {
+                "chat_same_model_retry_attempts": 2,
+                "chat_failover_attempts": 2,
+            }
+        )
+        self.services.settings.save(settings, self.admin.id)
+        calls = []
+
+        class FailingChatClient:
+            def complete(
+                self,
+                model,
+                *,
+                system,
+                messages,
+                max_output_tokens=None,
+                reasoning_effort=None,
+                progress=None,
+                output_delta=None,
+            ):
+                calls.append(model.identifier)
+                raise OpenAIChatError(
+                    "测试聊天模型超时",
+                    code="chat_timeout",
+                    status_code=504,
+                    details={"first_output_seconds": None},
+                )
+
+        self.services.conversations.client = FailingChatClient()
+        workspace = self.create_workspace("当前模型重试不切换")
+
+        _user_message, assistant_message = self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="请生成一张人物海报",
+        )
+
+        self.assertEqual(calls, ["test-chat", "test-chat", "test-chat"])
+        self.assertEqual(assistant_message.kind, "error")
+
+    def test_chat_does_not_retry_fallback_model(self):
+        self.chat_path.write_text(
+            """\
+version: 1
+context:
+  max_context_tokens: 32000
+models:
+  - id: primary
+    label: Primary
+    enabled: true
+    base_url: https://primary.example
+    api_key_env: TEST_CHAT_KEY
+    model: gpt-primary
+    reasoning_effort: max
+    review_reasoning_effort: medium
+    timeout_seconds: 30
+    max_output_tokens: 1000
+    fallback_model_ids: [fallback]
+  - id: fallback
+    label: Fallback
+    enabled: true
+    base_url: https://fallback.example
+    api_key_env: TEST_CHAT_KEY
+    model: gpt-fallback
+    reasoning_effort: max
+    review_reasoning_effort: medium
+    timeout_seconds: 30
+    max_output_tokens: 1000
+""",
+            encoding="utf-8",
+        )
+        self.app.extensions["chat_model_registry"].reload(force=True)
+        settings = self.services.settings.editable_config()
+        settings["runtime"].update(
+            {
+                "chat_same_model_retry_attempts": 2,
+                "chat_failover_attempts": 2,
+            }
+        )
+        self.services.settings.save(settings, self.admin.id)
+        calls = []
+
+        class AlwaysFailingChatClient:
+            def complete(
+                self,
+                model,
+                *,
+                system,
+                messages,
+                max_output_tokens=None,
+                reasoning_effort=None,
+                progress=None,
+                output_delta=None,
+            ):
+                calls.append(model.identifier)
+                raise OpenAIChatError(
+                    "测试聊天模型超时",
+                    code="chat_timeout",
+                    status_code=504,
+                    details={"first_output_seconds": None},
+                )
+
+        self.services.conversations.client = AlwaysFailingChatClient()
+        workspace = self.create_workspace("备用模型不重复重试")
+
+        _user_message, assistant_message = self.services.conversations.send(
+            workspace,
+            model_id="primary",
+            content="请生成一张人物海报",
+        )
+
+        self.assertEqual(calls, ["primary", "primary", "primary", "fallback"])
+        self.assertEqual(assistant_message.kind, "error")
+
     def test_chat_switches_after_missing_terminal_event_even_with_http_200(self):
         self.chat_path.write_text(
             """\

@@ -121,10 +121,11 @@ class ConversationOperation:
             request_body_bytes=progress.request_body_bytes,
         )
 
-    def start_retry(self, model_label: str) -> None:
+    def start_retry(self, model_label: str, *, same_model: bool = False) -> None:
         with self.progress_lock:
             self.stage = "connecting"
-            self.stage_label = f"正在切换到备用模型 {model_label}"
+            action = "正在重试当前模型" if same_model else "正在切换到备用模型"
+            self.stage_label = f"{action} {model_label}"
             self.last_event_at = utcnow()
 
     def update_preview(self, text: str) -> None:

@@ -97,7 +97,9 @@ class ConversationSupport:
                 continue
             if candidate.identifier not in {item.identifier for item in candidates}:
                 candidates.append(candidate)
-        candidates = candidates[: self.settings.runtime().chat_failover_attempts]
+        runtime = self.settings.runtime()
+        candidates = candidates[: runtime.chat_failover_attempts]
+        same_model_attempts = runtime.chat_same_model_retry_attempts + 1
         output_seen = False
 
         def observe_output(delta: str) -> None:
@@ -106,50 +108,73 @@ class ConversationSupport:
             if output_delta is not None:
                 output_delta(delta)
 
-        for index, candidate in enumerate(candidates, 1):
-            operation.ensure_active()
-            try:
-                return candidate, self.client.complete(
-                    candidate,
-                    system=system,
-                    messages=messages,
-                    max_output_tokens=min(candidate.max_output_tokens, max_output_tokens),
-                    reasoning_effort=candidate.effective_review_reasoning_effort,
-                    progress=progress_callback or operation.client_progress,
-                    # Always observe provider output, including non-streaming
-                    # calls, so a partial response cannot trigger failover.
-                    output_delta=observe_output,
-                )
-            except OpenAIChatError as exc:
-                can_retry = (
-                    index < len(candidates)
-                    and not output_seen
-                    and self._chat_error_is_retryable(exc)
-                )
-                if not can_retry:
-                    exc.chat_model = candidate
-                    exc.details = {**exc.details, "request_stage": request_stage}
-                    raise
-                self._record_chat_error(
-                    workspace,
-                    candidate,
-                    event,
-                    exc,
-                    extra_details={
-                        "attempt": index,
-                        "max_attempts": len(candidates),
-                        "will_retry": True,
-                        "next_model_id": candidates[index].identifier,
-                        "request_stage": request_stage,
-                    },
-                )
-                if request_stage == "format_repair":
-                    operation.update_progress(
-                        "repairing",
-                        f"格式修复：正在切换到备用模型 {candidates[index].label}",
+        for candidate_index, candidate in enumerate(candidates):
+            candidate_attempts = same_model_attempts if candidate_index == 0 else 1
+            for same_model_attempt in range(candidate_attempts):
+                operation.ensure_active()
+                try:
+                    return candidate, self.client.complete(
+                        candidate,
+                        system=system,
+                        messages=messages,
+                        max_output_tokens=min(candidate.max_output_tokens, max_output_tokens),
+                        reasoning_effort=candidate.effective_review_reasoning_effort,
+                        progress=progress_callback or operation.client_progress,
+                        # Always observe provider output, including non-streaming
+                        # calls, so a partial response cannot trigger failover.
+                        output_delta=observe_output,
                     )
-                else:
-                    operation.start_retry(candidates[index].label)
+                except OpenAIChatError as exc:
+                    retryable = not output_seen and self._chat_error_is_retryable(exc)
+                    retry_same_model = (
+                        retryable
+                        and candidate_index == 0
+                        and same_model_attempt + 1 < candidate_attempts
+                    )
+                    next_candidate = (
+                        candidates[candidate_index + 1]
+                        if candidate_index + 1 < len(candidates)
+                        else None
+                    )
+                    retry_fallback = retryable and next_candidate is not None
+                    if not retry_same_model and not retry_fallback:
+                        exc.chat_model = candidate
+                        exc.details = {**exc.details, "request_stage": request_stage}
+                        raise
+
+                    if retry_same_model:
+                        next_model = candidate
+                        retry_kind = "same_model"
+                    else:
+                        assert next_candidate is not None
+                        next_model = next_candidate
+                        retry_kind = "fallback"
+                    self._record_chat_error(
+                        workspace,
+                        candidate,
+                        event,
+                        exc,
+                        extra_details={
+                            "attempt": candidate_index + 1,
+                            "max_attempts": len(candidates),
+                            "same_model_attempt": same_model_attempt + 1,
+                            "same_model_max_attempts": candidate_attempts,
+                            "retry_kind": retry_kind,
+                            "will_retry": True,
+                            "next_model_id": next_model.identifier,
+                            "request_stage": request_stage,
+                        },
+                    )
+                    if request_stage == "format_repair":
+                        action = "正在重试当前模型" if retry_same_model else "正在切换到备用模型"
+                        operation.update_progress(
+                            "repairing", f"格式修复：{action} {next_model.label}"
+                        )
+                    else:
+                        operation.start_retry(next_model.label, same_model=retry_same_model)
+                    if retry_same_model:
+                        continue
+                    break
         raise AssertionError("unreachable")
 
     @staticmethod
