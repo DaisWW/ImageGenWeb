@@ -42,7 +42,7 @@ channels:
       half_open_max_probes: 1
 
   - id: lucen
-    label: Lucen
+    label: lucen
     priority: 10
     enabled: true
     adapter: openai_images
@@ -51,7 +51,10 @@ channels:
     api_key_env: LUCEN_API_KEY
     models:
       - id: gpt-image-2
-        label: GPT Image 2
+        label: img2
+        enabled: true
+      - id: gpt-image-2.5-flare
+        label: img2.5
         enabled: true
     price_rmb: 0.0800
     capabilities:
