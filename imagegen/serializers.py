@@ -240,6 +240,9 @@ def job_dict(
     succeeded = sum(item.status == "succeeded" for item in job.items)
     failed = sum(item.status in {"failed", "interrupted"} for item in job.items)
     canceled = sum(item.status == "canceled" for item in job.items)
+    workflow = {
+        key: value for key, value in (job.workflow or {}).items() if not str(key).startswith("_")
+    }
     result = {
         **status,
         "kind": job.kind,
@@ -251,7 +254,7 @@ def job_dict(
         "model": job.model,
         "size": job.size,
         "quality": job.quality,
-        "workflow": job.workflow or {},
+        "workflow": workflow,
         "output_format": job.output_format,
         "compression": job.compression,
         "transparent_background": job.transparent_background,
@@ -266,6 +269,7 @@ def job_dict(
         "failed_count": failed,
         "canceled_count": canceled,
         "can_cancel": job.status in {"queued", "running", "canceling", "reconnecting"},
+        "can_retry": job.status in {"failed", "partial"} and failed > 0,
         "references": [asset_dict(reference.asset) for reference in job.references],
         "items": item_results,
     }

@@ -297,6 +297,70 @@ class GenerationService:
         db.session.commit()
         return job
 
+    def retry(
+        self,
+        job_id: str,
+        *,
+        user_id: int | None = None,
+        admin: bool = False,
+    ) -> GenerationJob:
+        user, job = self._lock_job_and_owner(job_id, user_id=user_id, admin=admin)
+        if not user.is_active:
+            raise ServiceError("账户已被禁用", status_code=403)
+        retryable_items = [item for item in job.items if item.status in {"failed", "interrupted"}]
+        active_items = [
+            item
+            for item in job.items
+            if item.status in {"queued", "running", "canceling", "reconnecting"}
+        ]
+        if active_items:
+            retry_pending = bool((job.workflow or {}).get("_retry_pending"))
+            if retry_pending and not retryable_items:
+                return job
+            raise ServiceError(
+                "任务仍有图片正在生成，暂时无法重试",
+                code="generation_retry_conflict",
+                status_code=409,
+            )
+        if job.status not in {"failed", "partial"} or not retryable_items:
+            raise ServiceError(
+                "当前任务没有可重试的失败图片",
+                code="generation_not_retryable",
+                status_code=409,
+            )
+        reservation = money(job.price_per_image_rmb * len(retryable_items))
+        self.billing.reserve(user, reservation)
+        job.reserved_rmb = money(job.reserved_rmb + reservation)
+        job.cancel_requested_at = None
+        job.completed_at = None
+        job.workflow = {**(job.workflow or {}), "_retry_pending": True}
+        routing = job.workflow.get("channel_routing") if job.workflow else None
+        priority_routing = isinstance(routing, dict) and routing.get("mode") == "priority"
+        for item in retryable_items:
+            item.status = "queued"
+            if priority_routing:
+                item.channel_id = AUTO_CHANNEL_ID
+                item.channel_label = AUTO_CHANNEL_LABEL
+            item.provider_price_rmb = money(0)
+            item.attempted_channel_ids = []
+            item.circuit_probe = False
+            item.retry_count = 0
+            item.retry_at = None
+            item.cancel_requested_at = None
+            item.claimed_by = None
+            item.heartbeat_at = None
+            item.started_at = None
+            item.completed_at = None
+            item.estimated_seconds = None
+            item.error_code = None
+            item.error_message = None
+            item.upstream_status = None
+            item.upstream_request_id = None
+            item.elapsed_seconds = None
+        self.refresh_job_status(job)
+        db.session.commit()
+        return job
+
     def get_job(
         self,
         job_id: str,
@@ -447,6 +511,11 @@ class GenerationService:
             job.status = "partial"
         else:
             job.status = "failed" if failed else "canceled"
+        workflow = job.workflow or {}
+        if "_retry_pending" in workflow:
+            job.workflow = {
+                key: value for key, value in workflow.items() if key != "_retry_pending"
+            }
         completed_times = [item.completed_at for item in job.items if item.completed_at]
         job.completed_at = max(
             completed_times,

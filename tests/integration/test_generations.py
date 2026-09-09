@@ -16,6 +16,7 @@ from imagegen.models import (
     GenerationJob,
     User,
     WalletLedger,
+    utcnow,
 )
 from imagegen.services import ServiceError
 from tests.support.platform import (
@@ -623,6 +624,100 @@ class TestGenerations(PlatformTestCase):
         self.assertEqual(canceled.reserved_rmb, Decimal("0.0000"))
         self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
         self.assertTrue(all(item.status == "canceled" for item in canceled.items))
+
+    def test_retry_rejects_a_batch_that_still_has_active_items(self):
+        workspace = self.create_workspace("仍在生成的批次")
+        job = self.submit(workspace, batch_count=2)
+        failed_item, queued_item = job.items
+        user = db.session.get(User, self.user.id)
+        failed_item.status = "failed"
+        failed_item.error_code = "test_failure"
+        failed_item.error_message = "测试失败"
+        failed_item.completed_at = utcnow()
+        job.reserved_rmb = Decimal("1.2500")
+        user.reserved_rmb = Decimal("1.2500")
+        db.session.commit()
+
+        response = self.user_client().post(f"/api/generations/{job.id}/retry")
+
+        self.assertEqual(response.status_code, 409, response.get_data(as_text=True))
+        self.assertEqual(response.json["code"], "generation_retry_conflict")
+        db.session.expire_all()
+        saved = db.session.get(GenerationJob, job.id)
+        self.assertEqual([item.status for item in saved.items], ["failed", "queued"])
+        self.assertEqual(queued_item.status, "queued")
+        self.assertEqual(saved.reserved_rmb, Decimal("1.2500"))
+        self.assertEqual(db.session.get(User, self.user.id).reserved_rmb, Decimal("1.2500"))
+
+    def test_retry_rejects_an_originally_queued_task(self):
+        workspace = self.create_workspace("原始排队任务")
+        job = self.submit(workspace)
+
+        response = self.user_client().post(f"/api/generations/{job.id}/retry")
+
+        self.assertEqual(response.status_code, 409, response.get_data(as_text=True))
+        self.assertEqual(response.json["code"], "generation_retry_conflict")
+
+    def test_retry_rejects_a_disabled_account_without_changing_reservation(self):
+        workspace = self.create_workspace("禁用账户重试")
+        job = self.submit(workspace)
+        item = job.items[0]
+        item.status = "failed"
+        item.error_message = "测试失败"
+        item.completed_at = utcnow()
+        db.session.commit()
+        self.services.users.update_status(self.user.id, "disabled", self.admin.id)
+
+        with self.assertRaisesRegex(ServiceError, "账户已被禁用") as raised:
+            self.services.generations.retry(job.id, user_id=self.user.id)
+
+        self.assertEqual(raised.exception.status_code, 403)
+        db.session.expire_all()
+        saved = db.session.get(GenerationJob, job.id)
+        user = db.session.get(User, self.user.id)
+        self.assertEqual(saved.items[0].status, "failed")
+        self.assertEqual(saved.reserved_rmb, Decimal("1.2500"))
+        self.assertEqual(user.reserved_rmb, Decimal("1.2500"))
+
+    def test_retry_rolls_back_when_balance_is_insufficient(self):
+        workspace = self.create_workspace("余额不足重试")
+        job = self.submit(workspace)
+        item = job.items[0]
+        item.status = "failed"
+        item.error_message = "测试失败"
+        item.completed_at = utcnow()
+        user = db.session.get(User, self.user.id)
+        user.balance_rmb = Decimal("1.0000")
+        user.reserved_rmb = Decimal("0.0000")
+        job.reserved_rmb = Decimal("0.0000")
+        self.services.generations.refresh_job_status(job)
+        db.session.commit()
+
+        with self.assertRaisesRegex(ServiceError, "余额不足"):
+            self.services.generations.retry(job.id, user_id=self.user.id)
+
+        db.session.expire_all()
+        saved = db.session.get(GenerationJob, job.id)
+        user = db.session.get(User, self.user.id)
+        self.assertEqual(saved.items[0].status, "failed")
+        self.assertEqual(saved.reserved_rmb, Decimal("0.0000"))
+        self.assertEqual(user.balance_rmb, Decimal("1.0000"))
+        self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
+
+    def test_refresh_job_status_preserves_partial_for_success_failure_and_cancel(self):
+        workspace = self.create_workspace("混合终态")
+        job = self.submit(workspace, batch_count=3)
+        completed_at = utcnow()
+        for item, status in zip(job.items, ("succeeded", "failed", "canceled")):
+            item.status = status
+            item.completed_at = completed_at
+        job.workflow = {"channel_routing": {"mode": "selected"}, "_retry_pending": True}
+
+        self.services.generations.refresh_job_status(job)
+
+        self.assertEqual(job.status, "partial")
+        self.assertNotIn("_retry_pending", job.workflow)
+        self.assertEqual(job.workflow["channel_routing"]["mode"], "selected")
 
     def test_canceling_running_item_discards_late_provider_result(self):
         workspace = self.create_workspace()

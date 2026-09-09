@@ -213,6 +213,86 @@ class TestWorker(PlatformTestCase):
         self.assertEqual(runtime_log.status, "error")
         self.assertEqual(runtime_log.error_code, "test_failure")
 
+    def test_failed_batch_item_can_retry_without_recharging_successes(self):
+        workspace = self.create_workspace("失败图片重试")
+        job = self.submit(workspace, batch_count=2)
+        succeeded_item_id, failed_item_id = [item.id for item in job.items]
+        worker = self.create_worker()
+        channel = self.app.extensions["channel_registry"].get("test")
+
+        worker.providers = FakeProviderFactory()
+        self.assertTrue(worker._claim(succeeded_item_id, channel))
+        worker._process_item(succeeded_item_id)
+        worker.providers = FakeProviderFactory(fail=True)
+        self.assertTrue(worker._claim(failed_item_id, channel))
+        worker._process_item(failed_item_id)
+
+        db.session.expire_all()
+        partial = db.session.get(GenerationJob, job.id)
+        user = db.session.get(User, self.user.id)
+        succeeded_output = db.session.get(GenerationItem, succeeded_item_id).output_path
+        failed_attempt_id = db.session.scalar(
+            select(GenerationAttempt.id).where(GenerationAttempt.item_id == failed_item_id)
+        )
+        self.assertEqual(partial.status, "partial")
+        self.assertEqual(partial.charged_rmb, Decimal("1.2500"))
+        self.assertEqual(partial.reserved_rmb, Decimal("0.0000"))
+        self.assertEqual(user.balance_rmb, Decimal("18.7500"))
+        self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
+
+        client = self.user_client()
+        retried = client.post(f"/api/generations/{job.id}/retry")
+        self.assertEqual(retried.status_code, 202, retried.get_data(as_text=True))
+        self.assertEqual(retried.json["job"]["status"], "queued")
+        self.assertFalse(retried.json["job"]["can_retry"])
+        self.assertNotIn("_retry_pending", retried.json["job"]["workflow"])
+        self.assertEqual(
+            [item["status"] for item in retried.json["job"]["items"]],
+            ["succeeded", "queued"],
+        )
+
+        duplicate = client.post(f"/api/generations/{job.id}/retry")
+        self.assertEqual(duplicate.status_code, 202, duplicate.get_data(as_text=True))
+        db.session.expire_all()
+        queued = db.session.get(GenerationJob, job.id)
+        user = db.session.get(User, self.user.id)
+        self.assertTrue(queued.workflow.get("_retry_pending"))
+        self.assertEqual(queued.reserved_rmb, Decimal("1.2500"))
+        self.assertEqual(user.reserved_rmb, Decimal("1.2500"))
+        self.assertEqual(
+            db.session.get(GenerationItem, succeeded_item_id).output_path, succeeded_output
+        )
+        self.assertIsNotNone(db.session.get(GenerationAttempt, failed_attempt_id))
+
+        worker.providers = FakeProviderFactory()
+        self.assertTrue(worker._claim(failed_item_id, channel))
+        worker._process_item(failed_item_id)
+
+        db.session.expire_all()
+        completed = db.session.get(GenerationJob, job.id)
+        user = db.session.get(User, self.user.id)
+        attempts = list(
+            db.session.scalars(
+                select(GenerationAttempt)
+                .where(GenerationAttempt.item_id == failed_item_id)
+                .order_by(GenerationAttempt.attempt_number)
+            )
+        )
+        charge_count = db.session.scalar(
+            select(func.count(WalletLedger.id)).where(
+                WalletLedger.generation_item_id.in_((succeeded_item_id, failed_item_id)),
+                WalletLedger.entry_type == "generation_charge",
+            )
+        )
+        self.assertEqual(completed.status, "succeeded")
+        self.assertEqual(completed.charged_rmb, Decimal("2.5000"))
+        self.assertEqual(completed.reserved_rmb, Decimal("0.0000"))
+        self.assertEqual(user.balance_rmb, Decimal("17.5000"))
+        self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
+        self.assertEqual([attempt.status for attempt in attempts], ["failed", "succeeded"])
+        self.assertEqual(charge_count, 2)
+        self.assertNotIn("_retry_pending", completed.workflow)
+
     def test_worker_restart_recovers_recent_claim_and_discards_late_result(self):
         workspace = self.create_workspace()
         job = self.submit(workspace)

@@ -209,6 +209,14 @@ def cancel_generation(job_id: str):
     return jsonify(job=_job_payload(generation_service, job))
 
 
+@web.post("/api/generations/<job_id>/retry")
+@login_required
+def retry_generation(job_id: str):
+    generation_service = services().generations
+    job = generation_service.retry(job_id, user_id=current_user.id)
+    return jsonify(job=_job_payload(generation_service, job)), 202
+
+
 @web.get("/media/assets/<asset_id>")
 @login_required
 def asset_file(asset_id: str):
