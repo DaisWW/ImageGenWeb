@@ -29,6 +29,7 @@
     "[data-job-time]",
     "[data-job-eta]",
     "[data-job-cancel]",
+    "[data-job-retry]",
     "[data-job-progress]",
     "[data-job-prompt]",
     "[data-job-channel]",
@@ -136,6 +137,8 @@
       this.generationSubmissions = new Map();
       this.canvasConflict = null;
       this.cancelingJobs = new Set();
+      this.retryingJobs = new Set();
+      this.jobMutationVersions = new Map();
       this.saveTimer = null;
       this.workspaceSettingSaves = new Map();
       this.promptCounterTimer = null;

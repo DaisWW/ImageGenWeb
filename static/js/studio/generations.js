@@ -224,15 +224,36 @@
       return data.job;
     },
 
+    async retryGenerationJob(job) {
+      if (!job?.id) return;
+      const jobId = String(job.id);
+      this.jobMutationVersions.set(jobId, (this.jobMutationVersions.get(jobId) || 0) + 1);
+      try {
+        const data = await UI.api(`/api/generations/${job.id}/retry`, { method: "POST" });
+        this.jobMutationVersions.set(jobId, (this.jobMutationVersions.get(jobId) || 0) + 1);
+        this.applyJobUpdate(data.job);
+        this.schedulePoll(ACTIVE_POLL_INTERVAL);
+        await this.refreshBalance();
+        UI.toast("失败图片已重新排队", "success");
+      } catch (error) {
+        UI.toast(error.message, "error");
+      }
+    },
+
     async loadJobs(workspaceId = this.activeWorkspace?.id) {
       if (!workspaceId) return;
       return this.runSingleFlight(this.loadingJobWorkspaces, workspaceId, async () => {
+        const mutationVersions = new Map(this.jobMutationVersions);
         try {
           const data = await UI.api(`/api/generations?workspace_id=${encodeURIComponent(workspaceId)}&limit=100`);
-          const currentJobs = new Map(this.jobs.map((job) => [job.id, job]));
+          const currentJobs = new Map(this.jobs.map((job) => [String(job.id), job]));
           const jobs = data.jobs.map((job) => {
-            const current = currentJobs.get(job.id);
-            return current && TERMINAL.has(current.status) && !TERMINAL.has(job.status)
+            const jobId = String(job.id);
+            const current = currentJobs.get(jobId);
+            const changedDuringRequest = (this.jobMutationVersions.get(jobId) || 0)
+              !== (mutationVersions.get(jobId) || 0);
+            return current && (this.retryingJobs.has(jobId) || changedDuringRequest
+              || (TERMINAL.has(current.status) && !TERMINAL.has(job.status)))
               ? current
               : job;
           });
@@ -296,6 +317,7 @@
           </div>
           <div class="job-actions">
             <span data-job-eta hidden><i data-lucide="clock-3"></i><span></span></span>
+            <button class="button ghost small" type="button" data-job-retry hidden><i data-lucide="refresh-cw"></i>重试生成</button>
             <button class="button danger small" type="button" data-job-cancel hidden><i data-lucide="square"></i>取消</button>
           </div>
         </header>
@@ -336,6 +358,7 @@
         time: fields.jobTime,
         eta: fields.jobEta,
         etaLabel: fields.jobEta.querySelector("span"),
+        retry: fields.jobRetry,
         cancel: fields.jobCancel,
         progress: fields.jobProgress,
         prompt: fields.jobPrompt,
@@ -389,6 +412,17 @@
       } else if ("cancelJob" in elements.cancel.dataset) {
         delete elements.cancel.dataset.cancelJob;
       }
+      const retrying = this.retryingJobs.has(String(job.id));
+      article.dataset.jobRetrying = String(retrying);
+      setHidden(elements.retry, !job.can_retry);
+      setDisabled(elements.retry, retrying);
+      if (job.can_retry) {
+        if (elements.retry.dataset.retryJob !== String(job.id)) {
+          elements.retry.dataset.retryJob = job.id;
+        }
+      } else if ("retryJob" in elements.retry.dataset) {
+        delete elements.retry.dataset.retryJob;
+      }
 
       const progressWidth = `${job.progress_percent}%`;
       if (elements.progress.style.width !== progressWidth) {
@@ -411,6 +445,7 @@
       setText(elements.errorMessage, failureReasons.join("；"));
       this.reconcileOutputTiles(elements.outputGrid, job);
       if (!elements.eta.hidden) UI.icons(elements.eta);
+      if (!elements.retry.hidden) UI.icons(elements.retry);
       if (!elements.cancel.hidden) UI.icons(elements.cancel);
       if (!elements.error.hidden) UI.icons(elements.error);
       return article;
@@ -520,6 +555,24 @@
     },
 
     async handleJobClick(event) {
+      const retry = event.target.closest("[data-retry-job]");
+      if (retry) {
+        const jobId = retry.dataset.retryJob;
+        if (this.retryingJobs.has(jobId)) return;
+        const job = this.jobs.find((entry) => String(entry.id) === jobId)
+          || this.workspaceJobList(this.activeWorkspace?.id)
+            .find((entry) => String(entry.id) === jobId);
+        if (!job || String(job.id) !== jobId) return;
+        this.retryingJobs.add(jobId);
+        this.renderJobs();
+        try {
+          await this.retryGenerationJob(job);
+        } finally {
+          this.retryingJobs.delete(jobId);
+          this.renderJobs();
+        }
+        return;
+      }
       const cancel = event.target.closest("[data-cancel-job]");
       if (cancel) {
         const jobId = cancel.dataset.cancelJob;

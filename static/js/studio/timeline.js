@@ -235,9 +235,11 @@
           && currentBeforeUpdate?.classList.contains("pending");
         if (entry.type === "job") {
           const previousStatus = node?.dataset.jobStatus;
+          const retrying = this.retryingJobs.has(String(entry.value.id));
           const unchangedTerminal = node
             && node.dataset.jobStatus === entry.value.status
-            && TERMINAL.has(entry.value.status);
+            && TERMINAL.has(entry.value.status)
+            && node.dataset.jobRetrying === String(retrying);
           if (!unchangedTerminal) {
             node = node ? this.updateJobCard(node, entry.value) : this.jobCard(entry.value);
             if (previousStatus !== entry.value.status) layoutChanged = true;

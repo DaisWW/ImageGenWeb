@@ -830,7 +830,7 @@ test("reconnecting generation shows bounded retry progress", {
   await expect(jobCard.getByRole("button", { name: "取消" })).toBeVisible();
 });
 
-test("failed generation shows the provider reason once", {
+test("failed generation shows the provider reason and can retry", {
   tag: "@responsive",
 }, async ({ studioPage: page }) => {
   const workspaceId = await page.locator("#workspaceList .workspace-item.active")
@@ -854,9 +854,13 @@ test("failed generation shows the provider reason once", {
     quality: "low",
     requested_count: 2,
     charged_rmb: "0.0000",
+    reserved_rmb: "0.0000",
     created_at: createdAt,
     succeeded_count: 0,
+    failed_count: 2,
+    canceled_count: 0,
     can_cancel: false,
+    can_retry: true,
     transparent_background: false,
     items: [0, 1].map((position) => ({
       id: `e2e-failed-item-${position}`,
@@ -867,15 +871,44 @@ test("failed generation shows the provider reason once", {
       thumbnail_url: null,
     })),
   };
+  const queuedJob = {
+    ...failedJob,
+    status: "queued",
+    progress_percent: 0,
+    reserved_rmb: "0.0600",
+    failed_count: 0,
+    can_cancel: true,
+    can_retry: false,
+    completed_at: null,
+    items: failedJob.items.map((item) => ({
+      ...item,
+      status: "queued",
+      error: null,
+    })),
+  };
+  let currentJob = failedJob;
+  let retryRequest = null;
+  let releaseRetry;
+  const retryGate = new Promise((resolve) => {
+    releaseRetry = resolve;
+  });
 
+  await page.route("**/api/generations/*/retry", async (route) => {
+    retryRequest = route.request();
+    await retryGate;
+    currentJob = queuedJob;
+    await route.fulfill({ status: 202, json: { job: queuedJob } });
+  });
   await page.route("**/api/generations*", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/generations/active") {
-      await route.fulfill({ json: { jobs: [] } });
+      await route.fulfill({
+        json: { jobs: currentJob.status === "queued" ? [currentJob] : [] },
+      });
       return;
     }
     if (url.pathname === "/api/generations") {
-      await route.fulfill({ json: { jobs: [failedJob], queue_total: 0 } });
+      await route.fulfill({ json: { jobs: [currentJob], queue_total: 0 } });
       return;
     }
     await route.continue();
@@ -886,6 +919,16 @@ test("failed generation shows the provider reason once", {
   await expect(jobCard.locator("[data-job-error]")).toBeVisible();
   await expect(jobCard.locator("[data-job-error-message]")).toHaveText(reason);
   await expect(jobCard.getByText(reason, { exact: true })).toHaveCount(1);
+
+  const retryButton = jobCard.getByRole("button", { name: "重试生成" });
+  await expect(retryButton).toBeVisible();
+  await retryButton.click();
+  await expect.poll(() => retryRequest?.method()).toBe("POST");
+  await expect(retryButton).toBeDisabled();
+  releaseRetry();
+  await expect(jobCard.locator("[data-job-status-label]")).toHaveText("排队中");
+  await expect(retryButton).toBeHidden();
+  await expect(jobCard.getByRole("button", { name: "取消" })).toBeVisible();
 });
 
 test("latest toast does not cover the generation composer", {
