@@ -252,6 +252,36 @@ class TestConversationImages(PlatformTestCase):
         self.assertEqual(assistant.payload["reference_ids"], [])
         self.assertEqual(assistant.payload["edit_recipe_id"], "")
 
+    def test_generation_reference_uses_uploaded_attachment_when_model_selects_generation(self):
+        workspace = self.create_workspace("上传图生成引用")
+        asset = self.services.workspaces.add_assets(workspace, [("reference.png", png_bytes())])[0]
+        self.chat_client.reply_content = json.dumps(
+            {
+                "status": "ready",
+                "summary_zh": "基于参考图生成",
+                "prompt": "参考图 1 保留主体并调整背景",
+                "reference_usage": "generation",
+                "reference_reason": "用户要求基于图片修改。",
+                "creative_direction": "other",
+                "template_id": "custom",
+                "style_tags": [],
+                "scene_tags": [],
+                "selection_reason": "测试生成引用。",
+                "brief": {"deliverable": "图片"},
+                "hard_checks": ["主体保持"],
+                "quality_hint": "low",
+            },
+            ensure_ascii=False,
+        )
+        _user, assistant = self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="基于这张图修改背景",
+            attachment_ids=(asset.id,),
+        )
+        self.assertEqual(assistant.payload["generation_mode"], "auto")
+        self.assertEqual(assistant.payload["reference_ids"], [asset.id])
+
     def test_historical_chat_images_are_sent_again_on_a_later_turn(self):
         workspace = self.create_workspace("历史图片上下文")
         content = png_bytes((220, 35, 45))
@@ -483,36 +513,6 @@ class TestConversationImages(PlatformTestCase):
         model_content = self.chat_client.calls[-1]["messages"][-1]["content"]
         self.assertEqual([part["type"] for part in model_content], ["text", "image_url"])
         self.assertIn("当前生成模式是 img2img", self.chat_client.calls[-1]["system"])
-
-    def test_img2img_workspace_plain_follow_up_does_not_request_missing_pad_image(self):
-        workspace = self.create_workspace("img2img 普通后续")
-        settings = dict(workspace.settings)
-        settings["mode"] = "img2img"
-        workspace.settings = settings
-        db.session.commit()
-        self.chat_client.reply_content = json.dumps(
-            {
-                "status": "ready",
-                "summary_zh": "普通文字需求",
-                "prompt": "一张简洁的产品图",
-                "creative_direction": "other",
-                "template_id": "custom",
-                "style_tags": [],
-                "scene_tags": [],
-                "selection_reason": "测试普通后续消息。",
-                "brief": {"deliverable": "图片"},
-                "hard_checks": ["主体清晰"],
-                "quality_hint": "low",
-            },
-            ensure_ascii=False,
-        )
-        _user, assistant = self.services.conversations.send(
-            workspace,
-            model_id="test-chat",
-            content="请生成一张简洁的产品图",
-        )
-        self.assertEqual(assistant.payload["generation_mode"], "text2img")
-        self.assertEqual(assistant.payload["reference_ids"], [])
 
     def test_clarification_follow_up_inherits_chat_attachments_without_explicit_generation_refs(
         self,

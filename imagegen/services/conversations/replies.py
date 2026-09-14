@@ -146,10 +146,6 @@ class ConversationReplyService(ConversationSupport):
             requested_mode = (
                 "auto" if attachment_ids and configured_mode != "img2img" else configured_mode
             )
-            # A plain follow-up must not inherit img2img without carrying its references.
-            # The user can explicitly request img2img and provide generation_reference_ids.
-            if configured_mode == "img2img" and not attachment_ids and not generation_reference_ids:
-                requested_mode = "text2img"
         generation_mode = self._normalize_generation_mode(requested_mode)
         clarification_reply_to_id = str(clarification_reply_to_id or "").strip().lower()
         if clarification_reply_to_id:
@@ -259,6 +255,18 @@ class ConversationReplyService(ConversationSupport):
             attachments=attachments,
             generation_reference_ids=generation_reference_ids,
         )
+        # A clarification answer explicitly continues the open reference plan.
+        # Restore those IDs before selecting the review mode, so img2img never loses
+        # references between analysis and final generation.
+        clarification_reply_to_id = str(payload.get("clarification_reply_to_id", "")).strip()
+        if clarification_reply_to_id and not generation_reference_ids:
+            inherited = self.clarifications.resolve(workspace, clarification_reply_to_id)
+            if inherited is not None:
+                generation_references, mode = inherited
+                generation_reference_ids = tuple(asset.id for asset in generation_references)
+        if not generation_reference_ids and attachments and mode != "text2img":
+            generation_references = attachments
+            generation_reference_ids = tuple(asset.id for asset in attachments)
         if mode == "img2img":
             candidate_references = generation_references
             review_mode = "img2img"
@@ -268,7 +276,6 @@ class ConversationReplyService(ConversationSupport):
         else:
             candidate_references = []
             review_mode = "text2img"
-        clarification_reply_to_id = str(payload.get("clarification_reply_to_id", "")).strip()
         if not candidate_references and clarification_reply_to_id:
             inherited = self.clarifications.resolve(workspace, clarification_reply_to_id)
             if inherited is not None:
