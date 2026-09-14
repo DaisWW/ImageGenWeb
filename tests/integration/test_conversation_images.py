@@ -484,6 +484,36 @@ class TestConversationImages(PlatformTestCase):
         self.assertEqual([part["type"] for part in model_content], ["text", "image_url"])
         self.assertIn("当前生成模式是 img2img", self.chat_client.calls[-1]["system"])
 
+    def test_img2img_workspace_plain_follow_up_does_not_request_missing_pad_image(self):
+        workspace = self.create_workspace("img2img 普通后续")
+        settings = dict(workspace.settings)
+        settings["mode"] = "img2img"
+        workspace.settings = settings
+        db.session.commit()
+        self.chat_client.reply_content = json.dumps(
+            {
+                "status": "ready",
+                "summary_zh": "普通文字需求",
+                "prompt": "一张简洁的产品图",
+                "creative_direction": "other",
+                "template_id": "custom",
+                "style_tags": [],
+                "scene_tags": [],
+                "selection_reason": "测试普通后续消息。",
+                "brief": {"deliverable": "图片"},
+                "hard_checks": ["主体清晰"],
+                "quality_hint": "low",
+            },
+            ensure_ascii=False,
+        )
+        _user, assistant = self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="请生成一张简洁的产品图",
+        )
+        self.assertEqual(assistant.payload["generation_mode"], "text2img")
+        self.assertEqual(assistant.payload["reference_ids"], [])
+
     def test_clarification_follow_up_inherits_chat_attachments_without_explicit_generation_refs(
         self,
     ):

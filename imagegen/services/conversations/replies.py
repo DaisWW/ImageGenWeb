@@ -146,6 +146,10 @@ class ConversationReplyService(ConversationSupport):
             requested_mode = (
                 "auto" if attachment_ids and configured_mode != "img2img" else configured_mode
             )
+            # A plain follow-up must not inherit img2img without carrying its references.
+            # The user can explicitly request img2img and provide generation_reference_ids.
+            if configured_mode == "img2img" and not attachment_ids and not generation_reference_ids:
+                requested_mode = "text2img"
         generation_mode = self._normalize_generation_mode(requested_mode)
         clarification_reply_to_id = str(clarification_reply_to_id or "").strip().lower()
         if clarification_reply_to_id:
