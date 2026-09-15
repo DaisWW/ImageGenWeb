@@ -613,6 +613,7 @@
       this.el.imageViewerStage.addEventListener("pointermove", (event) => this.moveImageViewerPan(event));
       this.el.imageViewerStage.addEventListener("pointerup", (event) => this.endImageViewerPan(event));
       this.el.imageViewerStage.addEventListener("pointercancel", (event) => this.endImageViewerPan(event));
+      this.el.imageViewerStage.addEventListener("lostpointercapture", () => this.cancelImageViewerPan());
       this.el.imageViewerStage.addEventListener("keydown", (event) => this.handleImageViewerKeydown(event));
       this.el.imageViewerDialog.addEventListener("close", () => this.closeImageViewer());
       document.addEventListener("click", (event) => this.handleImagePreviewClick(event));

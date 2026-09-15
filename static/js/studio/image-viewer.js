@@ -52,9 +52,7 @@
     },
 
     closeImageViewer() {
-      const state = this.imageViewerState();
-      state.dragging = false;
-      state.pointerId = null;
+      this.cancelImageViewerPan();
       this.imageViewerSource = null;
       this.el.imageViewerImage.removeAttribute("src");
       this.el.imageViewerImage.style.transform = "";
@@ -150,14 +148,20 @@
       this.updateImageViewerTransform();
     },
 
-    endImageViewerPan(event) {
+    cancelImageViewerPan() {
       const state = this.imageViewerState();
-      if (state.pointerId !== event.pointerId) return;
       state.dragging = false;
       state.pointerId = null;
       this.el.imageViewerStage.classList.remove("is-dragging");
-      if (this.el.imageViewerStage.hasPointerCapture(event.pointerId)) {
-        this.el.imageViewerStage.releasePointerCapture(event.pointerId);
+    },
+
+    endImageViewerPan(event) {
+      const state = this.imageViewerState();
+      if (state.pointerId !== event.pointerId) return;
+      const pointerId = state.pointerId;
+      this.cancelImageViewerPan();
+      if (this.el.imageViewerStage.hasPointerCapture(pointerId)) {
+        this.el.imageViewerStage.releasePointerCapture(pointerId);
       }
     },
 

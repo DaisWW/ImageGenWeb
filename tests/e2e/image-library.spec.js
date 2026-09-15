@@ -319,6 +319,17 @@ test("reference thumbnails open a zoomable image preview", {
   await expect(page.locator("#imageViewerZoomLabel")).not.toHaveText(initialZoom);
   await page.locator("#imageViewerZoomSlider").fill("2.5");
   await expect(page.locator("#imageViewerZoomLabel")).toHaveText("250%");
+  const stage = page.locator("#imageViewerStage");
+  const stageBox = await stage.boundingBox();
+  const transformBeforePan = await page.locator("#imageViewerImage").evaluate((image) => image.style.transform);
+  await page.mouse.move(stageBox.x + stageBox.width / 2, stageBox.y + stageBox.height / 2);
+  await page.mouse.down();
+  await expect(stage).toHaveClass(/is-dragging/);
+  await page.mouse.move(stageBox.x + stageBox.width / 2 + 80, stageBox.y + stageBox.height / 2 + 40);
+  await page.mouse.up();
+  await expect(stage).not.toHaveClass(/is-dragging/);
+  const transformAfterPan = await page.locator("#imageViewerImage").evaluate((image) => image.style.transform);
+  expect(transformAfterPan).not.toBe(transformBeforePan);
   await page.locator("#imageViewerFit").click();
   await expect(page.locator("#imageViewerDialog")).toBeVisible();
   await page.locator('#imageViewerDialog [data-close-dialog="imageViewerDialog"]').click();
