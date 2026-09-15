@@ -30,7 +30,7 @@
         settings.size || workspace?.settings?.size || "1024x1024",
       ).trim().toLowerCase().replaceAll("×", "x");
       const references = mode === "img2img"
-        ? [...selection].map((id) => (
+        ? this.orderedReferenceIds(workspaceId, selection).map((id) => (
           workspace?.assets?.find((asset) => asset.id === id)
         )).filter(Boolean)
         : [];
@@ -213,6 +213,38 @@
         this.referenceSelections.set(workspaceId, new Set());
       }
       return this.referenceSelections.get(workspaceId);
+    },
+
+    orderedReferenceIds(
+      workspaceId = this.activeWorkspace?.id,
+      selection = this.currentSelection(workspaceId),
+    ) {
+      const workspace = this.workspaces?.find((item) => item.id === workspaceId)
+        || (this.activeWorkspace?.id === workspaceId ? this.activeWorkspace : null);
+      const selected = new Set(selection || []);
+      if (!workspace) return [...selected];
+      const ordered = workspace.assets
+        .filter((asset) => selected.has(asset.id))
+        .map((asset) => asset.id);
+      const known = new Set(ordered);
+      return [...ordered, ...[...selected].filter((id) => !known.has(id))];
+    },
+
+    orderedGenerationReferenceIds(
+      workspaceId = this.activeWorkspace?.id,
+      selection = this.currentSelection(workspaceId),
+    ) {
+      const workspace = this.workspaces?.find((item) => item.id === workspaceId)
+        || (this.activeWorkspace?.id === workspaceId ? this.activeWorkspace : null);
+      const ordered = this.orderedReferenceIds(workspaceId, selection);
+      const strategy = workspace?.id === this.activeWorkspace?.id
+        ? this.el?.generationStrategy?.value || workspace?.settings?.generation_strategy
+        : workspace?.settings?.generation_strategy;
+      const anchorId = strategy === "series"
+        ? String(workspace?.settings?.series_anchor?.asset_id || "").trim().toLowerCase()
+        : "";
+      if (!anchorId || !ordered.includes(anchorId)) return ordered;
+      return [anchorId, ...ordered.filter((id) => id !== anchorId)];
     },
 
     currentChatSelection(workspaceId = this.activeWorkspace?.id) {

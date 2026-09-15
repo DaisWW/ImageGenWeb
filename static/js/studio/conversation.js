@@ -102,7 +102,7 @@
         this.renderChatReferences();
         UI.toast(`附件上限已更新，已取消 ${omitted} 张超限图片`, "info");
       }
-      const attachmentIds = [...selection];
+      const attachmentIds = this.orderedReferenceIds(workspaceId, selection);
       if (!content && !attachmentIds.length) {
         UI.toast("请输入消息或添加参考图", "error");
         this.el.chatInput.focus();
@@ -114,7 +114,10 @@
       }
       const selectedIds = new Set(attachmentIds);
       const selectedGenerationMode = this.el.modeSwitch.dataset.mode || "text2img";
-      const selectedGenerationReferences = [...this.currentSelection(workspaceId)];
+      const selectedGenerationReferences = this.orderedGenerationReferenceIds(
+        workspaceId,
+        this.currentSelection(workspaceId),
+      );
       const generationMode = selectedGenerationMode === "img2img"
         && (selectedGenerationReferences.length || !attachmentIds.length)
         ? "img2img"
@@ -303,7 +306,10 @@
       const draft = this.el.chatInput.value.trim();
       const prompt = draft.slice(0, this.limits.max_prompt_characters);
       const requested = referenceIds === null
-        ? [...this.currentChatSelection()]
+        ? this.orderedReferenceIds(
+          this.activeWorkspace.id,
+          this.currentChatSelection(),
+        )
         : [...new Set(referenceIds)];
       if (prompt.length < draft.length) UI.toast("描述过长，已按提示词长度上限截取", "info");
       this.showGenerationComposer(prompt, requested.length ? requested : null);

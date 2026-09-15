@@ -9,6 +9,15 @@
   } = window.ImageGenStudio;
 
   Object.assign(StudioApp.prototype, {
+    referenceOrderBadge(number) {
+      const badge = document.createElement("span");
+      badge.className = "reference-order";
+      badge.textContent = String(number);
+      badge.title = `图${number}`;
+      badge.setAttribute("aria-hidden", "true");
+      return badge;
+    },
+
     referencePreviewButton(src, alt, title, chat = false) {
       const preview = document.createElement("button");
       preview.type = "button";
@@ -97,14 +106,17 @@
       library.setAttribute("aria-label", library.title);
       library.innerHTML = '<i data-lucide="library"></i>';
 
-      const cards = visibleAssets.map((asset) => {
+      const cards = visibleAssets.map((asset, index) => {
         const card = document.createElement("span");
         card.className = "chat-reference-item";
         const toggle = document.createElement("button");
         toggle.type = "button";
         toggle.className = `chat-reference-card${selection.has(asset.id) ? " selected" : ""}`;
         toggle.dataset.chatReferenceToggle = asset.id;
-        toggle.title = selection.has(asset.id) ? `取消 ${asset.name}` : `随消息发送 ${asset.name}`;
+        const order = index + 1;
+        toggle.title = selection.has(asset.id)
+          ? `取消图${order} ${asset.name}`
+          : `随消息发送图${order} ${asset.name}`;
         const image = document.createElement("img");
         image.src = asset.url;
         image.alt = asset.name;
@@ -121,6 +133,7 @@
         remove.innerHTML = '<i data-lucide="x"></i>';
         card.append(
           toggle,
+          this.referenceOrderBadge(order),
           this.referencePreviewButton(asset.url, asset.name, `放大预览 ${asset.name}`, true),
           this.librarySaveButton(asset),
           remove,
@@ -181,7 +194,7 @@
       this.el.referenceAdd.disabled = assets.length + uploads.length >= this.limits.max_assets_per_workspace
         || this.referenceUploadPending;
       this.el.referenceList.replaceChildren(
-        ...assets.map((asset) => {
+        ...assets.map((asset, index) => {
           const card = document.createElement("div");
           card.className = `reference-card${selected.has(asset.id) ? " selected" : ""}`;
           card.dataset.assetId = asset.id;
@@ -189,7 +202,10 @@
           toggle.type = "button";
           toggle.className = "reference-toggle";
           toggle.dataset.referenceToggle = asset.id;
-          toggle.title = selected.has(asset.id) ? "取消选择" : "选择为垫图";
+          const order = index + 1;
+          toggle.title = selected.has(asset.id)
+            ? `取消图${order} ${asset.name}`
+            : `选择图${order}为垫图`;
           const image = document.createElement("img");
           image.src = asset.url;
           image.alt = asset.name;
@@ -206,6 +222,7 @@
           remove.innerHTML = '<i data-lucide="x"></i>';
           card.append(
             toggle,
+            this.referenceOrderBadge(order),
             this.referencePreviewButton(asset.url, asset.name, `放大预览 ${asset.name}`),
             this.librarySaveButton(asset),
             remove,

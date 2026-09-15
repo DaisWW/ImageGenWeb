@@ -119,7 +119,7 @@
         this.renderReferences();
         UI.toast(`渠道垫图上限已更新，已取消 ${omitted} 张超限图片`, "info");
       }
-      const referenceIds = [...selection];
+      const referenceIds = this.orderedGenerationReferenceIds(workspace.id, selection);
       const reviewedDraft = this.currentPromptDraft();
       const settings = {
         ...this.collectSettings(),

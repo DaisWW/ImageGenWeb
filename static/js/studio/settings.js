@@ -551,7 +551,9 @@
       if (selectedGallery !== "auto"
         && !(payload.gallery_categories || []).includes(selectedGallery)) return null;
       const expectedReferences = mode === "img2img" ? (payload.reference_ids || []) : [];
-      const selectedReferences = mode === "img2img" ? [...this.currentSelection()] : [];
+      const selectedReferences = mode === "img2img"
+        ? this.orderedGenerationReferenceIds()
+        : [];
       if (expectedReferences.length !== selectedReferences.length
         || expectedReferences.some((id, index) => id !== selectedReferences[index])) return null;
       return draft;
@@ -583,7 +585,7 @@
         gallery_category_id: this.el.galleryCategorySelect.value || "auto",
         prompt_draft_id: this.activeWorkspace?.settings?.prompt_draft_id || "",
         generation_stage: this.activeWorkspace?.settings?.generation_stage || "final",
-        reference_ids: [...this.currentSelection()],
+        reference_ids: this.orderedGenerationReferenceIds(),
       };
     },
 
