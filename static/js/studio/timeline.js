@@ -444,6 +444,10 @@
           link.target = "_blank";
           link.rel = "noopener";
           link.title = asset.name;
+          link.dataset.imagePreview = "true";
+          link.dataset.imagePreviewSrc = asset.url;
+          link.dataset.imagePreviewAlt = asset.name;
+          link.dataset.imagePreviewTitle = `放大预览 ${asset.name}`;
           const image = document.createElement("img");
           image.src = asset.url;
           image.alt = asset.name;

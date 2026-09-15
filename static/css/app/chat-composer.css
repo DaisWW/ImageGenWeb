@@ -192,6 +192,14 @@
   display: grid;
 }
 
+.chat-reference-preview {
+  right: auto;
+  bottom: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+}
+
 .reference-remove.chat-reference-remove,
 .chat-reference-item .reference-library-save {
   top: 3px;

@@ -57,6 +57,16 @@ const BACKGROUND_REMOVAL_ADAPTER_LABEL = {
       this.detailItemId = item.id;
       this.detailJobId = job.id;
       this.el.detailImage.src = item.image_url;
+      this.el.detailImage.dataset.imagePreview = "true";
+      this.el.detailImage.dataset.imagePreviewSrc = item.image_url;
+      this.el.detailImage.dataset.imagePreviewAlt = "生成结果";
+      this.el.detailImage.dataset.imagePreviewTitle = "放大预览生成结果";
+      this.el.detailImage.title = "放大预览生成结果";
+      this.el.detailImage.tabIndex = 0;
+      this.el.detailImage.setAttribute("role", "button");
+      this.el.detailImagePreviewButton.dataset.imagePreviewSrc = item.image_url;
+      this.el.detailImagePreviewButton.dataset.imagePreviewAlt = "生成结果";
+      this.el.detailImagePreviewButton.dataset.imagePreviewTitle = "放大预览生成结果";
       this.prepareImageReveal(this.el.detailImage);
       this.el.detailPrompt.textContent = item.prompt || job.prompt;
       const transparentLabel = job.transparent_background ? " · 透明背景" : "";
@@ -91,10 +101,28 @@ const BACKGROUND_REMOVAL_ADAPTER_LABEL = {
       this.el.detailList.innerHTML = details
         .map(([label, value]) => `<div><dt>${label}</dt><dd>${UI.escapeHtml(value)}</dd></div>`)
         .join("");
-      this.el.detailReferences.innerHTML = job.references.length
-        ? `<span>垫图</span><div>${job.references.map((asset) => `<img src="${asset.url}" alt="${UI.escapeHtml(asset.name)}" decoding="async">`).join("")}</div>`
-        : "";
-      this.el.detailReferences.querySelectorAll("img").forEach((image) => this.prepareImageReveal(image));
+      this.el.detailReferences.replaceChildren();
+      if (job.references.length) {
+        const label = document.createElement("span");
+        label.textContent = "垫图";
+        const list = document.createElement("div");
+        job.references.forEach((asset) => {
+          const image = document.createElement("img");
+          image.src = asset.url;
+          image.alt = asset.name;
+          image.title = `放大预览 ${asset.name}`;
+          image.dataset.imagePreview = "true";
+          image.dataset.imagePreviewSrc = asset.url;
+          image.dataset.imagePreviewAlt = asset.name;
+          image.dataset.imagePreviewTitle = `放大预览 ${asset.name}`;
+          image.tabIndex = 0;
+          image.setAttribute("role", "button");
+          image.decoding = "async";
+          this.prepareImageReveal(image);
+          list.append(image);
+        });
+        this.el.detailReferences.append(label, list);
+      }
       this.renderDetailReview(item.review || {});
       this.el.detailDownload.href = item.download_url;
       this.refreshDetailSeriesAnchorState(job, item);
@@ -288,9 +316,23 @@ const BACKGROUND_REMOVAL_ADAPTER_LABEL = {
           this.el.backgroundRemovalPreviewImage.src = active.image_url;
           this.prepareImageReveal(this.el.backgroundRemovalPreviewImage);
         }
+        this.el.backgroundRemovalPreviewImage.dataset.imagePreview = "true";
+        this.el.backgroundRemovalPreviewImage.dataset.imagePreviewSrc = active.image_url;
+        this.el.backgroundRemovalPreviewImage.dataset.imagePreviewAlt = `${active.model_label} 透明化结果`;
+        this.el.backgroundRemovalPreviewImage.dataset.imagePreviewTitle = `放大预览 ${active.model_label}`;
+        this.el.backgroundRemovalPreviewImage.title = `放大预览 ${active.model_label}`;
+        this.el.backgroundRemovalPreviewImage.tabIndex = 0;
+        this.el.backgroundRemovalPreviewImage.setAttribute("role", "button");
         setText(this.el.backgroundRemovalPreviewLabel, active.model_label);
       } else {
         this.el.backgroundRemovalPreviewImage.removeAttribute("src");
+        delete this.el.backgroundRemovalPreviewImage.dataset.imagePreview;
+        delete this.el.backgroundRemovalPreviewImage.dataset.imagePreviewSrc;
+        delete this.el.backgroundRemovalPreviewImage.dataset.imagePreviewAlt;
+        delete this.el.backgroundRemovalPreviewImage.dataset.imagePreviewTitle;
+        this.el.backgroundRemovalPreviewImage.removeAttribute("title");
+        this.el.backgroundRemovalPreviewImage.removeAttribute("tabindex");
+        this.el.backgroundRemovalPreviewImage.removeAttribute("role");
         setText(this.el.backgroundRemovalPreviewLabel, "结果预览");
         const waiting = results.some((result) => ["queued", "running"].includes(result.status));
         const emptyText = this.el.backgroundRemovalPreviewEmpty.querySelector("span");

@@ -9,6 +9,19 @@
   } = window.ImageGenStudio;
 
   Object.assign(StudioApp.prototype, {
+    referencePreviewButton(src, alt, title, chat = false) {
+      const preview = document.createElement("button");
+      preview.type = "button";
+      preview.className = `reference-preview${chat ? " chat-reference-preview" : ""}`;
+      preview.dataset.imagePreview = "true";
+      preview.dataset.imagePreviewSrc = src;
+      preview.dataset.imagePreviewAlt = alt;
+      preview.dataset.imagePreviewTitle = title;
+      preview.title = title;
+      preview.setAttribute("aria-label", title);
+      preview.innerHTML = '<i data-lucide="zoom-in"></i>';
+      return preview;
+    },
     referenceUploadCard(pending, target = "generation") {
       const chat = target === "chat";
       const card = document.createElement(chat ? "span" : "div");
@@ -21,6 +34,14 @@
       image.src = pending.previewUrl;
       image.alt = pending.file.name || "待上传图片";
       image.decoding = "async";
+      preview.dataset.imagePreview = "true";
+      preview.dataset.imagePreviewSrc = pending.previewUrl;
+      preview.dataset.imagePreviewAlt = image.alt;
+      preview.dataset.imagePreviewTitle = `放大预览 ${image.alt}`;
+      preview.title = `放大预览 ${image.alt}`;
+      preview.tabIndex = 0;
+      preview.setAttribute("role", "button");
+      preview.setAttribute("aria-label", `放大预览 ${image.alt}`);
       const status = document.createElement("span");
       status.className = "reference-upload-status";
       status.title = pending.state === "canceling" ? "正在取消" : "正在上传";
@@ -98,7 +119,12 @@
         remove.title = `删除 ${asset.name}`;
         remove.setAttribute("aria-label", `删除 ${asset.name}`);
         remove.innerHTML = '<i data-lucide="x"></i>';
-        card.append(toggle, this.librarySaveButton(asset), remove);
+        card.append(
+          toggle,
+          this.referencePreviewButton(asset.url, asset.name, `放大预览 ${asset.name}`, true),
+          this.librarySaveButton(asset),
+          remove,
+        );
         return card;
       });
       const uploadCards = uploads.map((pending) => this.referenceUploadCard(pending, "chat"));
@@ -178,7 +204,12 @@
           remove.title = "删除垫图";
           remove.setAttribute("aria-label", remove.title);
           remove.innerHTML = '<i data-lucide="x"></i>';
-          card.append(toggle, this.librarySaveButton(asset), remove);
+          card.append(
+            toggle,
+            this.referencePreviewButton(asset.url, asset.name, `放大预览 ${asset.name}`),
+            this.librarySaveButton(asset),
+            remove,
+          );
           return card;
         }),
         ...uploads.map((pending) => this.referenceUploadCard(pending)),

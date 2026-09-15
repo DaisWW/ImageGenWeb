@@ -386,6 +386,36 @@
 .reference-remove { right: -5px; }
 .reference-library-save { left: -5px; }
 
+.reference-preview {
+  position: absolute;
+  z-index: 2;
+  bottom: 3px;
+  left: 3px;
+  display: grid;
+  width: 19px;
+  height: 19px;
+  padding: 0;
+  place-items: center;
+  color: #fff;
+  border: 1px solid rgb(255 255 255 / 38%);
+  border-radius: 50%;
+  background: rgb(8 10 12 / 88%);
+  box-shadow: 0 2px 7px rgb(0 0 0 / 45%);
+  cursor: zoom-in;
+}
+
+.reference-preview:hover,
+.reference-preview:focus-visible {
+  color: var(--accent);
+  border-color: var(--accent);
+  outline: 0;
+}
+
+.reference-preview svg {
+  width: 11px;
+  height: 11px;
+}
+
 .reference-card:hover .reference-remove,
 .reference-remove:focus-visible {
   opacity: 1;
@@ -415,6 +445,7 @@
   position: relative;
   display: block;
   overflow: hidden;
+  cursor: zoom-in;
 }
 
 .reference-upload-preview img {

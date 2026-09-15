@@ -668,6 +668,12 @@ test("image detail keeps its reference through multi-turn refinement", {
   await expect(page.locator("#detailList")).toContainText("实际图片");
   await expect(page.locator("#detailList")).toContainText("采用对话画幅");
   await expect(page.locator("#detailList")).toContainText("商品商业视觉");
+  await page.locator("#detailImage").click();
+  await expect(page.locator("#imageViewerDialog")).toBeVisible();
+  await page.locator("#imageViewerZoomSlider").fill("2");
+  await expect(page.locator("#imageViewerZoomLabel")).toHaveText("200%");
+  await page.locator('#imageViewerDialog [data-close-dialog="imageViewerDialog"]').click();
+  await expect(page.locator("#imageDialog")).toBeVisible();
   await page.locator("#detailRunReview").click();
   await reviewStarted;
   await expect(page.locator("#detailReview")).toBeVisible();

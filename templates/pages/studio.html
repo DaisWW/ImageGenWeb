@@ -202,7 +202,10 @@
 
 <dialog class="modal image-modal" id="imageDialog">
   <div class="image-dialog-layout">
-    <div class="image-dialog-preview"><img id="detailImage" alt="生成结果" decoding="async"></div>
+    <div class="image-dialog-preview">
+      <img id="detailImage" alt="生成结果" decoding="async">
+      <button class="icon-button image-dialog-preview-button" type="button" id="detailImagePreviewButton" data-image-preview="true" title="放大预览生成结果" aria-label="放大预览生成结果"><i data-lucide="zoom-in"></i></button>
+    </div>
     <div class="image-dialog-info">
       <div class="modal-header">
         <div><span class="eyebrow">Generation Detail</span><h2>生成详情</h2></div>
@@ -231,6 +234,28 @@
         <button class="button secondary" type="button" id="detailReuse" title="将当前图加入参考图，并回到创作区描述需要改变的内容。"><i data-lucide="image-plus"></i><span id="detailReuseLabel">基于此图继续</span></button>
         <a class="button primary" id="detailDownload" title="下载当前生成结果的原始文件。" download><i data-lucide="download"></i>下载原图</a>
       </div>
+    </div>
+  </div>
+</dialog>
+
+<dialog class="modal image-viewer-modal" id="imageViewerDialog">
+  <div class="image-viewer-layout">
+    <header class="image-viewer-toolbar">
+      <div class="image-viewer-title">
+        <span class="eyebrow">Image Preview</span>
+        <strong id="imageViewerTitle">图片预览</strong>
+      </div>
+      <div class="image-viewer-controls" role="group" aria-label="图片缩放控制">
+        <button class="icon-button" type="button" id="imageViewerZoomOut" title="缩小" aria-label="缩小"><i data-lucide="zoom-out"></i></button>
+        <input id="imageViewerZoomSlider" type="range" min="0.25" max="8" step="0.05" value="1" aria-label="缩放比例">
+        <span class="image-viewer-zoom-label" id="imageViewerZoomLabel">100%</span>
+        <button class="icon-button" type="button" id="imageViewerZoomIn" title="放大" aria-label="放大"><i data-lucide="zoom-in"></i></button>
+        <button class="icon-button" type="button" id="imageViewerFit" title="适应窗口" aria-label="适应窗口"><i data-lucide="scan"></i></button>
+        <button class="icon-button" type="button" data-close-dialog="imageViewerDialog" aria-label="关闭"><i data-lucide="x"></i></button>
+      </div>
+    </header>
+    <div class="image-viewer-stage" id="imageViewerStage" tabindex="0" aria-label="图片预览区域">
+      <img id="imageViewerImage" alt="" decoding="async">
     </div>
   </div>
 </dialog>
@@ -363,6 +388,7 @@
 <script src="{{ url_for('static', filename='js/studio/references.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/studio/generations.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/studio/image-tools.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/studio/image-viewer.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/studio/runtime.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/studio.js') }}" defer></script>
 {% endblock %}

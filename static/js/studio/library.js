@@ -80,14 +80,17 @@
         const id = UI.escapeHtml(entry.id);
         const name = UI.escapeHtml(entry.name);
         const url = UI.escapeHtml(entry.thumbnail_url || entry.url);
+        const previewUrl = UI.escapeHtml(entry.url || entry.thumbnail_url);
         const selected = this.librarySelection.has(entry.id);
         const selectTitle = UI.escapeHtml(selected ? `取消选择 ${entry.name}` : `选择 ${entry.name}`);
         const deleteTitle = UI.escapeHtml(`从图库删除 ${entry.name}`);
+        const previewTitle = UI.escapeHtml(`放大预览 ${entry.name}`);
         return `<article class="library-card${selected ? " selected" : ""}" data-library-image="${id}">
           <button type="button" class="library-use" data-toggle-library-image="${id}" title="${selectTitle}"${disabled}>
             <span class="library-thumbnail"><img src="${url}" alt="${name}" loading="lazy" decoding="async"></span>
             <span class="library-card-copy"><strong>${name}</strong></span>
           </button>
+          <button type="button" class="icon-button library-preview" data-image-preview="true" data-image-preview-src="${previewUrl}" data-image-preview-alt="${name}" data-image-preview-title="${previewTitle}" title="${previewTitle}" aria-label="${previewTitle}"${disabled}><i data-lucide="zoom-in"></i></button>
           <label class="library-select" title="${selectTitle}">
             <input type="checkbox" data-select-library-image="${id}"${selected ? " checked" : ""}${disabled} aria-label="${selectTitle}">
           </label>

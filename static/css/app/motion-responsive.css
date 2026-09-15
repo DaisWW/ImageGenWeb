@@ -93,8 +93,8 @@
   .model-field { grid-column: span 1; }
   .image-modal { height: auto; max-height: 92vh; }
   .image-dialog-layout { height: auto; max-height: 92vh; grid-template-columns: 1fr; overflow: auto; }
-  .image-dialog-preview { min-height: 300px; max-height: 56vh; padding: 12px; }
-  .image-dialog-preview img { max-height: calc(56vh - 24px); }
+  .image-dialog-preview { min-height: 320px; max-height: 60vh; padding: 12px; }
+  .image-dialog-preview img { max-height: calc(60vh - 24px); }
   .image-dialog-info { grid-template-rows: auto; overflow: visible; border-top: 1px solid var(--line); border-left: 0; }
   .image-dialog-info > .modal-header { position: sticky; z-index: 2; top: 0; }
   .image-dialog-scroll { min-height: auto; overflow: visible; overscroll-behavior: auto; }
@@ -226,6 +226,9 @@
   .compact-field select { padding-inline: 7px; }
   .modal-actions .button { flex: 1; }
   .image-dialog-preview { min-height: 260px; }
+  .image-viewer-toolbar { align-items: stretch; flex-direction: column; gap: 10px; padding: 10px 12px; }
+  .image-viewer-controls { width: 100%; gap: 5px; }
+  .image-viewer-controls input[type="range"] { flex: 1; width: auto; }
   .admin-media-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 

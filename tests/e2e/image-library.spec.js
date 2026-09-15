@@ -284,3 +284,44 @@ test("many padding images stay inside the generation drawer", {
     lastCardVisibleAfterScroll: true,
   });
 });
+
+test("reference thumbnails open a zoomable image preview", {
+  tag: "@responsive",
+}, async ({ studioPage: page }) => {
+  await mockConfiguredImageChannel(page);
+  const images = [libraryImage(
+    "library-generation-preview",
+    "generation-preview.png",
+    "/static/assets/starter-ocean-sky-reference.png",
+  )];
+  await mockLibrarySelection(page, images);
+  await page.reload();
+  await page.locator("#directGenerationButton").evaluate((button) => {
+    button.hidden = false;
+    button.click();
+  });
+  await expect(page.locator("#generationForm")).toBeVisible();
+  await page.locator('#modeSwitch [data-mode="img2img"]').click();
+  await page.locator("#referenceLibrary").click();
+  await page.locator("#libraryGrid [data-image-preview]").click();
+  await expect(page.locator("#imageViewerDialog")).toBeVisible();
+  await page.locator('#imageViewerDialog [data-close-dialog="imageViewerDialog"]').click();
+  await page.locator("#libraryGrid [data-select-library-image]").check();
+  await page.locator("#libraryConfirmButton").click();
+  const preview = page.locator("#referenceList [data-image-preview]");
+  await expect(preview).toBeVisible();
+  await preview.click();
+  await expect(page.locator("#imageViewerDialog")).toBeVisible();
+  await expect(page.locator("#imageViewerTitle")).toHaveText("放大预览 generation-preview.png");
+
+  const initialZoom = await page.locator("#imageViewerZoomLabel").textContent();
+  await page.locator("#imageViewerZoomIn").click();
+  await expect(page.locator("#imageViewerZoomLabel")).not.toHaveText(initialZoom);
+  await page.locator("#imageViewerZoomSlider").fill("2.5");
+  await expect(page.locator("#imageViewerZoomLabel")).toHaveText("250%");
+  await page.locator("#imageViewerFit").click();
+  await expect(page.locator("#imageViewerDialog")).toBeVisible();
+  await page.locator('#imageViewerDialog [data-close-dialog="imageViewerDialog"]').click();
+  await expect(page.locator("#imageViewerDialog")).toBeHidden();
+  await expect(page.locator("#referenceList .reference-card.selected")).toHaveCount(1);
+});

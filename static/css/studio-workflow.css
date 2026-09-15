@@ -603,6 +603,10 @@
   object-position: center;
 }
 
+.background-removal-preview img[data-image-preview] {
+  cursor: zoom-in;
+}
+
 .background-removal-preview-empty {
   display: grid;
   gap: 7px;
