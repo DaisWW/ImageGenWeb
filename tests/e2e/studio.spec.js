@@ -952,8 +952,11 @@ test("latest toast does not cover the generation composer", {
 
   const toastBox = await toast.boundingBox();
   const composerBox = await page.locator("#generationForm").boundingBox();
+  const workspaceViewBox = await page.locator("#conversationView").boundingBox();
   expect(toastBox).not.toBeNull();
   expect(composerBox).not.toBeNull();
+  expect(workspaceViewBox).not.toBeNull();
+  expect(composerBox.y).toBeCloseTo(workspaceViewBox.y, 0);
   expect(rectanglesOverlap(toastBox, composerBox)).toBe(false);
   await closeGenerationComposer(page);
   await deleteWorkspace(page, workspaceName);

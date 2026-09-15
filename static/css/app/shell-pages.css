@@ -15,11 +15,14 @@
 }
 
 body:has(#generationForm:not([hidden])):has(#toastRegion .toast) .toast-region {
+  right: min(560px, 100%);
   top: 8px;
 }
 
-body:has(#generationForm:not([hidden])):has(#toastRegion .toast) #generationForm {
-  padding-top: 110px;
+@media (max-width: 920px) {
+  body:has(#generationForm:not([hidden])):has(#toastRegion .toast) .toast-region {
+    right: 16px;
+  }
 }
 
 .toast {
