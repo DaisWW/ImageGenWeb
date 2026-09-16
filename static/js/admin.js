@@ -690,15 +690,22 @@
           const provider = item.channel || job.channel || "系统自动调度";
           const retryCount = item.retry_count ?? 0;
           const retryLimit = item.retry_limit ?? 5;
+          const previewUrl = item.image_url || item.thumbnail_url;
+          const previewAlt = `生成结果 ${item.position + 1} · ${provider}`;
+          const previewTitle = `放大预览第 ${item.position + 1} 张生成结果 · ${provider}`;
           const statusLabel = item.status === "reconnecting"
             ? `正在重连 ${retryCount}/${retryLimit}`
             : "";
           return item.thumbnail_url
-            ? `<a class="admin-media-tile admin-output" href="${UI.escapeHtml(item.image_url)}" target="_blank" rel="noopener" title="查看第 ${item.position + 1} 张原图 · ${UI.escapeHtml(provider)}"><img src="${UI.escapeHtml(item.thumbnail_url)}" alt="生成结果 ${item.position + 1} · ${UI.escapeHtml(provider)}" loading="lazy" decoding="async"${imageDimensions(item)}><small class="admin-output-channel">${UI.escapeHtml(provider)}</small></a>`
+            ? `<a class="admin-media-tile admin-output" href="${UI.escapeHtml(previewUrl)}" target="_blank" rel="noopener" data-image-preview="true" data-image-preview-src="${UI.escapeHtml(previewUrl)}" data-image-preview-alt="${UI.escapeHtml(previewAlt)}" data-image-preview-title="${UI.escapeHtml(previewTitle)}" title="${UI.escapeHtml(previewTitle)}" aria-label="${UI.escapeHtml(previewTitle)}"><img src="${UI.escapeHtml(item.thumbnail_url)}" alt="${UI.escapeHtml(previewAlt)}" loading="lazy" decoding="async"${imageDimensions(item)}><small class="admin-output-channel">${UI.escapeHtml(provider)}</small></a>`
             : `<span class="admin-media-tile admin-output empty ${item.status}" aria-label="${UI.escapeHtml(statusLabel || STATUS[item.status] || item.status)} · ${UI.escapeHtml(provider)}"><i data-lucide="${item.status === "failed" ? "circle-alert" : "loader-circle"}"></i>${statusLabel ? `<small class="admin-output-status">${UI.escapeHtml(statusLabel)}</small>` : ""}<small class="admin-output-channel">${UI.escapeHtml(provider)}</small></span>`;
         }).join("");
         const references = job.references.length
-          ? `<section class="admin-media-group admin-reference-group admin-references"><div class="admin-media-heading"><span>垫图</span><small>${job.references.length} 张</small></div><div class="admin-media-grid">${job.references.map((asset, index) => `<a class="admin-media-tile admin-reference" href="${UI.escapeHtml(asset.url)}" target="_blank" rel="noopener" title="查看垫图 ${index + 1}"><img src="${UI.escapeHtml(asset.url)}" alt="${UI.escapeHtml(asset.name || `垫图 ${index + 1}`)}" loading="lazy" decoding="async"${imageDimensions(asset)}></a>`).join("")}</div></section>`
+          ? `<section class="admin-media-group admin-reference-group admin-references"><div class="admin-media-heading"><span>垫图</span><small>${job.references.length} 张</small></div><div class="admin-media-grid">${job.references.map((asset, index) => {
+            const name = asset.name || `垫图 ${index + 1}`;
+            const title = `放大预览 ${name}`;
+            return `<a class="admin-media-tile admin-reference" href="${UI.escapeHtml(asset.url)}" target="_blank" rel="noopener" data-image-preview="true" data-image-preview-src="${UI.escapeHtml(asset.url)}" data-image-preview-alt="${UI.escapeHtml(name)}" data-image-preview-title="${UI.escapeHtml(title)}" title="${UI.escapeHtml(title)}" aria-label="${UI.escapeHtml(title)}"><img src="${UI.escapeHtml(asset.url)}" alt="${UI.escapeHtml(name)}" loading="lazy" decoding="async"${imageDimensions(asset)}></a>`;
+          }).join("")}</div></section>`
           : "";
         const outputGroup = `<section class="admin-media-group admin-output-group"><div class="admin-media-heading"><span>生成结果</span><small>${job.succeeded_count}/${job.requested_count} 张</small></div><div class="admin-media-grid">${outputs}</div></section>`;
         const channelSummary = job.channels?.length
