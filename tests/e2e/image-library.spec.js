@@ -317,9 +317,8 @@ test("reference thumbnails open a zoomable image preview", {
   const initialZoom = await page.locator("#imageViewerZoomLabel").textContent();
   await page.locator("#imageViewerZoomIn").click();
   await expect(page.locator("#imageViewerZoomLabel")).not.toHaveText(initialZoom);
-  await page.locator("#imageViewerZoomSlider").fill("2.5");
-  await expect(page.locator("#imageViewerZoomLabel")).toHaveText("250%");
   const stage = page.locator("#imageViewerStage");
+  await expect(stage).toHaveClass(/is-zoomed/);
   const stageBox = await stage.boundingBox();
   const transformBeforePan = await page.locator("#imageViewerImage").evaluate((image) => image.style.transform);
   await page.mouse.move(stageBox.x + stageBox.width / 2, stageBox.y + stageBox.height / 2);

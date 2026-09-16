@@ -65,8 +65,9 @@ test("admin generation media preview, pan and wrap without horizontal scrolling"
   await expect(page.locator("#imageViewerImage")).toHaveAttribute("src", imageUrl);
   await expect.poll(() => page.locator("#imageViewerImage")
     .evaluate((image) => image.naturalWidth)).toBeGreaterThan(0);
-  await page.locator("#imageViewerZoomSlider").fill("2.5");
   const stage = page.locator("#imageViewerStage");
+  await page.locator("#imageViewerZoomIn").click();
+  await expect(stage).toHaveClass(/is-zoomed/);
   const stageBox = await stage.boundingBox();
   const transformBeforePan = await page.locator("#imageViewerImage")
     .evaluate((image) => image.style.transform);

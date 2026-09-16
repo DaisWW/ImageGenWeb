@@ -124,18 +124,45 @@
 
     adjustZoom(direction) {
       const factor = direction > 0 ? 1.25 : 0.8;
-      this.setZoom(Number((this.state.scale * factor).toFixed(2)));
+      let nextScale = this.state.scale * factor;
+      if (direction > 0 && !this.canPanAtScale(nextScale)) {
+        nextScale = Math.max(nextScale, this.minimumPannableScale());
+      }
+      this.setZoom(Number(nextScale.toFixed(2)));
+    }
+
+    panBounds(scale = this.state.scale) {
+      return {
+        maxX: Math.max(
+          0,
+          (this.el.image.naturalWidth * scale - this.el.stage.clientWidth) / 2,
+        ),
+        maxY: Math.max(
+          0,
+          (this.el.image.naturalHeight * scale - this.el.stage.clientHeight) / 2,
+        ),
+      };
+    }
+
+    canPanAtScale(scale = this.state.scale) {
+      const { maxX, maxY } = this.panBounds(scale);
+      return maxX > 0 || maxY > 0;
+    }
+
+    minimumPannableScale() {
+      const image = this.el.image;
+      const stage = this.el.stage;
+      if (!image.naturalWidth || !image.naturalHeight || !stage.clientWidth || !stage.clientHeight) {
+        return this.state.scale;
+      }
+      return Math.max(
+        stage.clientWidth / image.naturalWidth,
+        stage.clientHeight / image.naturalHeight,
+      ) * 1.05;
     }
 
     clampOffset() {
-      const maxX = Math.max(
-        0,
-        (this.el.image.naturalWidth * this.state.scale - this.el.stage.clientWidth) / 2,
-      );
-      const maxY = Math.max(
-        0,
-        (this.el.image.naturalHeight * this.state.scale - this.el.stage.clientHeight) / 2,
-      );
+      const { maxX, maxY } = this.panBounds();
       this.state.offsetX = Math.min(maxX, Math.max(-maxX, this.state.offsetX));
       this.state.offsetY = Math.min(maxY, Math.max(-maxY, this.state.offsetY));
     }
@@ -145,7 +172,7 @@
       this.el.image.style.transform = `translate3d(calc(-50% + ${this.state.offsetX}px), calc(-50% + ${this.state.offsetY}px), 0) scale(${this.state.scale})`;
       this.el.zoomSlider.value = String(this.state.scale);
       this.el.zoomLabel.textContent = `${Math.round(this.state.scale * 100)}%`;
-      this.el.stage.classList.toggle("is-zoomed", this.state.scale > this.state.fitScale + 0.01);
+      this.el.stage.classList.toggle("is-zoomed", this.canPanAtScale());
     }
 
     handleWheel(event) {
@@ -157,7 +184,8 @@
 
     startPan(event) {
       if (event.button !== 0 || !this.el.image.naturalWidth
-        || this.state.scale <= this.state.fitScale + 0.01) return;
+        || !this.canPanAtScale()) return;
+      event.preventDefault();
       this.state.dragging = true;
       this.state.pointerId = event.pointerId;
       this.state.startX = event.clientX;
