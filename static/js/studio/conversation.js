@@ -112,7 +112,6 @@
         UI.toast("管理员尚未配置可用的对话模型", "error");
         return;
       }
-      const selectedIds = new Set(attachmentIds);
       const selectedGenerationMode = this.el.modeSwitch.dataset.mode || "text2img";
       const selectedGenerationReferences = this.orderedGenerationReferenceIds(
         workspaceId,
@@ -132,7 +131,9 @@
         role: "user",
         kind: "message",
         content,
-        attachments: workspace.assets.filter((asset) => selectedIds.has(asset.id)),
+        attachments: attachmentIds
+          .map((id) => workspace.assets.find((asset) => asset.id === id))
+          .filter(Boolean),
         attachment_ids: attachmentIds,
         generation_mode: generationMode,
         generation_reference_ids: generationReferenceIds,

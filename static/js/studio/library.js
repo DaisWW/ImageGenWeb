@@ -61,6 +61,7 @@
     renderLibrary() {
       const images = this.libraryImages || [];
       const unloaded = this.libraryImages === null;
+      const orderByImageId = this.librarySelectionOrder();
       setHidden(this.el.libraryLoading, !unloaded || !this.libraryLoading);
       setHidden(
         this.el.libraryError,
@@ -82,12 +83,15 @@
         const url = UI.escapeHtml(entry.thumbnail_url || entry.url);
         const previewUrl = UI.escapeHtml(entry.url || entry.thumbnail_url);
         const selected = this.librarySelection.has(entry.id);
-        const selectTitle = UI.escapeHtml(selected ? `取消选择 ${entry.name}` : `选择 ${entry.name}`);
+        const order = orderByImageId.get(entry.id);
+        const selectTitle = UI.escapeHtml(selected
+          ? `取消图${order} ${entry.name}`
+          : `选择 ${entry.name}`);
         const deleteTitle = UI.escapeHtml(`从图库删除 ${entry.name}`);
         const previewTitle = UI.escapeHtml(`放大预览 ${entry.name}`);
         return `<article class="library-card${selected ? " selected" : ""}" data-library-image="${id}">
           <button type="button" class="library-use" data-toggle-library-image="${id}" title="${selectTitle}"${disabled}>
-            <span class="library-thumbnail"><img src="${url}" alt="${name}" loading="lazy" decoding="async"></span>
+            <span class="library-thumbnail"><img src="${url}" alt="${name}" loading="lazy" decoding="async">${selected ? `<span class="reference-order" aria-hidden="true">${order}</span>` : ""}</span>
             <span class="library-card-copy"><strong>${name}</strong></span>
           </button>
           <button type="button" class="icon-button library-preview" data-image-preview="true" data-image-preview-src="${previewUrl}" data-image-preview-alt="${name}" data-image-preview-title="${previewTitle}" title="${previewTitle}" aria-label="${previewTitle}"${disabled}><i data-lucide="zoom-in"></i></button>
@@ -100,6 +104,28 @@
       this.el.libraryGrid.querySelectorAll("img").forEach((image) => this.prepareImageReveal(image));
       UI.icons(this.el.libraryGrid);
       this.updateLibrarySelectionUI();
+    },
+
+    librarySelectionOrder(workspace = this.activeWorkspace) {
+      const {
+        target,
+        selection,
+        assetMap,
+      } = this.librarySelectionContext(workspace);
+      const orderedAssetIds = target === "chat"
+        ? this.orderedReferenceIds(workspace?.id, selection)
+        : this.orderedGenerationReferenceIds(workspace?.id, selection);
+      const imageIdByAssetId = new Map(
+        [...assetMap].map(([imageId, asset]) => [asset.id, imageId]),
+      );
+      const orderedImageIds = orderedAssetIds
+        .map((assetId) => imageIdByAssetId.get(assetId))
+        .filter((imageId) => imageId && this.librarySelection.has(imageId));
+      const known = new Set(orderedImageIds);
+      return new Map(
+        [...orderedImageIds, ...[...this.librarySelection].filter((id) => !known.has(id))]
+          .map((id, index) => [id, index + 1]),
+      );
     },
 
     libraryImageMatchesAsset(image, asset) {
@@ -127,14 +153,27 @@
     },
 
     syncLibrarySelection(images = this.libraryImages || [], reset = true) {
-      if (reset) this.librarySelection.clear();
+      const previousSelection = reset ? [] : [...this.librarySelection];
       const selection = this.libraryTarget === "chat"
         ? this.currentChatSelection()
         : this.currentSelection();
-      images.forEach((image) => {
-        const asset = this.libraryImageAsset(image);
-        if (asset && selection.has(asset.id)) this.librarySelection.add(image.id);
-      });
+      const loadedImages = this.libraryImages || images;
+      const imageIdByAssetId = new Map(
+        loadedImages
+          .map((image) => [image.id, this.libraryImageAsset(image)])
+          .filter(([, asset]) => asset && selection.has(asset.id))
+          .map(([imageId, asset]) => [asset.id, imageId]),
+      );
+      const ordered = this.libraryTarget === "chat"
+        ? this.orderedReferenceIds(this.activeWorkspace?.id, selection)
+        : this.orderedGenerationReferenceIds(this.activeWorkspace?.id, selection);
+      const selectedLoaded = ordered
+        .map((assetId) => imageIdByAssetId.get(assetId))
+        .filter(Boolean);
+      const selectedLoadedIds = new Set(selectedLoaded);
+      this.librarySelection.clear();
+      [...selectedLoaded, ...previousSelection.filter((id) => !selectedLoadedIds.has(id))]
+        .forEach((id) => this.librarySelection.add(id));
     },
 
     librarySelectionChanged() {

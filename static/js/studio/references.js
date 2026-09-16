@@ -76,6 +76,7 @@
       const visibleAssets = pickerOpen
         ? assets
         : assets.filter((asset) => selection.has(asset.id));
+      const orderById = this.referenceOrderMap(this.activeWorkspace?.id, selection, "chat");
       this.el.chatReferenceCount.textContent = selection.size;
       this.el.chatReferenceCount.hidden = selection.size === 0;
       this.el.chatReferenceStrip.hidden = !pickerOpen
@@ -106,17 +107,18 @@
       library.setAttribute("aria-label", library.title);
       library.innerHTML = '<i data-lucide="library"></i>';
 
-      const cards = visibleAssets.map((asset, index) => {
+      const cards = visibleAssets.map((asset) => {
         const card = document.createElement("span");
         card.className = "chat-reference-item";
         const toggle = document.createElement("button");
         toggle.type = "button";
-        toggle.className = `chat-reference-card${selection.has(asset.id) ? " selected" : ""}`;
+        const selected = selection.has(asset.id);
+        toggle.className = `chat-reference-card${selected ? " selected" : ""}`;
         toggle.dataset.chatReferenceToggle = asset.id;
-        const order = index + 1;
-        toggle.title = selection.has(asset.id)
+        const order = orderById.get(asset.id);
+        toggle.title = selected
           ? `取消图${order} ${asset.name}`
-          : `随消息发送图${order} ${asset.name}`;
+          : `随消息发送 ${asset.name}`;
         const image = document.createElement("img");
         image.src = asset.url;
         image.alt = asset.name;
@@ -133,7 +135,7 @@
         remove.innerHTML = '<i data-lucide="x"></i>';
         card.append(
           toggle,
-          this.referenceOrderBadge(order),
+          ...(selected ? [this.referenceOrderBadge(order)] : []),
           this.referencePreviewButton(asset.url, asset.name, `放大预览 ${asset.name}`, true),
           this.librarySaveButton(asset),
           remove,
@@ -190,22 +192,24 @@
       const uploads = this.pendingReferenceUploads();
       const selected = this.currentSelection();
       const max = this.generationReferenceLimit();
+      const orderById = this.referenceOrderMap(this.activeWorkspace?.id, selected);
       this.el.referenceLimit.textContent = `${selected.size} / ${max}`;
       this.el.referenceAdd.disabled = assets.length + uploads.length >= this.limits.max_assets_per_workspace
         || this.referenceUploadPending;
       this.el.referenceList.replaceChildren(
-        ...assets.map((asset, index) => {
+        ...assets.map((asset) => {
           const card = document.createElement("div");
-          card.className = `reference-card${selected.has(asset.id) ? " selected" : ""}`;
+          const isSelected = selected.has(asset.id);
+          card.className = `reference-card${isSelected ? " selected" : ""}`;
           card.dataset.assetId = asset.id;
           const toggle = document.createElement("button");
           toggle.type = "button";
           toggle.className = "reference-toggle";
           toggle.dataset.referenceToggle = asset.id;
-          const order = index + 1;
-          toggle.title = selected.has(asset.id)
+          const order = orderById.get(asset.id);
+          toggle.title = isSelected
             ? `取消图${order} ${asset.name}`
-            : `选择图${order}为垫图`;
+            : `选择 ${asset.name} 为垫图`;
           const image = document.createElement("img");
           image.src = asset.url;
           image.alt = asset.name;
@@ -222,7 +226,7 @@
           remove.innerHTML = '<i data-lucide="x"></i>';
           card.append(
             toggle,
-            this.referenceOrderBadge(order),
+            ...(isSelected ? [this.referenceOrderBadge(order)] : []),
             this.referencePreviewButton(asset.url, asset.name, `放大预览 ${asset.name}`),
             this.librarySaveButton(asset),
             remove,

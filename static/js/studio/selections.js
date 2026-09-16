@@ -219,15 +219,21 @@
       workspaceId = this.activeWorkspace?.id,
       selection = this.currentSelection(workspaceId),
     ) {
-      const workspace = this.workspaces?.find((item) => item.id === workspaceId)
-        || (this.activeWorkspace?.id === workspaceId ? this.activeWorkspace : null);
-      const selected = new Set(selection || []);
-      if (!workspace) return [...selected];
-      const ordered = workspace.assets
-        .filter((asset) => selected.has(asset.id))
-        .map((asset) => asset.id);
-      const known = new Set(ordered);
-      return [...ordered, ...[...selected].filter((id) => !known.has(id))];
+      return [...new Set(selection || [])];
+    },
+
+    referenceOrderMap(
+      workspaceId = this.activeWorkspace?.id,
+      selection,
+      target = "generation",
+    ) {
+      const selected = selection || (target === "chat"
+        ? this.currentChatSelection(workspaceId)
+        : this.currentSelection(workspaceId));
+      const ordered = target === "chat"
+        ? this.orderedReferenceIds(workspaceId, selected)
+        : this.orderedGenerationReferenceIds(workspaceId, selected);
+      return new Map(ordered.map((id, index) => [id, index + 1]));
     },
 
     orderedGenerationReferenceIds(

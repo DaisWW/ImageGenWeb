@@ -286,28 +286,50 @@ test("chat images are used for generation only when their semantic role requires
   for (let index = 0; index < listedGenerationReferenceIds.length; index += 1) {
     await page.locator("#referenceList .reference-card.selected .reference-toggle").first().click();
   }
+  await expect(page.locator("#referenceList .reference-order")).toHaveCount(0);
   const generationToggles = page.locator("#referenceList .reference-card .reference-toggle");
   await generationToggles.nth(1).click();
   await generationToggles.nth(0).click();
+  await generationToggles.nth(0).click();
+  await expect(page.locator("#referenceList .reference-order")).toHaveText(["1"]);
+  await generationToggles.nth(0).click();
+  expect(await page.locator("#referenceList .reference-card").evaluateAll((cards) => (
+    cards.map((card) => ({
+      id: card.dataset.assetId,
+      order: card.querySelector(".reference-order")?.textContent || "",
+    }))
+  ))).toEqual([
+    { id: listedGenerationReferenceIds[0], order: "2" },
+    { id: listedGenerationReferenceIds[1], order: "1" },
+  ]);
   const generationRequest = page.waitForRequest((request) => (
     request.method() === "POST" && new URL(request.url()).pathname === "/api/generations"
   ));
   await page.locator("#generateButton").click();
   expect((await generationRequest).postDataJSON().reference_ids)
-    .toEqual(listedGenerationReferenceIds);
+    .toEqual([...listedGenerationReferenceIds].reverse());
 
   await page.locator('#modeSwitch [data-mode="text2img"]').click();
   await closeGenerationComposer(page);
   await page.locator("#chatReferenceButton").click();
   const chatReferences = page.locator("[data-chat-reference-toggle]");
   await expect(chatReferences).toHaveCount(2);
-  await expect(page.locator("#chatReferenceList .reference-order")).toHaveText(["1", "2"]);
+  await expect(page.locator("#chatReferenceList .reference-order")).toHaveCount(0);
   const listedChatReferenceIds = await chatReferences.evaluateAll((toggles) => (
     toggles.map((toggle) => toggle.dataset.chatReferenceToggle)
   ));
   await chatReferences.nth(1).click();
   await chatReferences.nth(0).click();
   await expect(page.locator("#chatReferenceCount")).toHaveText("2");
+  expect(await page.locator("#chatReferenceList .chat-reference-item").evaluateAll((cards) => (
+    cards.map((card) => ({
+      id: card.querySelector("[data-chat-reference-toggle]")?.dataset.chatReferenceToggle,
+      order: card.querySelector(".reference-order")?.textContent || "",
+    }))
+  ))).toEqual([
+    { id: listedChatReferenceIds[0], order: "2" },
+    { id: listedChatReferenceIds[1], order: "1" },
+  ]);
 
   await page.locator("#chatInput").fill("只分析并提炼风格，不要把原图传给生图模型");
   await page.locator("#chatForm").evaluate((form) => form.requestSubmit());
@@ -318,7 +340,7 @@ test("chat images are used for generation only when their semantic role requires
   await expect(page.locator("#referenceList .reference-card.selected")).toHaveCount(0);
 
   expect(requests).toHaveLength(2);
-  expect(requests[1].attachment_ids).toEqual(listedChatReferenceIds);
+  expect(requests[1].attachment_ids).toEqual([...listedChatReferenceIds].reverse());
   expect(requests.map((body) => body.generation_mode)).toEqual(["auto", "auto"]);
   expect(requests.map((body) => body.generation_reference_ids)).toEqual([[], []]);
 

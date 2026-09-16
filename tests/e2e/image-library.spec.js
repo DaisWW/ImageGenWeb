@@ -126,15 +126,17 @@ test("image library confirms multiple message attachments together", {
   await page.locator("#libraryButton").click();
   await expect(page.locator("#libraryGrid .library-card")).toHaveCount(2);
   const checkboxes = page.locator("#libraryGrid [data-select-library-image]");
-  await checkboxes.nth(0).check();
   await checkboxes.nth(1).check();
+  await checkboxes.nth(0).check();
+  await expect(page.locator("#libraryGrid .reference-order")).toHaveText(["2", "1"]);
   await expect(page.locator("#librarySelectionSummary")).toHaveText("已选择 2 / 20 张");
   await expect(page.locator("#libraryConfirmButton")).toBeEnabled();
 
   await page.locator("#libraryConfirmButton").click();
   await expect(page.locator("#libraryDialog")).toBeHidden();
   await expect(page.locator("#chatReferenceCount")).toHaveText("2");
-  expect(imported).toEqual(["library-chat-a", "library-chat-b"]);
+  expect(imported).toEqual(["library-chat-b", "library-chat-a"]);
+  await expect(page.locator("#chatReferenceList .reference-order")).toHaveText(["1", "2"]);
 });
 
 test("image library mirrors existing message selections and card clicks toggle", {
