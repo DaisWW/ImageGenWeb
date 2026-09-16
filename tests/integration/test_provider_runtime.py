@@ -314,6 +314,18 @@ models:
 
         cases = [
             (
+                400,
+                {
+                    "error": {
+                        "code": "content_policy_violation",
+                        "type": "invalid_request_error",
+                        "message": "private policy details",
+                    }
+                },
+                "内容安全检查未通过，请调整提示词或参考图后重新生成",
+                "content_policy_violation",
+            ),
+            (
                 403,
                 {
                     "error": {
@@ -323,24 +335,28 @@ models:
                     }
                 },
                 "渠道配额或余额不足",
+                "upstream_error",
             ),
             (
                 429,
                 {"error": {"message": "Too many requests"}},
                 "渠道请求过于频繁，请稍后重试",
+                "upstream_error",
             ),
             (
                 500,
                 {"error": {"message": "internal server error"}},
                 "渠道服务暂时异常，请稍后重试",
+                "upstream_error",
             ),
             (
                 502,
                 {"error": {"message": "stream disconnected before completion"}},
                 "渠道服务暂时异常，请稍后重试",
+                "upstream_error",
             ),
         ]
-        for status_code, payload, expected in cases:
+        for status_code, payload, expected, expected_code in cases:
             with self.subTest(status_code=status_code):
                 response = FakeImageHTTPResponse(status_code=status_code, payload=payload)
                 adapter = OpenAIImagesAdapter()
@@ -350,6 +366,7 @@ models:
                     adapter.generate(channel, request)
 
                 self.assertEqual(str(raised.exception), expected)
+                self.assertEqual(raised.exception.code, expected_code)
                 self.assertEqual(raised.exception.status_code, status_code)
                 self.assertEqual(raised.exception.request_id, "image-http-test")
                 self.assertEqual(raised.exception.details["status_code"], status_code)

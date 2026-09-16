@@ -257,7 +257,7 @@ class ChatModelRegistry(ReloadableConfigRegistry[ChatModelSnapshot]):
             model=model,
             reasoning_effort=reasoning_effort,
             review_reasoning_effort=review_reasoning_effort,
-            timeout_seconds=bounded_int(raw, "timeout_seconds", 180, 10, 600),
+            timeout_seconds=bounded_int(raw, "timeout_seconds", 300, 10, 600),
             max_output_tokens=bounded_int(raw, "max_output_tokens", 2000, 128, 16000),
             fallback_model_ids=_fallback_model_ids(raw.get("fallback_model_ids", [])),
             api_key=api_key,

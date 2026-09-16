@@ -113,7 +113,7 @@ class TestConversationImages(PlatformTestCase):
             for part in (message.get("content") if isinstance(message.get("content"), list) else [])
             if part.get("type") == "image_url"
         ]
-        self.assertEqual(len(images), 4)
+        self.assertEqual(len(images), 2)
         self.assertEqual(serialized.count("历史生成结果"), 4)
         self.assertNotIn("不应重放的案例", serialized)
         job_text = next(
@@ -152,7 +152,33 @@ class TestConversationImages(PlatformTestCase):
         compressed = base64.b64decode(url.split(",", 1)[1])
         self.assertLess(len(compressed), len(original))
         with Image.open(io.BytesIO(compressed)) as image:
-            self.assertLessEqual(max(image.size), 1280)
+            self.assertLessEqual(max(image.size), 1024)
+
+    def test_medium_chat_images_are_compressed_above_128_kib(self):
+        workspace = self.create_workspace("聊天中图压缩")
+        stream = io.BytesIO()
+        Image.effect_noise((448, 448), 100).convert("RGB").save(
+            stream,
+            format="JPEG",
+            quality=95,
+        )
+        original = stream.getvalue()
+        self.assertGreater(len(original), 128 * 1024)
+        self.assertLess(len(original), 256 * 1024)
+        asset = self.services.workspaces.add_assets(workspace, [("medium.jpg", original)])[0]
+
+        self.services.conversations.send(
+            workspace,
+            model_id="test-chat",
+            content="查看这张参考图",
+            attachment_ids=(asset.id,),
+        )
+
+        model_parts = self.chat_client.calls[-1]["messages"][-1]["content"]
+        image_part = next(part for part in model_parts if part["type"] == "image_url")
+        url = image_part["image_url"]["url"]
+        self.assertTrue(url.startswith("data:image/webp;base64,"))
+        self.assertLess(len(base64.b64decode(url.split(",", 1)[1])), len(original))
 
     def test_low_confidence_context_keeps_room_for_seven_current_images(self):
         workspace = self.create_workspace("低置信度七图上下文")

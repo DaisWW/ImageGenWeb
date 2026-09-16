@@ -516,6 +516,7 @@ test("successful chat retry removes the action from the old error", async ({ pag
       kind: "error",
       content: "聊天模型连接中断，请重试",
       payload: {
+        code: "chat_connection_error",
         retry_user_message_id: userId,
         reply_to_message_id: userId,
       },
@@ -563,6 +564,7 @@ test("successful chat retry removes the action from the old error", async ({ pag
 
   await loginAsAdmin(page);
   const errorRow = page.locator(`[data-message-id="${errorId}"]`);
+  await expect(errorRow).toHaveClass(/temporary-error/);
   await expect(errorRow.getByRole("button", { name: "重新发送" })).toBeVisible();
 
   await errorRow.getByRole("button", { name: "重新发送" }).click();

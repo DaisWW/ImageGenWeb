@@ -142,6 +142,15 @@
   color: #efb0b3;
 }
 
+.message-row.error.temporary-error .message-card {
+  border-color: #72592e;
+  background: #211b10;
+}
+
+.message-row.error.temporary-error .message-content {
+  color: #e8c77d;
+}
+
 .message-row.error .button {
   margin-top: 11px;
 }

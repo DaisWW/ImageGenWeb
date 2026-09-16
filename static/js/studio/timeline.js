@@ -177,7 +177,17 @@
         message.kind === "error"
           ? this.isResolvedChatError(message) ? "retry-resolved" : "retry-open"
           : "",
+        message.payload?.code || "",
       ].join(":");
+    },
+
+    isTemporaryChatError(message) {
+      return [
+        "chat_timeout",
+        "chat_connection_error",
+        "chat_rate_limited",
+        "chat_upstream_error",
+      ].includes(message.payload?.code);
     },
 
     isResolvedChatError(message) {
@@ -319,6 +329,7 @@
         message.role,
         message.kind || "message",
         message.delivery_state || "",
+        message.kind === "error" && this.isTemporaryChatError(message) ? "temporary-error" : "",
       ].filter(Boolean).join(" ");
       row.dataset.messageState = this.messageRenderState(message);
       if (message.id) row.dataset.messageId = message.id;

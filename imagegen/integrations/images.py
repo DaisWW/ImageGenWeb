@@ -156,9 +156,10 @@ class OpenAIImagesAdapter:
         try:
             request_id = _request_id(response)
             if not 200 <= response.status_code < 300:
+                error_message, error_code = _upstream_error(response)
                 raise ProviderError(
-                    _upstream_error(response),
-                    code="upstream_error",
+                    error_message,
+                    code=error_code,
                     status_code=response.status_code,
                     request_id=request_id,
                     details=response_summary(response),
@@ -356,7 +357,7 @@ def _api_endpoint(base_url: str, path: str) -> str:
     return f"{base}/{path}" if base.endswith("/v1") else f"{base}/v1/{path}"
 
 
-def _upstream_error(response: requests.Response) -> str:
+def _upstream_error(response: requests.Response) -> tuple[str, str]:
     try:
         payload = response.json()
     except (TypeError, ValueError):
@@ -377,6 +378,7 @@ def _upstream_error(response: requests.Response) -> str:
                         error_codes.append(code)
 
     code_messages = {
+        "content_policy_violation": "内容安全检查未通过，请调整提示词或参考图后重新生成",
         "insufficient_quota": "渠道配额或余额不足",
         "billing_hard_limit_reached": "渠道配额或余额不足",
         "quota_exceeded": "渠道配额或余额不足",
@@ -389,7 +391,12 @@ def _upstream_error(response: requests.Response) -> str:
     }
     for code in error_codes:
         if code in code_messages:
-            return code_messages[code]
+            stable_code = (
+                "content_policy_violation"
+                if code == "content_policy_violation"
+                else "upstream_error"
+            )
+            return code_messages[code], stable_code
 
     status_messages = {
         401: "渠道 API Key 无效或已失效",
@@ -402,8 +409,8 @@ def _upstream_error(response: requests.Response) -> str:
         524: "渠道网关等待生成超时",
     }
     if response.status_code in status_messages:
-        return status_messages[response.status_code]
-    return "渠道请求失败，请稍后重试"
+        return status_messages[response.status_code], "upstream_error"
+    return "渠道请求失败，请稍后重试", "upstream_error"
 
 
 def _pinned_download_target(url: str):

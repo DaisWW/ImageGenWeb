@@ -983,7 +983,7 @@
       form.elements.reasoning_effort.value = model?.reasoning_effort || "";
       form.elements.review_reasoning_effort.value = model?.review_reasoning_effort || "";
       form.elements.fallback_model_ids.value = (model?.fallback_model_ids || []).join(", ");
-      form.elements.timeout_seconds.value = model?.timeout_seconds ?? 180;
+      form.elements.timeout_seconds.value = model?.timeout_seconds ?? 300;
       form.elements.max_output_tokens.value = model?.max_output_tokens ?? 2000;
       this.el.chatModelDialogTitle.textContent = model ? `编辑 ${model.label}` : "新增对话模型";
       UI.openDialog(this.el.chatModelDialog);

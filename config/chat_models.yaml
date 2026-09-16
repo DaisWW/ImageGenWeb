@@ -22,7 +22,7 @@ models:
     reasoning_effort: max
     reasoning_effort_env: GPT_CHAT_REASONING_EFFORT
     review_reasoning_effort: medium
-    timeout_seconds: 180
+    timeout_seconds: 300
     max_output_tokens: 16000
     fallback_model_ids: [gpt-5-6-terra, gpt-5-6-luna]
   - id: gpt-5-6-luna
@@ -34,7 +34,7 @@ models:
     model: gpt-5.6-luna
     reasoning_effort: max
     review_reasoning_effort: medium
-    timeout_seconds: 180
+    timeout_seconds: 300
     max_output_tokens: 16000
     fallback_model_ids: [gpt-5-6-terra, gpt]
   - id: gpt-5-6-terra
@@ -46,6 +46,6 @@ models:
     model: gpt-5.6-terra
     reasoning_effort: max
     review_reasoning_effort: medium
-    timeout_seconds: 180
+    timeout_seconds: 300
     max_output_tokens: 16000
     fallback_model_ids: [gpt-5-6-luna, gpt]
