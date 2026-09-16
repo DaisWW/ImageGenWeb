@@ -348,15 +348,6 @@
         detailSaveLibrary: byId("detailSaveLibrary"),
         detailReuse: byId("detailReuse"),
         detailDownload: byId("detailDownload"),
-        imageViewerDialog: byId("imageViewerDialog"),
-        imageViewerTitle: byId("imageViewerTitle"),
-        imageViewerStage: byId("imageViewerStage"),
-        imageViewerImage: byId("imageViewerImage"),
-        imageViewerZoomOut: byId("imageViewerZoomOut"),
-        imageViewerZoomSlider: byId("imageViewerZoomSlider"),
-        imageViewerZoomLabel: byId("imageViewerZoomLabel"),
-        imageViewerZoomIn: byId("imageViewerZoomIn"),
-        imageViewerFit: byId("imageViewerFit"),
         backgroundRemovalDialog: byId("backgroundRemovalDialog"),
         backgroundRemovalStatus: byId("backgroundRemovalStatus"),
         backgroundRemovalModelList: byId("backgroundRemovalModelList"),
@@ -602,23 +593,6 @@
       this.el.detailBackgroundRemoval.addEventListener("click", () => this.openBackgroundRemovalTool());
       this.el.detailSaveLibrary.addEventListener("click", () => this.saveDetailToLibrary());
       this.el.detailReuse.addEventListener("click", () => this.useDetailAsReference());
-      this.el.imageViewerZoomOut.addEventListener("click", () => this.adjustImageViewerZoom(-1));
-      this.el.imageViewerZoomIn.addEventListener("click", () => this.adjustImageViewerZoom(1));
-      this.el.imageViewerZoomSlider.addEventListener("input", (event) => {
-        this.setImageViewerZoom(Number(event.target.value));
-      });
-      this.el.imageViewerFit.addEventListener("click", () => this.fitImageViewer());
-      this.el.imageViewerStage.addEventListener("wheel", (event) => this.handleImageViewerWheel(event), { passive: false });
-      this.el.imageViewerStage.addEventListener("pointerdown", (event) => this.startImageViewerPan(event));
-      this.el.imageViewerStage.addEventListener("pointermove", (event) => this.moveImageViewerPan(event));
-      this.el.imageViewerStage.addEventListener("pointerup", (event) => this.endImageViewerPan(event));
-      this.el.imageViewerStage.addEventListener("pointercancel", (event) => this.endImageViewerPan(event));
-      this.el.imageViewerStage.addEventListener("lostpointercapture", () => this.cancelImageViewerPan());
-      this.el.imageViewerStage.addEventListener("keydown", (event) => this.handleImageViewerKeydown(event));
-      this.el.imageViewerDialog.addEventListener("close", () => this.closeImageViewer());
-      document.addEventListener("click", (event) => this.handleImagePreviewClick(event));
-      document.addEventListener("keydown", (event) => this.handleImagePreviewKeydown(event));
-      window.addEventListener("resize", () => this.handleImageViewerResize());
       this.el.backgroundRemovalModelList.addEventListener("change", (event) => {
         this.handleBackgroundRemovalModelSelection(event);
       });

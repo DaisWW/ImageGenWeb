@@ -1,0 +1,21 @@
+<dialog class="modal image-viewer-modal" id="imageViewerDialog" aria-labelledby="imageViewerTitle">
+  <div class="image-viewer-layout">
+    <header class="image-viewer-toolbar">
+      <div class="image-viewer-title">
+        <span class="eyebrow">Image Preview</span>
+        <strong id="imageViewerTitle">图片预览</strong>
+      </div>
+      <div class="image-viewer-controls" role="group" aria-label="图片缩放控制">
+        <button class="icon-button" type="button" id="imageViewerZoomOut" title="缩小" aria-label="缩小"><i data-lucide="zoom-out"></i></button>
+        <input id="imageViewerZoomSlider" type="range" min="0.25" max="8" step="0.05" value="1" aria-label="缩放比例">
+        <span class="image-viewer-zoom-label" id="imageViewerZoomLabel">100%</span>
+        <button class="icon-button" type="button" id="imageViewerZoomIn" title="放大" aria-label="放大"><i data-lucide="zoom-in"></i></button>
+        <button class="icon-button" type="button" id="imageViewerFit" title="适应窗口" aria-label="适应窗口"><i data-lucide="scan"></i></button>
+        <button class="icon-button" type="button" data-close-dialog="imageViewerDialog" aria-label="关闭"><i data-lucide="x"></i></button>
+      </div>
+    </header>
+    <div class="image-viewer-stage" id="imageViewerStage" tabindex="0" aria-label="图片预览区域">
+      <img id="imageViewerImage" alt="" decoding="async">
+    </div>
+  </div>
+</dialog>
