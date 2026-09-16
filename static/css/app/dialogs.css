@@ -224,7 +224,7 @@
   touch-action: none;
 }
 
-.image-viewer-stage.is-zoomed {
+.image-viewer-stage.is-draggable {
   cursor: grab;
 }
 

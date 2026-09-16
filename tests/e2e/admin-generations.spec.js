@@ -66,8 +66,20 @@ test("admin generation media preview, pan and wrap without horizontal scrolling"
   await expect.poll(() => page.locator("#imageViewerImage")
     .evaluate((image) => image.naturalWidth)).toBeGreaterThan(0);
   const stage = page.locator("#imageViewerStage");
+  const fitStageBox = await stage.boundingBox();
+  const transformBeforeFitPan = await page.locator("#imageViewerImage")
+    .evaluate((image) => image.style.transform);
+  await page.mouse.move(fitStageBox.x + fitStageBox.width / 2, fitStageBox.y + fitStageBox.height / 2);
+  await page.mouse.down();
+  await expect(stage).toHaveClass(/is-dragging/);
+  await page.mouse.move(fitStageBox.x + fitStageBox.width / 2 + 80, fitStageBox.y + fitStageBox.height / 2 + 40);
+  await page.mouse.up();
+  await expect(stage).not.toHaveClass(/is-dragging/);
+  const transformAfterFitPan = await page.locator("#imageViewerImage")
+    .evaluate((image) => image.style.transform);
+  expect(transformAfterFitPan).not.toBe(transformBeforeFitPan);
   await page.locator("#imageViewerZoomIn").click();
-  await expect(stage).toHaveClass(/is-zoomed/);
+  await expect(stage).toHaveClass(/is-draggable/);
   const stageBox = await stage.boundingBox();
   const transformBeforePan = await page.locator("#imageViewerImage")
     .evaluate((image) => image.style.transform);

@@ -83,6 +83,7 @@
       this.source = null;
       this.el.image.removeAttribute("src");
       this.el.image.style.transform = "";
+      this.el.stage.classList.remove("is-draggable");
     }
 
     zoomBounds() {
@@ -124,41 +125,18 @@
 
     adjustZoom(direction) {
       const factor = direction > 0 ? 1.25 : 0.8;
-      let nextScale = this.state.scale * factor;
-      if (direction > 0 && !this.canPanAtScale(nextScale)) {
-        nextScale = Math.max(nextScale, this.minimumPannableScale());
-      }
-      this.setZoom(Number(nextScale.toFixed(2)));
+      this.setZoom(Number((this.state.scale * factor).toFixed(2)));
     }
 
     panBounds(scale = this.state.scale) {
       return {
-        maxX: Math.max(
-          0,
-          (this.el.image.naturalWidth * scale - this.el.stage.clientWidth) / 2,
-        ),
-        maxY: Math.max(
-          0,
-          (this.el.image.naturalHeight * scale - this.el.stage.clientHeight) / 2,
-        ),
+        maxX: Math.abs(
+          this.el.image.naturalWidth * scale - this.el.stage.clientWidth,
+        ) / 2,
+        maxY: Math.abs(
+          this.el.image.naturalHeight * scale - this.el.stage.clientHeight,
+        ) / 2,
       };
-    }
-
-    canPanAtScale(scale = this.state.scale) {
-      const { maxX, maxY } = this.panBounds(scale);
-      return maxX > 0 || maxY > 0;
-    }
-
-    minimumPannableScale() {
-      const image = this.el.image;
-      const stage = this.el.stage;
-      if (!image.naturalWidth || !image.naturalHeight || !stage.clientWidth || !stage.clientHeight) {
-        return this.state.scale;
-      }
-      return Math.max(
-        stage.clientWidth / image.naturalWidth,
-        stage.clientHeight / image.naturalHeight,
-      ) * 1.05;
     }
 
     clampOffset() {
@@ -172,7 +150,7 @@
       this.el.image.style.transform = `translate3d(calc(-50% + ${this.state.offsetX}px), calc(-50% + ${this.state.offsetY}px), 0) scale(${this.state.scale})`;
       this.el.zoomSlider.value = String(this.state.scale);
       this.el.zoomLabel.textContent = `${Math.round(this.state.scale * 100)}%`;
-      this.el.stage.classList.toggle("is-zoomed", this.canPanAtScale());
+      this.el.stage.classList.toggle("is-draggable", Boolean(this.el.image.naturalWidth));
     }
 
     handleWheel(event) {
@@ -183,8 +161,7 @@
     }
 
     startPan(event) {
-      if (event.button !== 0 || !this.el.image.naturalWidth
-        || !this.canPanAtScale()) return;
+      if (event.button !== 0 || !this.el.image.naturalWidth) return;
       event.preventDefault();
       this.state.dragging = true;
       this.state.pointerId = event.pointerId;
