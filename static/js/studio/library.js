@@ -37,6 +37,10 @@
       try {
         const data = await UI.api(`/api/library-images?offset=${offset}&limit=60`);
         const images = data.images || [];
+        const loadedImageIds = new Set((this.libraryImages || []).map((image) => image.id));
+        const newImages = append
+          ? images.filter((image) => !loadedImageIds.has(image.id))
+          : images;
         if (append && this.libraryImages !== null) {
           this.libraryImages = [...new Map(
             [...this.libraryImages, ...images].map((image) => [image.id, image]),
@@ -44,7 +48,7 @@
         } else {
           this.libraryImages = images;
         }
-        this.syncLibrarySelection(images, !append);
+        this.syncLibrarySelection(newImages, !append);
         this.libraryOffset = offset + images.length;
         this.libraryTotal = Number(data.total ?? this.libraryImages.length);
         this.libraryHasMore = data.has_more === true;
@@ -107,31 +111,39 @@
     },
 
     librarySelectionOrder(workspace = this.activeWorkspace) {
-      const orderedImageIds = this.orderedLibraryImageIds(workspace);
+      const assetMap = this.libraryAssetMap(workspace);
+      const imageIdByReferenceId = new Map([...this.librarySelection].map((id) => [
+        assetMap.get(id)?.id || `library:${id}`, id,
+      ]));
       return new Map(
-        orderedImageIds.map((id, index) => [id, index + 1]),
+        this.libraryReferenceIds(workspace, assetMap)
+          .map((id, index) => [imageIdByReferenceId.get(id), index + 1])
+          .filter(([id]) => id),
       );
     },
 
-    orderedLibraryImageIds(workspace = this.activeWorkspace) {
-      const imageIds = [...this.librarySelection];
-      if (this.libraryTarget === "chat") return imageIds;
-      const assetMap = this.libraryAssetMap(workspace);
-      const imageIdByAssetId = new Map(
-        [...assetMap].map(([imageId, asset]) => [asset.id, imageId]),
-      );
-      const orderedAssetIds = this.orderedGenerationReferenceIds(
-        workspace?.id,
-        new Set(imageIds.map((id) => assetMap.get(id)?.id).filter(Boolean)),
-      );
-      const orderedKnownImageIds = orderedAssetIds
-        .map((assetId) => imageIdByAssetId.get(assetId))
-        .filter(Boolean);
-      const known = new Set(orderedKnownImageIds);
-      return [
-        ...orderedKnownImageIds,
-        ...imageIds.filter((id) => !known.has(id)),
-      ];
+    libraryReferenceIds(workspace = this.activeWorkspace, assetMap = this.libraryAssetMap(workspace)) {
+      const selection = this.libraryTarget === "chat"
+        ? this.currentChatSelection(workspace?.id)
+        : this.currentSelection(workspace?.id);
+      const orderedAssetIds = this.libraryTarget === "chat"
+        ? this.orderedReferenceIds(workspace?.id, selection)
+        : this.orderedGenerationReferenceIds(workspace?.id, selection);
+      const libraryAssetIds = new Set([...assetMap.values()].map((asset) => asset.id));
+      const libraryReferenceIds = [...this.librarySelection].map((id) => (
+        assetMap.get(id)?.id || `library:${id}`
+      ));
+      let libraryIndex = 0;
+      const referenceIds = orderedAssetIds.flatMap((id) => {
+        if (!libraryAssetIds.has(id)) return [id];
+        return libraryIndex < libraryReferenceIds.length
+          ? [libraryReferenceIds[libraryIndex++]]
+          : [];
+      });
+      referenceIds.push(...libraryReferenceIds.slice(libraryIndex));
+      return this.libraryTarget === "chat"
+        ? this.orderedReferenceIds(workspace?.id, referenceIds)
+        : this.orderedGenerationReferenceIds(workspace?.id, referenceIds);
     },
 
     libraryImageMatchesAsset(image, asset) {
@@ -159,13 +171,12 @@
     },
 
     syncLibrarySelection(images = this.libraryImages || [], reset = true) {
-      const previousSelection = reset ? [] : [...this.librarySelection];
+      if (reset) this.librarySelection.clear();
       const selection = this.libraryTarget === "chat"
         ? this.currentChatSelection()
         : this.currentSelection();
-      const loadedImages = this.libraryImages || images;
       const imageIdByAssetId = new Map(
-        loadedImages
+        images
           .map((image) => [image.id, this.libraryImageAsset(image)])
           .filter(([, asset]) => asset && selection.has(asset.id))
           .map(([imageId, asset]) => [asset.id, imageId]),
@@ -175,10 +186,8 @@
         : this.orderedGenerationReferenceIds(this.activeWorkspace?.id, selection);
       const selectedLoaded = ordered
         .map((assetId) => imageIdByAssetId.get(assetId))
-        .filter((imageId) => imageId && !previousSelection.includes(imageId));
-      this.librarySelection.clear();
-      [...previousSelection, ...selectedLoaded]
-        .forEach((id) => this.librarySelection.add(id));
+        .filter(Boolean);
+      selectedLoaded.forEach((id) => this.librarySelection.add(id));
     },
 
     librarySelectionChanged() {
@@ -187,16 +196,10 @@
         selection,
         assetMap,
       } = this.librarySelectionContext();
-      const orderedAssetIds = target === "chat"
+      const expectedOrder = target === "chat"
         ? this.orderedReferenceIds(this.activeWorkspace?.id, selection)
         : this.orderedGenerationReferenceIds(this.activeWorkspace?.id, selection);
-      const imageIdByAssetId = new Map(
-        [...assetMap].map(([imageId, asset]) => [asset.id, imageId]),
-      );
-      const expectedOrder = orderedAssetIds
-        .map((assetId) => imageIdByAssetId.get(assetId))
-        .filter(Boolean);
-      const currentOrder = [...this.librarySelection];
+      const currentOrder = this.libraryReferenceIds(this.activeWorkspace, assetMap);
       if (currentOrder.length !== expectedOrder.length) return true;
       return currentOrder.some((id, index) => id !== expectedOrder[index]);
     },
@@ -462,7 +465,8 @@
         assetMap,
         desiredSelectionSize,
       } = this.librarySelectionContext(workspace);
-      const selectedImageIds = this.orderedLibraryImageIds(workspace);
+      const selectedImageIds = [...this.librarySelection];
+      const plannedReferenceIds = this.libraryReferenceIds(workspace, assetMap);
       if (!limit || desiredSelectionSize > limit) {
         UI.toast(target === "chat" ? `每条消息最多发送 ${limit} 张图片` : `当前渠道最多选择 ${limit} 张垫图`, "error");
         return;
@@ -507,29 +511,20 @@
         this.libraryBusy = false;
       }
 
-      if (this.activeWorkspace?.id !== workspace.id) {
-        this.librarySelection.clear();
-        this.renderLibrary();
-        return;
-      }
-      const orderedLibraryAssetIds = this.orderedLibraryImageIds(workspace)
-        .map((imageId) => assetMap.get(imageId)?.id)
-        .filter(Boolean);
-      const libraryAssetIds = new Set(orderedLibraryAssetIds);
       const currentSelection = [...selection];
-      const firstLibraryIndex = currentSelection.findIndex((assetId) => libraryAssetIds.has(assetId));
-      const reorderedSelection = firstLibraryIndex < 0
-        ? [...currentSelection, ...orderedLibraryAssetIds]
-        : [
-          ...currentSelection.slice(0, firstLibraryIndex),
-          ...orderedLibraryAssetIds,
-          ...currentSelection.slice(firstLibraryIndex).filter((assetId) => !libraryAssetIds.has(assetId)),
-        ];
+      const reorderedSelection = [...new Set(plannedReferenceIds.map((id) => (
+        id.startsWith("library:") ? assetMap.get(id.slice("library:".length))?.id : id
+      )).filter((id) => selection.has(id)))];
       const selectionReordered = reorderedSelection.length !== currentSelection.length
         || reorderedSelection.some((assetId, index) => assetId !== currentSelection[index]);
       if (selectionReordered) {
         selection.clear();
         reorderedSelection.forEach((assetId) => selection.add(assetId));
+      }
+      if (this.activeWorkspace?.id !== workspace.id) {
+        this.librarySelection.clear();
+        this.renderLibrary();
+        return;
       }
       if (!imported.length && !existing.length && !removed.length && !selectionReordered) {
         this.renderLibrary();

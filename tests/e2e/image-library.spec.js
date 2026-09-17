@@ -239,6 +239,150 @@ test("image library confirms multiple padding images up to the channel limit", {
   expect(imported).toEqual(["library-generation-a", "library-generation-b"]);
 });
 
+test("image library keeps new and existing padding images in selection order", {
+  tag: "@responsive",
+}, async ({ studioPage: page }) => {
+  await mockConfiguredImageChannel(page);
+  const images = [
+    libraryImage("library-padding-old", "padding-old.png", "/static/assets/brand-mark-v2.png"),
+    libraryImage("library-padding-new", "padding-new.png", "/static/assets/starter-ocean-sky-reference.png"),
+  ];
+  const imported = await mockLibrarySelection(page, images);
+  await page.route("**/api/generations", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    return route.fulfill({ status: 409, json: { error: "E2E 仅验证图片顺序" } });
+  });
+  await page.reload();
+  await page.locator("#directGenerationButton").evaluate((button) => button.click());
+  await expect(page.locator("#generationForm")).toBeVisible();
+  await page.locator('#modeSwitch [data-mode="img2img"]').click();
+  await page.locator("#referenceLibrary").click();
+  const checkboxes = page.locator("#libraryGrid [data-select-library-image]");
+  await checkboxes.nth(0).check();
+  await page.locator("#libraryConfirmButton").click();
+  await expect(page.locator("#libraryDialog")).toBeHidden();
+
+  await page.locator("#referenceLibrary").click();
+  await checkboxes.nth(0).uncheck();
+  await checkboxes.nth(1).check();
+  await checkboxes.nth(0).check();
+  await expect(page.locator("#libraryGrid .reference-order")).toHaveText(["2", "1"]);
+  await page.locator("#libraryConfirmButton").click();
+  await expect(page.locator("#referenceList .reference-order")).toHaveText(["2", "1"]);
+  expect(imported).toEqual(["library-padding-old", "library-padding-new"]);
+
+  await page.locator("#promptInput").fill("使用图1的风格修改图2");
+  const request = page.waitForRequest((entry) => (
+    entry.method() === "POST" && new URL(entry.url()).pathname === "/api/generations"
+  ));
+  await page.locator("#generateButton").click();
+  expect((await request).postDataJSON().reference_ids).toEqual([
+    "asset-library-padding-new", "asset-library-padding-old",
+  ]);
+});
+
+test("image library pagination preserves canceled images and pending selection order", {
+  tag: "@responsive",
+}, async ({ studioPage: page }) => {
+  const images = Array.from({ length: 61 }, (_value, index) => libraryImage(
+    `library-page-order-${index}`, `page-order-${index}.png`, "/static/assets/brand-mark-v2.png",
+  ));
+  const imported = await mockLibrarySelection(page, images);
+  await page.route("**/api/library-images?*", (route) => {
+    const offset = Number(new URL(route.request().url()).searchParams.get("offset"));
+    return route.fulfill({ json: {
+      images: offset ? [images[0], images[60]] : images.slice(0, 60),
+      total: images.length,
+      has_more: offset === 0,
+    } });
+  });
+  await page.locator("#libraryButton").click();
+  const checkboxes = page.locator("#libraryGrid [data-select-library-image]");
+  await checkboxes.nth(0).check();
+  await page.locator("#libraryConfirmButton").click();
+  await expect(page.locator("#libraryDialog")).toBeHidden();
+
+  await page.locator("#libraryButton").click();
+  await checkboxes.nth(0).uncheck();
+  await checkboxes.nth(1).check();
+  await page.locator("#libraryLoadMoreButton").click();
+  await expect(page.locator("#libraryGrid .library-card")).toHaveCount(61);
+  await expect(checkboxes.nth(0)).not.toBeChecked();
+  await expect(page.locator("#libraryGrid .reference-order")).toHaveText(["1"]);
+  await checkboxes.nth(60).check();
+  await expect(page.locator("#libraryGrid .reference-order")).toHaveText(["1", "2"]);
+  await page.locator("#libraryConfirmButton").click();
+  await expect(page.locator("#chatReferenceCount")).toHaveText("2");
+  await expect(page.locator("#chatReferenceList .reference-order")).toHaveText(["1", "2"]);
+  expect(imported).toEqual([
+    "library-page-order-0", "library-page-order-1", "library-page-order-60",
+  ]);
+});
+
+test("image library numbering includes selected local references", {
+  tag: "@responsive",
+}, async ({ studioPage: page }) => {
+  await mockConfiguredImageChannel(page);
+  const images = [libraryImage(
+    "library-after-local", "after-local.png", "/static/assets/starter-ocean-sky-reference.png",
+  )];
+  await mockLibrarySelection(page, images);
+  await page.route("**/api/workspaces/*/assets", (route) => route.fulfill({ json: {
+    assets: [{
+      id: "local-reference", name: "local-reference.png",
+      url: "/static/assets/brand-mark-v2.png", mime_type: "image/png", bytes: 1024,
+    }],
+  } }));
+  await page.reload();
+  await page.locator("#directGenerationButton").evaluate((button) => button.click());
+  await page.locator('#modeSwitch [data-mode="img2img"]').click();
+  await page.locator("#referenceInput").setInputFiles(path.resolve("static/assets/brand-mark-v2.png"));
+  await expect(page.locator("#referenceList .reference-order")).toHaveText(["1"]);
+
+  await page.locator("#referenceLibrary").click();
+  await page.locator("#libraryGrid [data-select-library-image]").check();
+  await expect(page.locator("#libraryGrid .reference-order")).toHaveText(["2"]);
+  await page.locator("#libraryConfirmButton").click();
+  await expect(page.locator("#referenceList .reference-order")).toHaveText(["1", "2"]);
+});
+
+test("image library preserves series anchor order after reselecting it", async ({ studioPage: page }) => {
+  const result = await page.evaluate(() => {
+    const workspace = {
+      id: "series-library-order",
+      settings: { generation_strategy: "series", series_anchor: { asset_id: "a".repeat(32) } },
+      assets: [
+        { id: "a".repeat(32), library_image_id: "library-anchor" },
+        { id: "b".repeat(32), library_image_id: "library-second" },
+        { id: "c".repeat(32), name: "local.png" },
+      ],
+    };
+    const app = Object.assign(Object.create(window.ImageGenStudio.StudioApp.prototype), {
+      activeWorkspace: workspace,
+      workspaces: [workspace],
+      channels: [],
+      el: { generationStrategy: { value: "series" } },
+      libraryTarget: "generation",
+      libraryImages: [{ id: "library-anchor" }, { id: "library-second" }],
+      librarySelection: new Set(),
+      referenceSelections: new Map([[workspace.id, new Set([
+        "b".repeat(32), "c".repeat(32), "a".repeat(32),
+      ])]]),
+    });
+    app.syncLibrarySelection();
+    return {
+      referenceIds: app.libraryReferenceIds(),
+      order: [...app.librarySelectionOrder()],
+      changed: app.librarySelectionChanged(),
+    };
+  });
+  expect(result).toEqual({
+    referenceIds: ["a".repeat(32), "b".repeat(32), "c".repeat(32)],
+    order: [["library-anchor", 1], ["library-second", 2]],
+    changed: false,
+  });
+});
+
 test("many padding images stay inside the generation drawer", {
   tag: "@responsive",
 }, async ({ studioPage: page }) => {
