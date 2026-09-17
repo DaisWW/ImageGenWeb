@@ -171,6 +171,43 @@ test("image library mirrors existing message selections and card clicks toggle",
   expect(imported).toEqual(["library-chat-sync"]);
 });
 
+test("image library reselecting an attachment updates its order", {
+  tag: "@responsive",
+}, async ({ studioPage: page }) => {
+  const images = [
+    libraryImage("library-chat-order-a", "order-a.png", "/static/assets/brand-mark-v2.png"),
+    libraryImage("library-chat-order-b", "order-b.png", "/static/assets/starter-ocean-sky-reference.png"),
+  ];
+  const imported = await mockLibrarySelection(page, images);
+
+  await page.locator("#libraryButton").click();
+  const checkboxes = page.locator("#libraryGrid [data-select-library-image]");
+  await checkboxes.nth(1).check();
+  await checkboxes.nth(0).check();
+  await page.locator("#libraryConfirmButton").click();
+  await expect(page.locator("#libraryDialog")).toBeHidden();
+  expect(imported).toEqual(["library-chat-order-b", "library-chat-order-a"]);
+
+  await page.locator("#libraryButton").click();
+  await expect(page.locator("#libraryGrid .reference-order")).toHaveText(["2", "1"]);
+  await page.locator("#libraryGrid .library-card").nth(1).locator("[data-toggle-library-image]").click();
+  await page.locator("#libraryGrid .library-card").nth(1).locator("[data-toggle-library-image]").click();
+  await expect(page.locator("#libraryGrid .reference-order")).toHaveText(["1", "2"]);
+  await expect(page.locator("#libraryConfirmButton")).toBeEnabled();
+  await page.locator("#libraryConfirmButton").click();
+
+  expect(await page.locator("#chatReferenceList .chat-reference-item").evaluateAll((cards) => (
+    cards.map((card) => ({
+      id: card.querySelector("[data-chat-reference-toggle]")?.dataset.chatReferenceToggle,
+      order: card.querySelector(".reference-order")?.textContent || "",
+    }))
+  ))).toEqual([
+    { id: "asset-library-chat-order-b", order: "2" },
+    { id: "asset-library-chat-order-a", order: "1" },
+  ]);
+  expect(imported).toEqual(["library-chat-order-b", "library-chat-order-a"]);
+});
+
 test("image library confirms multiple padding images up to the channel limit", {
   tag: "@responsive",
 }, async ({ studioPage: page }) => {

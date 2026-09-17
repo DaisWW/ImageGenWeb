@@ -107,25 +107,31 @@
     },
 
     librarySelectionOrder(workspace = this.activeWorkspace) {
-      const {
-        target,
-        selection,
-        assetMap,
-      } = this.librarySelectionContext(workspace);
-      const orderedAssetIds = target === "chat"
-        ? this.orderedReferenceIds(workspace?.id, selection)
-        : this.orderedGenerationReferenceIds(workspace?.id, selection);
+      const orderedImageIds = this.orderedLibraryImageIds(workspace);
+      return new Map(
+        orderedImageIds.map((id, index) => [id, index + 1]),
+      );
+    },
+
+    orderedLibraryImageIds(workspace = this.activeWorkspace) {
+      const imageIds = [...this.librarySelection];
+      if (this.libraryTarget === "chat") return imageIds;
+      const assetMap = this.libraryAssetMap(workspace);
       const imageIdByAssetId = new Map(
         [...assetMap].map(([imageId, asset]) => [asset.id, imageId]),
       );
-      const orderedImageIds = orderedAssetIds
-        .map((assetId) => imageIdByAssetId.get(assetId))
-        .filter((imageId) => imageId && this.librarySelection.has(imageId));
-      const known = new Set(orderedImageIds);
-      return new Map(
-        [...orderedImageIds, ...[...this.librarySelection].filter((id) => !known.has(id))]
-          .map((id, index) => [id, index + 1]),
+      const orderedAssetIds = this.orderedGenerationReferenceIds(
+        workspace?.id,
+        new Set(imageIds.map((id) => assetMap.get(id)?.id).filter(Boolean)),
       );
+      const orderedKnownImageIds = orderedAssetIds
+        .map((assetId) => imageIdByAssetId.get(assetId))
+        .filter(Boolean);
+      const known = new Set(orderedKnownImageIds);
+      return [
+        ...orderedKnownImageIds,
+        ...imageIds.filter((id) => !known.has(id)),
+      ];
     },
 
     libraryImageMatchesAsset(image, asset) {
@@ -169,17 +175,30 @@
         : this.orderedGenerationReferenceIds(this.activeWorkspace?.id, selection);
       const selectedLoaded = ordered
         .map((assetId) => imageIdByAssetId.get(assetId))
-        .filter(Boolean);
-      const selectedLoadedIds = new Set(selectedLoaded);
+        .filter((imageId) => imageId && !previousSelection.includes(imageId));
       this.librarySelection.clear();
-      [...selectedLoaded, ...previousSelection.filter((id) => !selectedLoadedIds.has(id))]
+      [...previousSelection, ...selectedLoaded]
         .forEach((id) => this.librarySelection.add(id));
     },
 
     librarySelectionChanged() {
-      const { selectedLibraryIds } = this.librarySelectionContext();
-      if (this.librarySelection.size !== selectedLibraryIds.size) return true;
-      return [...this.librarySelection].some((id) => !selectedLibraryIds.has(id));
+      const {
+        target,
+        selection,
+        assetMap,
+      } = this.librarySelectionContext();
+      const orderedAssetIds = target === "chat"
+        ? this.orderedReferenceIds(this.activeWorkspace?.id, selection)
+        : this.orderedGenerationReferenceIds(this.activeWorkspace?.id, selection);
+      const imageIdByAssetId = new Map(
+        [...assetMap].map(([imageId, asset]) => [asset.id, imageId]),
+      );
+      const expectedOrder = orderedAssetIds
+        .map((assetId) => imageIdByAssetId.get(assetId))
+        .filter(Boolean);
+      const currentOrder = [...this.librarySelection];
+      if (currentOrder.length !== expectedOrder.length) return true;
+      return currentOrder.some((id, index) => id !== expectedOrder[index]);
     },
 
     librarySelectionContext(workspace = this.activeWorkspace) {
@@ -443,6 +462,7 @@
         assetMap,
         desiredSelectionSize,
       } = this.librarySelectionContext(workspace);
+      const selectedImageIds = this.orderedLibraryImageIds(workspace);
       if (!limit || desiredSelectionSize > limit) {
         UI.toast(target === "chat" ? `每条消息最多发送 ${limit} 张图片` : `当前渠道最多选择 ${limit} 张垫图`, "error");
         return;
@@ -458,7 +478,7 @@
 
       const existing = [];
       const requested = [];
-      for (const imageId of this.librarySelection) {
+      for (const imageId of selectedImageIds) {
         const asset = assetMap.get(imageId);
         if (asset) {
           if (!selection.has(asset.id)) existing.push(asset);
@@ -476,6 +496,7 @@
         for (const imageId of requested) {
           try {
             const asset = await this.importLibraryAsset(workspace, imageId);
+            assetMap.set(imageId, asset);
             selection.add(asset.id);
             imported.push(asset);
           } catch (error) {
@@ -491,14 +512,34 @@
         this.renderLibrary();
         return;
       }
-      if (!imported.length && !existing.length && !removed.length) {
+      const orderedLibraryAssetIds = this.orderedLibraryImageIds(workspace)
+        .map((imageId) => assetMap.get(imageId)?.id)
+        .filter(Boolean);
+      const libraryAssetIds = new Set(orderedLibraryAssetIds);
+      const currentSelection = [...selection];
+      const firstLibraryIndex = currentSelection.findIndex((assetId) => libraryAssetIds.has(assetId));
+      const reorderedSelection = firstLibraryIndex < 0
+        ? [...currentSelection, ...orderedLibraryAssetIds]
+        : [
+          ...currentSelection.slice(0, firstLibraryIndex),
+          ...orderedLibraryAssetIds,
+          ...currentSelection.slice(firstLibraryIndex).filter((assetId) => !libraryAssetIds.has(assetId)),
+        ];
+      const selectionReordered = reorderedSelection.length !== currentSelection.length
+        || reorderedSelection.some((assetId, index) => assetId !== currentSelection[index]);
+      if (selectionReordered) {
+        selection.clear();
+        reorderedSelection.forEach((assetId) => selection.add(assetId));
+      }
+      if (!imported.length && !existing.length && !removed.length && !selectionReordered) {
         this.renderLibrary();
         UI.toast(failures[0]?.message || "图库图片导入失败", "error");
         return;
       }
       this.librarySelection.clear();
       this.renderWorkspaceList();
-      const changed = imported.length + existing.length + removed.length;
+      const changed = imported.length + existing.length + removed.length
+        || (selectionReordered ? 1 : 0);
       if (target === "chat") {
         this.chatReferencePickerOpen = true;
         this.setComposerMode("chat");
