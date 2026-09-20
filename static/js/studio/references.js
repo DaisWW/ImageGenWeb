@@ -123,9 +123,7 @@
         image.src = asset.url;
         image.alt = asset.name;
         image.decoding = "async";
-        const check = document.createElement("span");
-        check.innerHTML = '<i data-lucide="check"></i>';
-        toggle.append(image, check);
+        toggle.append(image, ...(selected ? [this.referenceOrderBadge(order)] : []));
         const remove = document.createElement("button");
         remove.type = "button";
         remove.className = "reference-remove chat-reference-remove";
@@ -135,7 +133,6 @@
         remove.innerHTML = '<i data-lucide="x"></i>';
         card.append(
           toggle,
-          ...(selected ? [this.referenceOrderBadge(order)] : []),
           this.referencePreviewButton(asset.url, asset.name, `放大预览 ${asset.name}`, true),
           this.librarySaveButton(asset),
           remove,
@@ -214,9 +211,7 @@
           image.src = asset.url;
           image.alt = asset.name;
           image.decoding = "async";
-          const check = document.createElement("span");
-          check.innerHTML = '<i data-lucide="check"></i>';
-          toggle.append(image, check);
+          toggle.append(image, ...(isSelected ? [this.referenceOrderBadge(order)] : []));
           const remove = document.createElement("button");
           remove.type = "button";
           remove.className = "reference-remove";
@@ -226,7 +221,6 @@
           remove.innerHTML = '<i data-lucide="x"></i>';
           card.append(
             toggle,
-            ...(isSelected ? [this.referenceOrderBadge(order)] : []),
             this.referencePreviewButton(asset.url, asset.name, `放大预览 ${asset.name}`),
             this.librarySaveButton(asset),
             remove,

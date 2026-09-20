@@ -166,7 +166,7 @@
   object-fit: cover;
 }
 
-.chat-reference-card > span {
+.chat-reference-card > .reference-order {
   position: absolute;
   right: 3px;
   bottom: 3px;
@@ -179,16 +179,11 @@
   background: var(--accent);
 }
 
-.chat-reference-card > span svg {
-  width: 10px;
-  height: 10px;
-}
-
 .chat-reference-card.selected {
   border-color: var(--accent);
 }
 
-.chat-reference-card.selected > span {
+.chat-reference-card.selected > .reference-order {
   display: grid;
 }
 

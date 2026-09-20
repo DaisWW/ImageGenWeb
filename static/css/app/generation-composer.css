@@ -322,6 +322,13 @@
 }
 
 .reference-order {
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.library-thumbnail > .reference-order {
   position: absolute;
   z-index: 3;
   top: 3px;
@@ -336,10 +343,6 @@
   border-radius: 999px;
   background: rgb(8 10 12 / 88%);
   box-shadow: 0 2px 7px rgb(0 0 0 / 45%);
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1;
-  pointer-events: none;
   transform: translateX(-50%);
 }
 
@@ -365,7 +368,7 @@
   object-fit: cover;
 }
 
-.reference-toggle span {
+.reference-toggle > .reference-order {
   position: absolute;
   right: 3px;
   bottom: 3px;
@@ -378,12 +381,7 @@
   background: var(--accent);
 }
 
-.reference-toggle span svg {
-  width: 11px;
-  height: 11px;
-}
-
-.reference-card.selected .reference-toggle span {
+.reference-card.selected .reference-toggle > .reference-order {
   display: grid;
 }
 
