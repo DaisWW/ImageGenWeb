@@ -761,7 +761,8 @@ test("image detail keeps its reference through multi-turn refinement", {
   await expect(page.locator("#chatInput")).toHaveValue(/不要抠取、分割或复制原图像素/);
   await expect(page.locator("#chatInput")).toHaveValue(/模块 → 原子资源/);
   await expect(page.locator("#chatReferenceCount")).toHaveText("1");
-  await expect(page.locator("#modeSwitch")).toHaveAttribute("data-mode", "img2img");
+  await expect(page.locator("#modeSwitch")).toHaveCount(0);
+  await expect(page.locator("#referenceList .reference-card.selected")).toHaveCount(1);
   await expect(page.locator("#creativeDirectionSelect")).toHaveValue("game_ui");
   await expect(page.locator("#formatSelect")).toHaveValue("png");
   await expect(page.locator("#sizeInput")).toHaveValue("1024x1024");
@@ -788,7 +789,6 @@ test("image detail keeps its reference through multi-turn refinement", {
   expect(sentClarificationReplyIds).toEqual(["", "e2e-refine-assistant-1"]);
   expect(promptDraftRequests).toBe(0);
   await draft.getByRole("button", { name: "使用此提示词生图" }).click();
-  await expect(page.locator("#modeSwitch")).toHaveAttribute("data-mode", "img2img");
   await expect(page.locator("#referenceList .reference-card.selected img"))
     .toHaveAttribute("alt", referenceAsset.name);
 });

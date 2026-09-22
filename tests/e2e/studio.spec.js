@@ -413,6 +413,8 @@ test("direct generation bypasses AI conversation", { tag: "@responsive" }, async
   await page.locator("#directGenerationButton").click();
 
   await expect(page.locator("#generationForm")).toBeVisible();
+  await expect(page.locator("#modeSwitch")).toHaveCount(0);
+  await expect(page.locator("#referenceStrip")).toBeVisible();
   await expect(page.locator("#channelSelect")).toBeVisible();
   await expect(page.locator("#channelSelect option")).toHaveCount(2);
   await page.locator("#channelSelect").selectOption("lucen");
@@ -430,7 +432,6 @@ test("direct generation bypasses AI conversation", { tag: "@responsive" }, async
   await expect.poll(() => page.evaluate(() => window.__copiedPrompt))
     .toBe("一张雨夜霓虹街道的电影感照片");
   await expect(page.locator("#promptReviewStatus")).toContainText("可直接编辑提示词");
-  await page.locator('#modeSwitch [data-mode="text2img"]').click();
   await settingsSaved;
   const savedPromptDraftId = await page.evaluate(async (id) => {
     const data = await window.ImageGen.api("/api/workspaces");
@@ -454,6 +455,8 @@ test("direct generation bypasses AI conversation", { tag: "@responsive" }, async
   expect(body.channel_id).toBe("lucen");
   expect(body.prompt_draft_id).toBe("");
   expect(body.generation_stage).toBe("final");
+  expect(body).not.toHaveProperty("mode");
+  expect(body.reference_ids).toEqual([]);
   expect(aiRequests).toBe(0);
 });
 
@@ -584,7 +587,7 @@ test("generation submissions queue independently across workspace switching", {
           kind: "image",
           channel_id: body.channel_id,
           channel: "E2E 渠道",
-          mode: body.mode,
+          mode: body.reference_ids?.length ? "img2img" : "text2img",
           prompt: body.prompt,
           model: body.model,
           size: body.size,

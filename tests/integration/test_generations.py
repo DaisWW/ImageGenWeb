@@ -60,6 +60,49 @@ class TestGenerations(PlatformTestCase):
         self.assertEqual(response.json["job"]["quality"], "high")
         self.assertEqual(response.json["job"]["workflow"]["generation_stage"], "final")
 
+    def test_generation_api_infers_mode_from_reference_selection(self):
+        client = self.user_client()
+        text_workspace = self.create_workspace("自动文生图")
+        text_response = client.post(
+            "/api/generations",
+            json={
+                "workspace_id": text_workspace.id,
+                "channel_id": "test",
+                "model": "model-b",
+                "mode": "img2img",
+                "prompt": "不使用参考图",
+                "reference_ids": [],
+            },
+        )
+
+        self.assertEqual(text_response.status_code, 202, text_response.get_data(as_text=True))
+        self.assertEqual(text_response.json["job"]["mode"], "text2img")
+        self.assertEqual(text_response.json["job"]["references"], [])
+
+        image_workspace = self.create_workspace("自动垫图生图")
+        reference = self.services.workspaces.add_assets(
+            image_workspace,
+            [("reference.png", png_bytes())],
+        )[0]
+        image_response = client.post(
+            "/api/generations",
+            json={
+                "workspace_id": image_workspace.id,
+                "channel_id": "test",
+                "model": "model-b",
+                "mode": "text2img",
+                "prompt": "使用参考图",
+                "reference_ids": [reference.id],
+            },
+        )
+
+        self.assertEqual(image_response.status_code, 202, image_response.get_data(as_text=True))
+        self.assertEqual(image_response.json["job"]["mode"], "img2img")
+        self.assertEqual(
+            [item["id"] for item in image_response.json["job"]["references"]],
+            [reference.id],
+        )
+
     def test_generation_api_maps_reviewed_stages_to_quality_and_workflow(self):
         client = self.user_client()
         for stage, expected_quality in (
@@ -421,15 +464,13 @@ class TestGenerations(PlatformTestCase):
         payload["workspace_id"] = workspace.id
         draft = self.create_ready_prompt_draft(workspace, prompt=payload["prompt"])
         payload["prompt_draft_id"] = draft.id.upper()
-        for changed, expected_error in (
-            ({"prompt": "被用户改过的提示词"}, "提示词已改变"),
-            ({"mode": "img2img"}, "生成模式已改变"),
-        ):
-            with self.subTest(changed=changed):
-                stale = client.post("/api/generations", json={**payload, **changed})
-                self.assertEqual(stale.status_code, 409)
-                self.assertEqual(stale.json["code"], "prompt_review_stale")
-                self.assertIn(expected_error, stale.json["error"])
+        stale = client.post(
+            "/api/generations",
+            json={**payload, "prompt": "被用户改过的提示词"},
+        )
+        self.assertEqual(stale.status_code, 409)
+        self.assertEqual(stale.json["code"], "prompt_review_stale")
+        self.assertIn("提示词已改变", stale.json["error"])
 
         reviewed = client.post("/api/generations", json=payload)
         self.assertEqual(reviewed.status_code, 202, reviewed.get_data(as_text=True))

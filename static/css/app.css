@@ -141,8 +141,7 @@ input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
 .workspace-select:focus-visible,
-.workspace-action:focus-visible,
-.mode-button:focus-visible {
+.workspace-action:focus-visible {
   outline: 2px solid rgb(125 183 216 / 65%);
   outline-offset: 2px;
 }
@@ -243,21 +242,18 @@ textarea:focus-visible,
 
 .button > svg,
 .icon-button > svg,
-.mode-button > svg,
 .admin-tab > svg {
   transition: transform 160ms ease;
 }
 
 .button:hover:not(:disabled) > svg,
 .icon-button:hover:not(:disabled) > svg,
-.mode-button:hover:not(:disabled) > svg,
 .admin-tab:hover > svg {
   transform: translateY(-1px);
 }
 
 .button:active:not(:disabled),
 .icon-button:active:not(:disabled),
-.mode-button:active:not(:disabled),
 .admin-tab:active {
   transform: translateY(1px) scale(.985);
 }

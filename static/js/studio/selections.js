@@ -20,7 +20,7 @@
     generationRoutingCandidates(settings = {}, workspaceId = this.activeWorkspace?.id) {
       const channelId = String(settings.channel_id || "").trim();
       const modelId = String(settings.model || "").trim();
-      const mode = String(settings.mode || "").trim();
+      const mode = this.generationMode(workspaceId);
       const outputFormat = String(settings.output_format || "").trim();
       const workspace = this.workspaces?.find((item) => item.id === workspaceId)
         || this.activeWorkspace;
@@ -205,6 +205,12 @@
 
     generationReferenceLimit() {
       return this.referenceSelectionLimit("generation");
+    },
+
+    generationMode(workspaceId = this.activeWorkspace?.id) {
+      return this.orderedGenerationReferenceIds(workspaceId).length
+        ? "img2img"
+        : "text2img";
     },
 
     currentSelection(workspaceId = this.activeWorkspace?.id) {

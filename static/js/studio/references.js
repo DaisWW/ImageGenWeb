@@ -419,7 +419,6 @@
         if (workspace.settings?.series_anchor?.asset_id === id) {
           workspace.settings.generation_strategy = "sample";
           workspace.settings.series_anchor = {};
-          if (!this.currentSelection(workspace.id).size) workspace.settings.mode = "text2img";
           if (this.activeWorkspace?.id === workspace.id) this.setGenerationStrategy("sample", false);
         }
         if (this.activeWorkspace?.id === workspace.id) {

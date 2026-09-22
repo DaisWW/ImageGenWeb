@@ -87,7 +87,6 @@
       )) || this.channels.find((channel) => channel.configured) || this.channels[0];
       this.renderChannelOptions(preferred?.id);
       this.applyChannel(settings, false);
-      this.setMode(settings.mode || "text2img", false);
       this.setGenerationStrategy(settings.generation_strategy || "sample", false);
       this.el.saveState.textContent = this.workspaceSettingSaves.has(this.activeWorkspace.id)
         ? "正在保存..."
@@ -164,12 +163,6 @@
       this.fillSelect(this.el.formatSelect, channel.capabilities.formats, settings.output_format, null, null, {
         png: "PNG", jpeg: "JPEG", webp: "WebP",
       });
-      document.querySelectorAll("[data-mode]").forEach((button) => {
-        button.disabled = !channel.capabilities.modes.includes(button.dataset.mode);
-      });
-      if (!channel.capabilities.modes.includes(this.el.modeSwitch.dataset.mode)) {
-        this.setMode(channel.capabilities.modes[0], false);
-      }
       if (
         this.el.generationStrategy?.value === "series"
         && !channel.capabilities.modes.includes("img2img")
@@ -366,24 +359,6 @@
       return valid;
     },
 
-    setMode(mode, shouldSave) {
-      const channel = this.currentChannel();
-      if (channel && !channel.capabilities.modes.includes(mode)) return;
-      this.el.modeSwitch.dataset.mode = mode;
-      this.el.modeSwitch.querySelectorAll("[data-mode]").forEach((button) => {
-        const active = button.dataset.mode === mode;
-        button.classList.toggle("active", active);
-        button.setAttribute("aria-pressed", String(active));
-      });
-      if (mode === "text2img" && this.el.generationStrategy?.value === "series") {
-        this.setGenerationStrategy("sample", false);
-      }
-      this.el.referenceStrip.hidden = mode !== "img2img";
-      this.updatePrice();
-      this.updatePromptReviewState();
-      if (shouldSave) this.settingChanged();
-    },
-
     generationStrategyPolicy() {
       return new GenerationStrategyPolicy(this.limits.max_batch_images);
     },
@@ -467,7 +442,6 @@
         const limit = this.generationReferenceLimit();
         selected.clear();
         ordered.slice(0, limit).forEach((id) => selected.add(id));
-        this.setMode("img2img", false);
         this.renderReferences();
       }
       this.renderGenerationPlan();
@@ -541,7 +515,7 @@
       const payload = draft?.payload || {};
       if (draft?.kind !== "prompt_draft" || payload.status !== "ready") return null;
       if ((payload.prompt || "").trim() !== this.el.promptInput.value.trim()) return null;
-      const mode = this.el.modeSwitch.dataset.mode;
+      const mode = this.generationMode();
       if (payload.generation_mode !== mode) return null;
       const selectedDirection = this.el.creativeDirectionSelect.value || "auto";
       if (selectedDirection !== "auto" && payload.creative_direction !== selectedDirection) {
@@ -567,7 +541,7 @@
 
     collectSettings() {
       return {
-        mode: this.el.modeSwitch.dataset.mode,
+        mode: this.generationMode(),
         prompt: this.el.promptInput.value,
         channel_id: this.el.channelSelect.value,
         model: this.el.modelSelect.value,

@@ -224,7 +224,8 @@ test("image library confirms multiple padding images up to the channel limit", {
     button.click();
   });
   await expect(page.locator("#generationForm")).toBeVisible();
-  await page.locator('#modeSwitch [data-mode="img2img"]').click();
+  await expect(page.locator("#modeSwitch")).toHaveCount(0);
+  await expect(page.locator("#referenceStrip")).toBeVisible();
   await page.locator("#referenceLibrary").click();
   await expect(page.locator("#libraryTargetLabel")).toHaveText("设为垫图");
   const checkboxes = page.locator("#libraryGrid [data-select-library-image]");
@@ -255,7 +256,6 @@ test("image library keeps new and existing padding images in selection order", {
   await page.reload();
   await page.locator("#directGenerationButton").evaluate((button) => button.click());
   await expect(page.locator("#generationForm")).toBeVisible();
-  await page.locator('#modeSwitch [data-mode="img2img"]').click();
   await page.locator("#referenceLibrary").click();
   const checkboxes = page.locator("#libraryGrid [data-select-library-image]");
   await checkboxes.nth(0).check();
@@ -335,7 +335,6 @@ test("image library numbering includes selected local references", {
   } }));
   await page.reload();
   await page.locator("#directGenerationButton").evaluate((button) => button.click());
-  await page.locator('#modeSwitch [data-mode="img2img"]').click();
   await page.locator("#referenceInput").setInputFiles(path.resolve("static/assets/brand-mark-v2.png"));
   await expect(page.locator("#referenceList .reference-order")).toHaveText(["1"]);
 
@@ -437,7 +436,6 @@ test("many padding images stay inside the generation drawer", {
     button.click();
   });
   await expect(page.locator("#generationForm")).toBeVisible();
-  await page.locator('#modeSwitch [data-mode="img2img"]').click();
   await page.locator("#referenceLibrary").click();
   await page.locator("#librarySelectAllButton").click();
   await page.locator("#libraryConfirmButton").click();
@@ -484,7 +482,6 @@ test("reference thumbnails open a zoomable image preview", {
     button.click();
   });
   await expect(page.locator("#generationForm")).toBeVisible();
-  await page.locator('#modeSwitch [data-mode="img2img"]').click();
   await page.locator("#referenceLibrary").click();
   await page.locator("#libraryGrid [data-image-preview]").click();
   await expect(page.locator("#imageViewerDialog")).toBeVisible();

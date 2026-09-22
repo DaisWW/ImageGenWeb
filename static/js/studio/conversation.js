@@ -112,13 +112,11 @@
         UI.toast("管理员尚未配置可用的对话模型", "error");
         return;
       }
-      const selectedGenerationMode = this.el.modeSwitch.dataset.mode || "text2img";
       const selectedGenerationReferences = this.orderedGenerationReferenceIds(
         workspaceId,
         this.currentSelection(workspaceId),
       );
-      const generationMode = selectedGenerationMode === "img2img"
-        && (selectedGenerationReferences.length || !attachmentIds.length)
+      const generationMode = selectedGenerationReferences.length
         ? "img2img"
         : attachmentIds.length ? "auto" : "text2img";
       const generationReferenceIds = generationMode === "img2img"
@@ -330,7 +328,6 @@
         references.clear();
         requested.filter((id) => activeIds.has(id)).forEach((id) => references.add(id));
         this.trimReferenceSelection(references, this.generationReferenceLimit());
-        this.setMode(references.size ? "img2img" : "text2img", false);
         this.renderReferences();
         omitted = requested.length - references.size;
       }

@@ -75,7 +75,6 @@
       const candidates = this.generationRoutingCandidates({
         channel_id: this.el.channelSelect?.value || "__auto__",
         model: this.el.modelSelect?.value || "",
-        mode: this.el.modeSwitch?.dataset.mode || "",
         size: this.el.sizeInput?.value || "",
         output_format: this.el.formatSelect?.value || "",
       });
@@ -151,10 +150,6 @@
         this.el.promptInput.focus();
         return;
       }
-      if (settings.mode === "img2img" && !referenceIds.length) {
-        UI.toast("垫图生图至少选择一张垫图", "error");
-        return;
-      }
       if (!this.generationRoutingCandidates(settings, workspace.id).length) {
         UI.toast("所选渠道不支持当前模型、模式、格式或垫图数量", "error");
         return;
@@ -162,11 +157,13 @@
       settings.prompt_draft_id = reviewedDraft?.id || "";
       const operationId = this.newMessageId();
       const operation = { operation_id: operationId };
+      const requestSettings = { ...settings };
+      delete requestSettings.mode;
       const requestBody = {
         workspace_id: workspace.id,
-        ...settings,
+        ...requestSettings,
         canvas_resolution: canvasResolution,
-        reference_ids: settings.mode === "img2img" ? [...referenceIds] : [],
+        reference_ids: [...referenceIds],
         operation_id: operationId,
       };
       this.generationSubmissionMap(workspace.id, true).set(operationId, operation);

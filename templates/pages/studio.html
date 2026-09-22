@@ -107,10 +107,6 @@
             </div>
           </section>
           <div class="composer-controls">
-            <div class="mode-switch" id="modeSwitch" data-mode="text2img">
-              <button type="button" class="mode-button active" data-mode="text2img" aria-pressed="true"><i data-lucide="type"></i>文生图</button>
-              <button type="button" class="mode-button" data-mode="img2img" aria-pressed="false"><i data-lucide="images"></i>垫图生图</button>
-            </div>
             <label class="compact-field channel-field"><span>渠道</span><select id="channelSelect" required></select></label>
             <label class="compact-field model-field"><span>模型</span><select id="modelSelect" required></select></label>
             <label class="compact-field"><span>尺寸</span><input id="sizeInput" maxlength="20" placeholder="1024x1024" autocomplete="off" required></label>
@@ -128,7 +124,7 @@
             <div class="generation-plan-list" id="generationPlanList"></div>
           </section>
 
-          <div class="reference-strip" id="referenceStrip" hidden>
+          <div class="reference-strip" id="referenceStrip">
             <button class="reference-add" type="button" id="referenceAdd"><i data-lucide="image-plus"></i><span id="referenceAddLabel">添加垫图</span><small id="referenceLimit">0 / {{ runtime_settings.max_assets_per_workspace }}</small></button>
             <button class="reference-add reference-library-add" type="button" id="referenceLibrary"><i data-lucide="library"></i><span>图片库</span></button>
             <div class="reference-list" id="referenceList"></div>

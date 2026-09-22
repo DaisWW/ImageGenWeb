@@ -120,10 +120,6 @@
   gap: 12px 10px;
 }
 
-.generation-composer .mode-switch {
-  grid-column: 1 / -1;
-}
-
 .generation-plan {
   max-width: 1380px;
   margin: 0 auto 10px;
@@ -199,65 +195,6 @@
 .compact-field select {
   height: 36px;
   font-size: 12px;
-}
-
-.mode-switch {
-  position: relative;
-  display: grid;
-  height: 36px;
-  grid-template-columns: 1fr 1fr;
-  padding: 3px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface-2);
-  isolation: isolate;
-}
-
-.mode-switch::before {
-  position: absolute;
-  z-index: 0;
-  top: 3px;
-  bottom: 3px;
-  left: 3px;
-  width: calc(50% - 3px);
-  border-radius: 4px;
-  background: var(--surface-4);
-  box-shadow: 0 2px 8px rgb(0 0 0 / 20%);
-  content: "";
-  transition: transform var(--motion-base) var(--ease-out);
-}
-
-.mode-switch[data-mode="img2img"]::before {
-  transform: translateX(100%);
-}
-
-.mode-button {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  min-width: 86px;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 0 9px;
-  color: var(--muted);
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  font-size: 11px;
-  white-space: nowrap;
-  transition: color 160ms ease, background-color 160ms ease, transform 160ms ease;
-}
-
-.mode-button svg {
-  width: 14px;
-  height: 14px;
-}
-
-.mode-button.active {
-  color: var(--text);
-  background: transparent;
-  box-shadow: none;
 }
 
 .reference-strip {

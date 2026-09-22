@@ -543,11 +543,11 @@
         this.el.chatInput.focus();
         UI.toast(changed === 1 ? "已更新待发送图片" : `已更新 ${changed} 张待发送图片`, "success");
       } else {
-        this.setMode(selection.size ? "img2img" : "text2img", true);
         if (this.el.generationForm.hidden) {
           this.openGenerationComposer([...selection]);
         } else {
           this.renderReferences();
+          this.settingChanged();
           this.el.promptInput.focus();
         }
         UI.closeDialog(this.el.libraryDialog);

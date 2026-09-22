@@ -675,7 +675,6 @@ const BACKGROUND_REMOVAL_ADAPTER_LABEL = {
       const generationSelection = this.currentSelection(workspace.id);
       generationSelection.clear();
       generationSelection.add(asset.id);
-      this.setMode("img2img", false);
       this.chatReferencePickerOpen = true;
       this.renderChatReferences();
       this.renderReferences();

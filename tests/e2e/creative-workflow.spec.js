@@ -276,7 +276,8 @@ test("chat images are used for generation only when their semantic role requires
   const generationDraft = page.locator(".prompt-draft-content").last();
   await expect(generationDraft).toContainText("使用 2 张垫图");
   await generationDraft.getByRole("button", { name: "使用此提示词生图" }).click();
-  await expect(page.locator("#modeSwitch")).toHaveAttribute("data-mode", "img2img");
+  await expect(page.locator("#modeSwitch")).toHaveCount(0);
+  await expect(page.locator("#referenceStrip")).toBeVisible();
   await expect(page.locator("#referenceList .reference-card.selected")).toHaveCount(2);
   await expect(page.locator("#referenceList .reference-order")).toHaveText(["1", "2"]);
 
@@ -306,10 +307,14 @@ test("chat images are used for generation only when their semantic role requires
     request.method() === "POST" && new URL(request.url()).pathname === "/api/generations"
   ));
   await page.locator("#generateButton").click();
-  expect((await generationRequest).postDataJSON().reference_ids)
-    .toEqual([...listedGenerationReferenceIds].reverse());
+  const generationBody = (await generationRequest).postDataJSON();
+  expect(generationBody).not.toHaveProperty("mode");
+  expect(generationBody.reference_ids).toEqual([...listedGenerationReferenceIds].reverse());
 
-  await page.locator('#modeSwitch [data-mode="text2img"]').click();
+  for (let index = 0; index < listedGenerationReferenceIds.length; index += 1) {
+    await page.locator("#referenceList .reference-card.selected .reference-toggle").first().click();
+  }
+  await expect(page.locator("#referenceList .reference-card.selected")).toHaveCount(0);
   await closeGenerationComposer(page);
   await page.locator("#chatReferenceButton").click();
   const chatReferences = page.locator("[data-chat-reference-toggle]");
@@ -336,7 +341,6 @@ test("chat images are used for generation only when their semantic role requires
   const analysisDraft = page.locator(".prompt-draft-content").last();
   await expect(analysisDraft).toContainText("图片仅用于分析");
   await analysisDraft.getByRole("button", { name: "使用此提示词生图" }).click();
-  await expect(page.locator("#modeSwitch")).toHaveAttribute("data-mode", "text2img");
   await expect(page.locator("#referenceList .reference-card.selected")).toHaveCount(0);
 
   expect(requests).toHaveLength(2);

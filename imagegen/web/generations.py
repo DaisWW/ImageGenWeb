@@ -55,7 +55,6 @@ def submit_generation():
         batch_count = int(data.get("batch_count", 1))
     except (TypeError, ValueError) as exc:
         raise ServiceError("生成数量或压缩质量无效") from exc
-    mode = str(data.get("mode", "text2img"))
     prompt = str(data.get("prompt", ""))
     ordered_reference_ids = tuple(str(item).strip().lower() for item in reference_ids)
     application_services = services()
@@ -75,8 +74,7 @@ def submit_generation():
             (workspace.settings or {}).get("series_anchor"),
         )
         ordered_reference_ids = series_anchor.anchor.order_reference_ids(ordered_reference_ids)
-        if mode != "img2img":
-            raise ServiceError("系列延续必须使用垫图生图", status_code=409)
+    mode = "img2img" if ordered_reference_ids else "text2img"
     draft_id = str(data.get("prompt_draft_id", "")).strip()
     draft = None
     if draft_id:

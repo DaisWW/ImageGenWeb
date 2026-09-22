@@ -302,7 +302,6 @@
         canvasConflictMessage: byId("canvasConflictMessage"),
         canvasConflictApply: byId("canvasConflictApply"),
         canvasConflictKeep: byId("canvasConflictKeep"),
-        modeSwitch: byId("modeSwitch"),
         channelSelect: byId("channelSelect"),
         modelSelect: byId("modelSelect"),
         sizeInput: byId("sizeInput"),
@@ -541,10 +540,6 @@
         this.el.generationForm.addEventListener(eventName, (event) => {
           this.finishComposerClose(event);
         });
-      });
-      this.el.modeSwitch.addEventListener("click", (event) => {
-        const button = event.target.closest("[data-mode]");
-        if (button && !button.disabled) this.setMode(button.dataset.mode, true);
       });
       this.el.channelSelect.addEventListener("change", () => {
         this.applyChannel(null, true);
