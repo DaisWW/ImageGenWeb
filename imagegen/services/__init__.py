@@ -13,7 +13,6 @@ from .generations import (
 from .image_library import ImageLibraryService
 from .retention import RetentionService
 from .runtime_logs import RuntimeLogService
-from .series import ResolvedSeriesAnchor, SeriesAnchor
 from .settings import RuntimeSettings, SystemSettingsService
 from .users import UserService
 from .workspace_settings import (
@@ -33,9 +32,7 @@ __all__ = [
     "ImageLibraryService",
     "RetentionService",
     "RuntimeLogService",
-    "ResolvedSeriesAnchor",
     "RuntimeSettings",
-    "SeriesAnchor",
     "ServiceError",
     "SpendingSummary",
     "SubmitGeneration",

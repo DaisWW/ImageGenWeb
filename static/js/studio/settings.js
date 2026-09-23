@@ -184,15 +184,7 @@
         png: "PNG", jpeg: "JPEG", webp: "WebP",
       });
       this.updateTransparentBackgroundState();
-      if (
-        this.el.generationStrategy?.value === "series"
-        && !channel.capabilities.modes.includes("img2img")
-      ) {
-        this.setGenerationStrategy("sample", false);
-        if (shouldSave) UI.toast("当前渠道不支持系列延续，已切回同提示词抽样", "info");
-      }
       const selection = this.currentSelection();
-      this.ensureSeriesAnchorSelection(selection);
       this.trimReferenceSelection(selection, this.generationReferenceLimit());
       if (this.pendingMaskEdit?.workspaceId === this.activeWorkspace?.id
         && (
@@ -482,21 +474,6 @@
       return this.generationStrategyPolicy().normalizeCount(strategy, this.el.batchCount.value);
     },
 
-    ensureSeriesAnchorSelection(selection = this.currentSelection()) {
-      if (this.el.generationStrategy?.value !== "series") return false;
-      const workspace = this.activeWorkspace;
-      const anchorId = workspace?.settings?.series_anchor?.asset_id;
-      if (!anchorId || !workspace?.assets?.some((asset) => asset.id === anchorId)) return false;
-      const ordered = [anchorId, ...[...selection].filter((id) => id !== anchorId)];
-      const changed = ordered.length !== selection.size
-        || ordered.some((id, index) => [...selection][index] !== id);
-      if (changed) {
-        selection.clear();
-        ordered.forEach((id) => selection.add(id));
-      }
-      return true;
-    },
-
     normalizeGenerationCount(force = false) {
       const strategy = this.el.generationStrategy.value || "sample";
       const policy = this.generationStrategyPolicy();
@@ -511,56 +488,24 @@
     },
 
     setGenerationStrategy(value, shouldSave) {
-      const workspace = this.activeWorkspace;
-      const anchor = workspace?.settings?.series_anchor;
-      const anchorAvailable = Boolean(
-        anchor?.asset_id && workspace.assets.some((asset) => asset.id === anchor.asset_id),
-      );
-      const img2imgAvailable = Boolean(
-        this.currentChannel()?.capabilities?.modes?.includes("img2img"),
-      );
       const policy = this.generationStrategyPolicy();
       const explorationAvailable = policy.explorationAvailable;
-      const seriesAvailable = policy.seriesAvailable({ anchorAvailable, img2imgAvailable });
       const exploreOption = [...this.el.generationStrategy.options]
         .find((option) => option.value === "explore");
       if (exploreOption) exploreOption.disabled = !explorationAvailable;
-      const seriesOption = [...this.el.generationStrategy.options]
-        .find((option) => option.value === "series");
-      if (seriesOption) seriesOption.disabled = !seriesAvailable;
       const requestedStrategy = policy.normalizeStrategy(value);
-      const strategy = policy.resolveStrategy(requestedStrategy, {
-        anchorAvailable,
-        img2imgAvailable,
-      });
+      const strategy = policy.resolveStrategy(requestedStrategy);
       if (this.pendingMaskEdit && strategy !== "sample") {
         this.invalidatePendingMaskEdit("生成方式已变化，局部重绘蒙版已清除");
       }
       if (requestedStrategy === "explore" && strategy !== requestedStrategy && shouldSave) {
         UI.toast("当前批量上限不足以进行受控探索，已切回同提示词抽样", "info");
       }
-      if (requestedStrategy === "series" && strategy !== requestedStrategy) {
-        if (shouldSave) {
-          UI.toast(
-            !anchorAvailable ? "请先将一张生成结果设为系列基准" : "当前渠道不支持系列延续",
-            "info",
-          );
-        }
-      }
       this.el.generationStrategy.value = strategy;
       if (strategy === "explore" && Number(this.el.batchCount.value || 1) < 2) {
         this.el.batchCount.value = String(policy.countRange(strategy).maximum);
       }
       this.normalizeGenerationCount(true);
-      if (strategy === "series") {
-        const selected = this.currentSelection();
-        this.ensureSeriesAnchorSelection(selected);
-        const ordered = [...selected];
-        const limit = this.generationReferenceLimit();
-        selected.clear();
-        ordered.slice(0, limit).forEach((id) => selected.add(id));
-        this.renderReferences();
-      }
       this.renderGenerationPlan();
       this.updatePrice();
       this.updatePromptReviewState();
@@ -575,44 +520,19 @@
         return;
       }
       setHidden(this.el.generationPlan, false);
-      const rows = [];
-      if (strategy === "explore") {
-        const draft = this.currentPromptDraft();
-        const variants = Array.isArray(draft?.payload?.exploration_plan)
-          ? draft.payload.exploration_plan.slice(0, this.generationCount())
-          : [];
-        setText(this.el.generationPlanTitle, "受控探索");
-        setText(
-          this.el.generationPlanHint,
-          variants.length ? "只变化声明维度，其余制作契约保持一致" : "请先使用 AI 整理最终提示词",
-        );
-        variants.forEach((variant, index) => {
-          rows.push({
-            label: `${String.fromCharCode(65 + index)} · ${variant.label || "探索方案"}`,
-            detail: Array.isArray(variant.delta) ? variant.delta.join("；") : "",
-          });
-        });
-      } else {
-        const anchor = this.activeWorkspace?.settings?.series_anchor || {};
-        const contract = anchor.contract || {};
-        const labels = {
-          identity_anchors: "身份锚点",
-          visual_language: "视觉语言",
-          palette_materials: "色板材质",
-          composition_rules: "构图规则",
-          typography_rules: "排版规则",
-          must_preserve: "必须保持",
-          allowed_changes: "允许变化",
-        };
-        setText(this.el.generationPlanTitle, "系列延续");
-        setText(this.el.generationPlanHint, "基准图作为第一参考，系列契约逐项重复");
-        Object.entries(contract).slice(0, 7).forEach(([key, values]) => {
-          rows.push({
-            label: labels[key] || key,
-            detail: Array.isArray(values) ? values.join("；") : String(values || ""),
-          });
-        });
-      }
+      const draft = this.currentPromptDraft();
+      const variants = Array.isArray(draft?.payload?.exploration_plan)
+        ? draft.payload.exploration_plan.slice(0, this.generationCount())
+        : [];
+      setText(this.el.generationPlanTitle, "受控探索");
+      setText(
+        this.el.generationPlanHint,
+        variants.length ? "只变化声明维度，其余制作契约保持一致" : "请先使用 AI 整理最终提示词",
+      );
+      const rows = variants.map((variant, index) => ({
+        label: `${String.fromCharCode(65 + index)} · ${variant.label || "探索方案"}`,
+        detail: Array.isArray(variant.delta) ? variant.delta.join("；") : "",
+      }));
       this.el.generationPlanList.replaceChildren(...rows.map((row) => {
         const item = document.createElement("div");
         item.className = "generation-plan-item";
@@ -672,7 +592,6 @@
         moderation: this.el.moderationSelect.value,
         batch_count: this.generationCount(),
         generation_strategy: this.el.generationStrategy.value || "sample",
-        series_anchor: this.activeWorkspace?.settings?.series_anchor || {},
         chat_model_id: this.el.chatModelSelect.value,
         translate_prompt: this.el.translatePrompt.checked,
         creative_direction_id: this.el.creativeDirectionSelect.value || "auto",

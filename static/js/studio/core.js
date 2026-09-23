@@ -91,21 +91,16 @@
     }
 
     normalizeStrategy(value) {
-      return ["sample", "explore", "series"].includes(value) ? value : "sample";
+      return ["sample", "explore"].includes(value) ? value : "sample";
     }
 
     get explorationAvailable() {
       return this.maxBatchImages >= 2;
     }
 
-    seriesAvailable({ anchorAvailable, img2imgAvailable } = {}) {
-      return Boolean(anchorAvailable && img2imgAvailable);
-    }
-
-    resolveStrategy(value, availability) {
+    resolveStrategy(value) {
       const strategy = this.normalizeStrategy(value);
       if (strategy === "explore" && !this.explorationAvailable) return "sample";
-      if (strategy === "series" && !this.seriesAvailable(availability)) return "sample";
       return strategy;
     }
 
@@ -185,8 +180,6 @@
       this.chatReferencePickerOpen = false;
       this.detailItemId = null;
       this.detailJobId = null;
-      this.detailReviewItemIds = new Set();
-      this.detailReviewSuggestion = "";
       this.pendingMaskEdit = null;
       this.maskEditorSource = null;
       this.maskEditorReturnDialog = null;
@@ -372,15 +365,6 @@
         detailList: byId("detailList"),
         detailPrompt: byId("detailPrompt"),
         detailReferences: byId("detailReferences"),
-        detailReview: byId("detailReview"),
-        detailReviewVerdict: byId("detailReviewVerdict"),
-        detailReviewProgress: byId("detailReviewProgress"),
-        detailReviewScores: byId("detailReviewScores"),
-        detailReviewChecks: byId("detailReviewChecks"),
-        detailReviewSuggestion: byId("detailReviewSuggestion"),
-        detailRunReview: byId("detailRunReview"),
-        detailApplyReview: byId("detailApplyReview"),
-        detailSeriesAnchor: byId("detailSeriesAnchor"),
         detailMaskEdit: byId("detailMaskEdit"),
         detailUiKit: byId("detailUiKit"),
         detailSlice: byId("detailSlice"),
@@ -647,9 +631,6 @@
       this.el.referenceList.addEventListener("click", (event) => this.handleReferenceClick(event));
       this.el.generationForm.addEventListener("submit", (event) => this.submitGeneration(event));
       this.el.detailUiKit.addEventListener("click", () => this.startUiKitReconstruction());
-      this.el.detailRunReview.addEventListener("click", () => this.runDetailReview());
-      this.el.detailApplyReview.addEventListener("click", () => this.applyDetailReview());
-      this.el.detailSeriesAnchor.addEventListener("click", () => this.setDetailAsSeriesAnchor());
       this.el.detailSlice.addEventListener("click", () => this.openSliceTool());
       this.el.detailBackgroundRemoval.addEventListener("click", () => this.openBackgroundRemovalTool());
       this.el.detailSaveLibrary.addEventListener("click", () => this.saveDetailToLibrary());

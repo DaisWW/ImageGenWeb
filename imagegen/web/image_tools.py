@@ -40,32 +40,6 @@ def reuse_generation_item(item_id: str):
     return jsonify(asset=workspace_dict(workspace, [asset])["assets"][0]), (201 if created else 200)
 
 
-@web.post("/api/generation-items/<item_id>/series-anchor")
-@login_required
-def set_generation_series_anchor(item_id: str):
-    item = accessible_item(item_id)
-    if not item.output_path:
-        raise ServiceError("生成结果不存在", status_code=404)
-    workspace = owned_workspace(item.job.workspace_id)
-    workflow = item.job.workflow if isinstance(item.job.workflow, dict) else {}
-    contract = workflow.get("series_contract")
-    if not isinstance(contract, dict) or not contract:
-        raise ServiceError(
-            "该结果没有可复用的系列制作契约，请先使用 AI 整理提示词", status_code=409
-        )
-    asset, _created = _generation_item_asset(item, workspace)
-    workspace = services().workspaces.set_series_anchor(
-        workspace,
-        asset_id=asset.id,
-        source_item_id=item.id,
-        contract=contract,
-    )
-    return jsonify(
-        asset=workspace_dict(workspace, [asset])["assets"][0],
-        workspace=workspace_dict(workspace),
-    ), 201
-
-
 def _generation_item_asset(item, workspace):
     extension = image_extension(item.output_mime_type)
     asset_name = f"result_{item.id}.{extension}"
@@ -91,18 +65,6 @@ def _generation_item_asset(item, workspace):
         ],
     )
     return assets[0], True
-
-
-@web.post("/api/generation-items/<item_id>/review")
-@login_required
-def review_generation_item(item_id: str):
-    item = accessible_item(item_id)
-    data = json_body()
-    review = services().conversations.review_generation_item(
-        item,
-        model_id=str(data.get("model_id", "")),
-    )
-    return jsonify(review=review)
 
 
 @web.get("/api/background-removal-models")

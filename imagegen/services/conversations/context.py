@@ -391,7 +391,6 @@ class ConversationContextManager:
                 "production_spec",
                 "canvas_request",
                 "hard_checks",
-                "series_contract",
                 "quality_hint",
             )
             if key in message.payload and (key != "canvas_request" or message.payload[key])
@@ -416,7 +415,6 @@ class ConversationContextManager:
             "brief",
             "production_spec",
             "hard_checks",
-            "series_contract",
             "retrieval_confidence",
             "gallery_categories",
             "style_tags",

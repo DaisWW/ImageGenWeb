@@ -248,17 +248,7 @@
       workspaceId = this.activeWorkspace?.id,
       selection = this.currentSelection(workspaceId),
     ) {
-      const workspace = this.workspaces?.find((item) => item.id === workspaceId)
-        || (this.activeWorkspace?.id === workspaceId ? this.activeWorkspace : null);
-      const ordered = this.orderedReferenceIds(workspaceId, selection);
-      const strategy = workspace?.id === this.activeWorkspace?.id
-        ? this.el?.generationStrategy?.value || workspace?.settings?.generation_strategy
-        : workspace?.settings?.generation_strategy;
-      const anchorId = strategy === "series"
-        ? String(workspace?.settings?.series_anchor?.asset_id || "").trim().toLowerCase()
-        : "";
-      if (!anchorId || !ordered.includes(anchorId)) return ordered;
-      return [anchorId, ...ordered.filter((id) => id !== anchorId)];
+      return this.orderedReferenceIds(workspaceId, selection);
     },
 
     currentChatSelection(workspaceId = this.activeWorkspace?.id) {

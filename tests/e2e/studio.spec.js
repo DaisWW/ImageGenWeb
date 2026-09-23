@@ -29,14 +29,6 @@ test("generation strategy policy owns availability and count limits", async ({
     return {
       sample: [policy.normalizeCount("sample", 0), policy.normalizeCount("sample", 99)],
       explore: [policy.normalizeCount("explore", 1), policy.normalizeCount("explore", 99)],
-      seriesUnavailable: policy.resolveStrategy("series", {
-        anchorAvailable: true,
-        img2imgAvailable: false,
-      }),
-      seriesAvailable: policy.resolveStrategy("series", {
-        anchorAvailable: true,
-        img2imgAvailable: true,
-      }),
       restrictedExplore: restricted.resolveStrategy("explore", {}),
       restrictedRange: restricted.countRange("explore"),
     };
@@ -45,8 +37,6 @@ test("generation strategy policy owns availability and count limits", async ({
   expect(result).toEqual({
     sample: [1, 20],
     explore: [2, 4],
-    seriesUnavailable: "sample",
-    seriesAvailable: "series",
     restrictedExplore: "sample",
     restrictedRange: { minimum: 1, maximum: 1 },
   });

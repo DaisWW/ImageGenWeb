@@ -82,7 +82,7 @@
         ? Math.max(...candidates.map((channel) => Number(channel.price_rmb || 0)))
         : 0;
       const strategy = this.el.generationStrategy?.value || "sample";
-      const suffix = strategy === "explore" ? "探索方案" : strategy === "series" ? "系列图片" : unit;
+      const suffix = strategy === "explore" ? "探索方案" : unit;
       this.el.priceEstimateLabel.textContent = `${count} ${suffix}预计总价`;
       this.el.priceEstimate.textContent = UI.money(price * count);
       this.channels.forEach((channel) => {
@@ -112,7 +112,6 @@
       }
       if (!this.validateSizeInput(true)) return;
       const selection = this.currentSelection(workspace.id);
-      this.ensureSeriesAnchorSelection(selection);
       const omitted = this.trimReferenceSelection(selection, this.generationReferenceLimit());
       if (omitted) {
         this.renderReferences();
@@ -132,21 +131,10 @@
       const reviewedDraft = this.currentPromptDraft();
       const settings = {
         ...this.collectSettings(),
-        series_anchor: { ...(workspace.settings?.series_anchor || {}) },
         reference_ids: [...referenceIds],
       };
-      if (["explore", "series"].includes(settings.generation_strategy) && !reviewedDraft) {
-        UI.toast(
-          settings.generation_strategy === "series"
-            ? "系列延续需要先使用 AI 整理当前需求"
-            : "探索方案需要先使用 AI 整理最终提示词",
-          "error",
-        );
-        return;
-      }
-      if (settings.generation_strategy === "series"
-        && !workspace.settings?.series_anchor?.asset_id) {
-        UI.toast("请先选择一张生成结果作为系列基准", "error");
+      if (settings.generation_strategy === "explore" && !reviewedDraft) {
+        UI.toast("探索方案需要先使用 AI 整理最终提示词", "error");
         return;
       }
       this.updatePromptReviewState();

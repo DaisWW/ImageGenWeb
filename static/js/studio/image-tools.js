@@ -29,29 +29,6 @@ const BACKGROUND_REMOVAL_ADAPTER_LABEL = {
 };
 
   Object.assign(StudioApp.prototype, {
-    refreshDetailSeriesAnchorState(job = null, item = null) {
-      job = job || (this.jobs || []).find((entry) => entry.id === this.detailJobId);
-      item = item || job?.items.find((entry) => entry.id === this.detailItemId);
-      const hasSeriesContract = Boolean(
-        job?.workflow?.series_contract && Object.keys(job.workflow.series_contract).length,
-      );
-      const isCurrentAnchor = Boolean(
-        item && this.activeWorkspace?.settings?.series_anchor?.source_item_id === item.id,
-      );
-      setDisabled(
-        this.el.detailSeriesAnchor,
-        this.detailReferenceBusy || !hasSeriesContract || isCurrentAnchor,
-      );
-      this.el.detailSeriesAnchor.innerHTML = isCurrentAnchor
-        ? '<i data-lucide="layers-3"></i>当前系列基准'
-        : '<i data-lucide="layers-3"></i>设为系列基准';
-      this.el.detailSeriesAnchor.title = isCurrentAnchor
-        ? "当前图已是系列固定参考；后续生成会优先保持主体、风格和构图一致。"
-        : !hasSeriesContract
-          ? "需先用 AI 整理提示词生成系列契约；之后可将此图设为系列固定参考。"
-          : "将当前图设为系列固定参考；后续只改变新需求允许的内容，并保持主体、风格和构图一致。";
-      UI.icons(this.el.detailSeriesAnchor);
-    },
 
     showDetail(job, item) {
       this.detailItemId = item.id;
@@ -91,7 +68,7 @@ const BACKGROUND_REMOVAL_ADAPTER_LABEL = {
           job.workflow?.template_label,
           job.workflow?.generation_strategy === "explore"
             ? (job.workflow?.variant_plan?.[item.position]?.label || `探索方案 ${item.position + 1}`)
-            : job.workflow?.generation_strategy === "series" ? "系列延续" : "同提示词抽样",
+            : "同提示词抽样",
           stageLabel,
         ].filter(Boolean).join(" · ")],
         ["实际图片", `${item.width || "-"} × ${item.height || "-"} · ${UI.formatBytes(item.bytes)}`],
@@ -124,7 +101,6 @@ const BACKGROUND_REMOVAL_ADAPTER_LABEL = {
         });
         this.el.detailReferences.append(label, list);
       }
-      this.renderDetailReview(item.review || {});
       this.el.detailDownload.href = item.download_url;
       setDisabled(
         this.el.detailMaskEdit,
@@ -133,7 +109,6 @@ const BACKGROUND_REMOVAL_ADAPTER_LABEL = {
       this.el.detailMaskEdit.title = this.el.detailMaskEdit.disabled
         ? "暂无已启用局部重绘蒙版能力的生图渠道"
         : "框选需要修改的区域，系统会自动生成蒙版并将当前图设为唯一垫图。";
-      this.refreshDetailSeriesAnchorState(job, item);
       UI.openDialog(this.el.imageDialog);
     },
 
@@ -762,124 +737,6 @@ const BACKGROUND_REMOVAL_ADAPTER_LABEL = {
       });
     },
 
-    detailReviewInProgress(itemId = this.detailItemId) {
-      return Boolean(itemId && this.detailReviewItemIds?.has(itemId));
-    },
-
-    renderDetailReview(review) {
-      const verdict = review?.verdict || "";
-      const hasReview = ["pass", "revise"].includes(verdict);
-      const reviewBusy = this.detailReviewInProgress();
-      this.detailReviewSuggestion = review?.suggested_edit || "";
-      setHidden(this.el.detailReview, !hasReview && !reviewBusy);
-      this.el.detailReview.classList.toggle("is-reviewing", reviewBusy);
-      this.el.detailReview.classList.toggle("is-pass", !reviewBusy && verdict === "pass");
-      this.el.detailReview.classList.toggle("is-revise", !reviewBusy && verdict === "revise");
-      this.el.detailReview.setAttribute("aria-busy", String(reviewBusy));
-      setText(
-        this.el.detailReviewVerdict,
-        reviewBusy
-          ? (hasReview ? "正在重新验收" : "正在验收")
-          : verdict === "pass" ? "通过" : "需要精修",
-      );
-      setHidden(this.el.detailReviewProgress, !reviewBusy);
-      const scores = review?.scores || {};
-      this.el.detailReviewScores.innerHTML = hasReview
-        ? [
-          ["构图", scores.composition],
-          ["画质", scores.visual_quality],
-          ["可用", scores.usability],
-        ].map(([label, value]) => (
-          `<span>${label}<strong>${Number(value || 0).toFixed(1)}</strong></span>`
-        )).join("")
-        : "";
-      const checks = [...(review?.hard_checks || [])];
-      (review?.findings || []).forEach((finding, index) => {
-        checks.push({ id: `finding_${index}`, label: finding, passed: false, evidence: "" });
-      });
-      this.el.detailReviewChecks.replaceChildren(...checks.map((check) => {
-        const item = document.createElement("li");
-        item.classList.toggle("passed", check.passed === true);
-        item.textContent = check.evidence ? `${check.label}：${check.evidence}` : check.label;
-        return item;
-      }));
-      setHidden(this.el.detailReviewSuggestion, !this.detailReviewSuggestion);
-      setText(this.el.detailReviewSuggestion, this.detailReviewSuggestion);
-      setHidden(this.el.detailApplyReview, !this.detailReviewSuggestion);
-      setDisabled(
-        this.el.detailApplyReview,
-        !this.detailReviewSuggestion || reviewBusy || this.detailReferenceBusy,
-      );
-      setDisabled(this.el.detailRunReview, reviewBusy);
-      this.el.detailRunReview.innerHTML = reviewBusy
-        ? '<i data-lucide="loader-circle"></i>正在验收'
-        : hasReview
-          ? '<i data-lucide="refresh-cw"></i>重新验收'
-          : '<i data-lucide="scan-search"></i>AI 验收';
-      UI.icons(this.el.detailRunReview);
-    },
-
-    async runDetailReview() {
-      const job = this.jobs.find((entry) => entry.id === this.detailJobId);
-      const item = job?.items.find((entry) => entry.id === this.detailItemId);
-      const modelId = this.el.chatModelSelect.value;
-      if (!item || !modelId || this.detailReviewInProgress(item.id)) return;
-      const itemId = item.id;
-      this.detailReviewItemIds.add(itemId);
-      this.renderDetailReview(item.review || {});
-      try {
-        const data = await UI.api(`/api/generation-items/${itemId}/review`, {
-          method: "POST",
-          body: { model_id: modelId },
-        });
-        item.review = data.review;
-        if (this.detailItemId === itemId) this.renderDetailReview(data.review);
-        UI.toast(data.review.verdict === "pass" ? "AI 验收通过" : "AI 已给出精修建议", "success");
-      } catch (error) {
-        UI.toast(error.message, "error");
-      } finally {
-        this.detailReviewItemIds.delete(itemId);
-        if (this.detailItemId === itemId) this.renderDetailReview(item.review || {});
-      }
-    },
-
-    async applyDetailReview() {
-      if (!this.detailReviewSuggestion || this.detailReviewInProgress()) return;
-      await this.useDetailAsReference({
-        prompt: this.detailReviewSuggestion,
-        imageToast: "已载入验收建议，可以继续精修",
-      });
-    },
-
-    async setDetailAsSeriesAnchor() {
-      if (!this.detailItemId || !this.activeWorkspace || this.detailReferenceBusy) return;
-      const workspace = this.activeWorkspace;
-      this.detailReferenceBusy = true;
-      this.refreshDetailSeriesAnchorState();
-      try {
-        const data = await UI.api(`/api/generation-items/${this.detailItemId}/series-anchor`, {
-          method: "POST",
-        });
-        const target = this.workspaces.find((item) => item.id === workspace.id);
-        if (target && data.workspace) Object.assign(target, data.workspace);
-        if (this.activeWorkspace?.id === workspace.id && data.workspace) {
-          Object.assign(this.activeWorkspace, data.workspace);
-          this.setGenerationStrategy("series", false);
-        }
-        await this.applyReferenceAsset(data.asset, {
-          workspace: this.activeWorkspace,
-          dialog: this.el.imageDialog,
-          prompt: "请描述这个系列下一张图片需要改变的内容：",
-          imageToast: "已设为系列基准，可以继续创作",
-        });
-      } catch (error) {
-        UI.toast(error.message, "error");
-      } finally {
-        this.detailReferenceBusy = false;
-        this.refreshDetailSeriesAnchorState();
-      }
-    },
-
     async useDetailAsReference({ prepare, prompt, imageToast } = {}) {
       if (!this.detailItemId || !this.activeWorkspace || this.detailReferenceBusy) return;
       const itemId = this.detailItemId;
@@ -888,8 +745,6 @@ const BACKGROUND_REMOVAL_ADAPTER_LABEL = {
       setDisabled(this.el.detailReuse, true);
       setDisabled(this.el.detailUiKit, true);
       setDisabled(this.el.detailMaskEdit, true);
-      this.refreshDetailSeriesAnchorState();
-      setDisabled(this.el.detailApplyReview, true);
       try {
         const data = await UI.api(`/api/generation-items/${itemId}/reference`, {
           method: "POST",
@@ -908,8 +763,6 @@ const BACKGROUND_REMOVAL_ADAPTER_LABEL = {
         setDisabled(this.el.detailReuse, false);
         setDisabled(this.el.detailUiKit, false);
         setDisabled(this.el.detailMaskEdit, !this.maskCapableChannels?.().length);
-        this.refreshDetailSeriesAnchorState();
-        setDisabled(this.el.detailApplyReview, !this.detailReviewSuggestion);
       }
     },
 

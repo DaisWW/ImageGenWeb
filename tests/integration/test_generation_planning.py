@@ -17,17 +17,6 @@ class TestGenerationPlanning(unittest.TestCase):
                 {"label": "环境叙事", "delta": ["增加前中后景层次"]},
             ],
         }
-        self.anchor = {
-            "asset_id": "a" * 32,
-            "source_item_id": "b" * 32,
-            "contract": {
-                "identity_anchors": ["同一主体"],
-                "visual_language": ["电影感"],
-                "palette_materials": ["冷蓝金属"],
-                "must_preserve": ["主体轮廓"],
-                "allowed_changes": ["动作和场景"],
-            },
-        }
 
     def test_sample_repeats_the_base_prompt(self):
         plan = GenerationPlan.build(
@@ -35,12 +24,21 @@ class TestGenerationPlanning(unittest.TestCase):
             prompt="一张产品海报",
             count=3,
             draft=None,
-            series_anchor=None,
             max_prompt_characters=8000,
         )
 
         self.assertEqual(plan.prompts, ("一张产品海报",) * 3)
         self.assertEqual(plan.metadata, {"generation_strategy": "sample"})
+
+    def test_retired_series_strategy_is_rejected(self):
+        with self.assertRaisesRegex(ServiceError, "生成方式无效"):
+            GenerationPlan.build(
+                strategy="series",
+                prompt="一张产品海报",
+                count=1,
+                draft=None,
+                max_prompt_characters=8000,
+            )
 
     def test_explore_creates_one_prompt_per_controlled_variant(self):
         plan = GenerationPlan.build(
@@ -48,7 +46,6 @@ class TestGenerationPlanning(unittest.TestCase):
             prompt="一张产品海报",
             count=3,
             draft=self.draft,
-            series_anchor=None,
             max_prompt_characters=8000,
         )
 
@@ -80,7 +77,6 @@ class TestGenerationPlanning(unittest.TestCase):
             prompt="一张产品海报",
             count=2,
             draft=draft,
-            series_anchor=None,
             max_prompt_characters=8000,
         )
 
@@ -96,7 +92,6 @@ class TestGenerationPlanning(unittest.TestCase):
                 prompt="一张产品海报",
                 count=3,
                 draft=draft,
-                series_anchor=None,
                 max_prompt_characters=8000,
             )
 
@@ -108,7 +103,6 @@ class TestGenerationPlanning(unittest.TestCase):
                     prompt="产品",
                     count=count,
                     draft=self.draft,
-                    series_anchor=None,
                     max_prompt_characters=8000,
                 )
         with self.assertRaisesRegex(ServiceError, "AI 整理"):
@@ -117,22 +111,5 @@ class TestGenerationPlanning(unittest.TestCase):
                 prompt="产品",
                 count=2,
                 draft=None,
-                series_anchor=None,
                 max_prompt_characters=8000,
             )
-
-    def test_series_repeats_the_series_contract_for_each_image(self):
-        plan = GenerationPlan.build(
-            strategy="series",
-            prompt="系列第二张海报",
-            count=2,
-            draft=self.draft,
-            series_anchor=self.anchor,
-            max_prompt_characters=8000,
-        )
-
-        self.assertEqual(len(plan.prompts), 2)
-        self.assertEqual(plan.prompts[0], plan.prompts[1])
-        self.assertIn("系列一致性契约", plan.prompts[0])
-        self.assertEqual(plan.metadata["series_anchor"]["asset_id"], "a" * 32)
-        self.assertEqual(plan.metadata["series_contract"], self.anchor["contract"])

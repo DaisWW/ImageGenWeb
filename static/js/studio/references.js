@@ -454,11 +454,6 @@
         workspace.assets = workspace.assets.filter((asset) => asset.id !== id);
         this.referenceSelections.get(workspace.id)?.delete(id);
         this.chatReferenceSelections.get(workspace.id)?.delete(id);
-        if (workspace.settings?.series_anchor?.asset_id === id) {
-          workspace.settings.generation_strategy = "sample";
-          workspace.settings.series_anchor = {};
-          if (this.activeWorkspace?.id === workspace.id) this.setGenerationStrategy("sample", false);
-        }
         if (this.activeWorkspace?.id === workspace.id) {
           this.renderReferences();
           this.renderChatReferences();

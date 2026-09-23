@@ -78,10 +78,6 @@ class PromptDraftWorkflow(ConversationSupport):
             reference_ids=reference_ids,
             creative_direction_id=creative_direction_id,
         )
-        series_anchor = self._active_series_anchor(workspace)
-        if series_anchor:
-            attachments = self._with_series_anchor(workspace, attachments, series_anchor)
-            effective_mode = "img2img"
         pending = self._user_model_message(
             "请基于以上会话整理当前已确认的最终生图需求。", attachments
         )
@@ -107,7 +103,6 @@ class PromptDraftWorkflow(ConversationSupport):
             retrieved_cases=retrieval.cases,
             retrieval_confidence=retrieval.confidence,
             retrieval_reason=retrieval.reason,
-            active_series_contract=series_anchor.anchor.contract if series_anchor else {},
         )
         system_prompt = review.system_prompt()
         requested_model = model

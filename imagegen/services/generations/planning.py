@@ -5,9 +5,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from ...errors import ServiceError
-from ..series import SeriesAnchor
 
-GENERATION_STRATEGIES = {"sample", "explore", "series"}
+GENERATION_STRATEGIES = {"sample", "explore"}
 MAX_EXPLORATION_IMAGES = 4
 
 
@@ -25,7 +24,6 @@ class GenerationPlan:
         prompt: str,
         count: int,
         draft: dict[str, Any] | None,
-        series_anchor: SeriesAnchor | dict[str, Any] | None,
         max_prompt_characters: int,
     ) -> GenerationPlan:
         normalized = normalize_generation_strategy(strategy)
@@ -52,28 +50,6 @@ class GenerationPlan:
                 for variant in variants
             )
             metadata["variant_plan"] = variants
-        else:
-            if draft is None:
-                raise ServiceError(
-                    "系列延续必须使用 AI 整理后的最终提示词",
-                    code="prompt_review_required",
-                    status_code=409,
-                )
-            anchor = SeriesAnchor.require(
-                series_anchor,
-                invalid_message="系列基准已失效，请重新选择",
-                invalid_code="invalid_request",
-            )
-            prompts = tuple(
-                _append_contract(
-                    base_prompt,
-                    _series_contract(anchor, language=str(draft.get("language", "zh"))),
-                    max_prompt_characters,
-                )
-                for _ in range(count)
-            )
-            metadata["series_anchor"] = anchor.metadata()
-            metadata["series_contract"] = anchor.contract
         return cls(strategy=normalized, prompts=prompts, metadata=metadata)
 
 
@@ -124,24 +100,6 @@ def _exploration_contract(variant: dict[str, object], *, language: str) -> str:
         f"{payload}\n"
         "其余基础提示词、主体身份、产品外形、精确文字、参考图职责、画幅、模板和硬门槛"
         "必须保持一致；禁止引入未声明的变化。"
-    )
-
-
-def _series_contract(anchor: SeriesAnchor, *, language: str) -> str:
-    payload = json.dumps(anchor.contract, ensure_ascii=False, indent=2)
-    if language == "en":
-        return (
-            "Series continuity contract (must be repeated in this image):\n"
-            f"{payload}\n"
-            "Treat the selected reference image as the series anchor. Change only what the current "
-            "request and allowed_changes explicitly permit; preserve all identity, visual-language, "
-            "palette, material, composition, typography, and must_preserve rules."
-        )
-    return (
-        "系列一致性契约（本张图片必须继续执行）：\n"
-        f"{payload}\n"
-        "所选参考图是系列基准。只改变当前需求和 allowed_changes 明确允许的内容；身份、视觉语言、"
-        "色板、材质、构图、排版和 must_preserve 必须延续。"
     )
 
 

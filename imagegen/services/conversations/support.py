@@ -31,7 +31,6 @@ from ..prompt_drafts import (
     PromptDraftStreamPreview,
 )
 from ..runtime_logs import RuntimeLogService
-from ..series import ResolvedSeriesAnchor
 from ..settings import SystemSettingsService
 from .context import ConversationContextManager
 from .operations import ConversationOperation
@@ -506,18 +505,6 @@ class ConversationSupport:
             confidence=route.confidence,
             reason=route.reason,
         )
-
-    @staticmethod
-    def _active_series_anchor(workspace: Workspace) -> ResolvedSeriesAnchor | None:
-        return ResolvedSeriesAnchor.active(workspace)
-
-    def _with_series_anchor(
-        self,
-        workspace: Workspace,
-        assets: list[Asset],
-        series_anchor: ResolvedSeriesAnchor,
-    ) -> list[Asset]:
-        return self._merge_context_assets(workspace, series_anchor.order_assets(assets))
 
     @staticmethod
     def _draft_references(draft: dict[str, Any], candidates: list[Asset]) -> list[Asset]:

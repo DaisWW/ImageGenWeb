@@ -345,43 +345,6 @@ test("image library numbering includes selected local references", {
   await expect(page.locator("#referenceList .reference-order")).toHaveText(["1", "2"]);
 });
 
-test("image library preserves series anchor order after reselecting it", async ({ studioPage: page }) => {
-  const result = await page.evaluate(() => {
-    const workspace = {
-      id: "series-library-order",
-      settings: { generation_strategy: "series", series_anchor: { asset_id: "a".repeat(32) } },
-      assets: [
-        { id: "a".repeat(32), library_image_id: "library-anchor" },
-        { id: "b".repeat(32), library_image_id: "library-second" },
-        { id: "c".repeat(32), name: "local.png" },
-      ],
-    };
-    const app = Object.assign(Object.create(window.ImageGenStudio.StudioApp.prototype), {
-      activeWorkspace: workspace,
-      workspaces: [workspace],
-      channels: [],
-      el: { generationStrategy: { value: "series" } },
-      libraryTarget: "generation",
-      libraryImages: [{ id: "library-anchor" }, { id: "library-second" }],
-      librarySelection: new Set(),
-      referenceSelections: new Map([[workspace.id, new Set([
-        "b".repeat(32), "c".repeat(32), "a".repeat(32),
-      ])]]),
-    });
-    app.syncLibrarySelection();
-    return {
-      referenceIds: app.libraryReferenceIds(),
-      order: [...app.librarySelectionOrder()],
-      changed: app.librarySelectionChanged(),
-    };
-  });
-  expect(result).toEqual({
-    referenceIds: ["a".repeat(32), "b".repeat(32), "c".repeat(32)],
-    order: [["library-anchor", 1], ["library-second", 2]],
-    changed: false,
-  });
-});
-
 test("many padding images stay inside the generation drawer", {
   tag: "@responsive",
 }, async ({ studioPage: page }) => {

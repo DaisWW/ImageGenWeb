@@ -104,7 +104,6 @@ class GenerationWorkflow:
             "hard_checks": draft.get("hard_checks", []) if draft else [],
             "sources": draft.get("sources", []) if draft else [],
             "exploration_plan": draft.get("exploration_plan", []) if draft else [],
-            "series_contract": draft.get("series_contract", {}) if draft else {},
         }
         if plan_metadata:
             metadata.update(plan_metadata)
@@ -148,8 +147,6 @@ def sanitize_workflow(value: object) -> dict[str, object]:
         "sources",
         "generation_strategy",
         "variant_plan",
-        "series_anchor",
-        "series_contract",
         "exploration_plan",
         "canvas_request",
         "canvas_resolution",
@@ -204,9 +201,7 @@ def sanitize_workflow(value: object) -> dict[str, object]:
     )
     result["retrieval_reason"] = str(result.get("retrieval_reason", ""))[:300]
     strategy = str(result.get("generation_strategy", "sample")).strip().lower()
-    result["generation_strategy"] = (
-        strategy if strategy in {"sample", "explore", "series"} else "sample"
-    )
+    result["generation_strategy"] = strategy if strategy in {"sample", "explore"} else "sample"
     variants = result.get("variant_plan")
     result["variant_plan"] = (
         [
@@ -220,8 +215,6 @@ def sanitize_workflow(value: object) -> dict[str, object]:
         if isinstance(variants, list)
         else []
     )
-    result["series_anchor"] = _sanitize_workflow_mapping(result.get("series_anchor"))
-    result["series_contract"] = _sanitize_workflow_mapping(result.get("series_contract"))
     exploration = result.get("exploration_plan")
     result["exploration_plan"] = (
         [

@@ -15,7 +15,6 @@ from ..services import GenerationMaskInput, GenerationWorkflow, SubmitGeneration
 from ..services.common import canvas_request_conflicts
 from ..services.generations.contracts import CANVAS_RESOLUTIONS
 from ..services.generations.planning import GenerationPlan, normalize_generation_strategy
-from ..services.series import ResolvedSeriesAnchor
 from . import web
 from .shared import (
     accessible_item,
@@ -119,13 +118,6 @@ def submit_generation():
             code="mask_strategy_invalid",
             status_code=422,
         )
-    series_anchor = None
-    if strategy == "series":
-        series_anchor = ResolvedSeriesAnchor.for_workspace(
-            workspace,
-            (workspace.settings or {}).get("series_anchor"),
-        )
-        ordered_reference_ids = series_anchor.anchor.order_reference_ids(ordered_reference_ids)
     mode = "img2img" if ordered_reference_ids else "text2img"
     draft_id = str(data.get("prompt_draft_id", "")).strip()
     draft = None
@@ -159,7 +151,6 @@ def submit_generation():
         prompt=prompt,
         count=batch_count,
         draft=draft,
-        series_anchor=series_anchor.anchor if series_anchor else None,
         max_prompt_characters=runtime.max_prompt_characters,
     )
     workflow = GenerationWorkflow.build(

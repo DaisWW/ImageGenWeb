@@ -6,7 +6,6 @@ from ..errors import ServiceError
 from ..validation import as_bool
 from .common import normalize_image_size
 from .creative.gallery import GALLERY_ATLAS
-from .series import SeriesAnchor
 from .settings import RuntimeSettings
 
 ALLOWED_WORKSPACE_SETTING_KEYS = {
@@ -29,7 +28,6 @@ ALLOWED_WORKSPACE_SETTING_KEYS = {
     "moderation",
     "batch_count",
     "generation_strategy",
-    "series_anchor",
 }
 
 
@@ -53,7 +51,6 @@ def default_workspace_settings() -> dict[str, Any]:
         "moderation": "auto",
         "batch_count": 1,
         "generation_strategy": "sample",
-        "series_anchor": {},
     }
 
 
@@ -87,10 +84,8 @@ def sanitize_workspace_settings(
     if settings["generation_stage"] not in {"draft", "refine", "final"}:
         settings["generation_stage"] = "final"
     settings["generation_strategy"] = str(settings["generation_strategy"]).lower()
-    if settings["generation_strategy"] not in {"sample", "explore", "series"}:
+    if settings["generation_strategy"] not in {"sample", "explore"}:
         settings["generation_strategy"] = "sample"
-    series_anchor = SeriesAnchor.parse(settings.get("series_anchor"))
-    settings["series_anchor"] = series_anchor.as_dict() if series_anchor else {}
     if "reference_ids" in raw:
         if not isinstance(settings["reference_ids"], list):
             raise ServiceError("垫图选择参数无效")

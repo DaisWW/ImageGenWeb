@@ -15,55 +15,9 @@ test("image detail actions explain their purpose", async ({ studioPage: page }) 
     detailSlice: "识别规则排列的图集网格；确认行列和切片后，可下载或存入图库。",
     detailBackgroundRemoval: "使用一个或多个模型生成透明背景候选并比较结果。",
     detailSaveLibrary: "将当前生成图保存到工作站图库，便于以后作为参考图复用。",
-    detailRunReview: "让 AI 按提示词和硬门槛检查当前图片，并给出单点修正建议。",
-    detailApplyReview: "把当前图作为参考并载入验收建议，继续生成精修版本。",
-    detailSeriesAnchor: "将当前图设为系列固定参考；后续只改变新需求允许的内容，并保持主体、风格和构图一致。",
     detailMaskEdit: "框选需要修改的区域，系统会自动生成蒙版并将当前图设为唯一垫图。",
     detailReuse: "将当前图加入参考图，并回到创作区描述需要改变的内容。",
     detailDownload: "下载当前生成结果的原始文件。",
-  });
-
-  const seriesStates = await page.evaluate(() => {
-    const refresh = window.ImageGenStudio.StudioApp.prototype.refreshDetailSeriesAnchorState;
-    const resolve = ({ contract = {}, current = false }) => {
-      const button = document.createElement("button");
-      const item = { id: "detail-item" };
-      const job = { id: "detail-job", items: [item], workflow: { series_contract: contract } };
-      refresh.call({
-        activeWorkspace: {
-          settings: { series_anchor: current ? { source_item_id: item.id } : null },
-        },
-        detailItemId: item.id,
-        detailJobId: job.id,
-        detailReferenceBusy: false,
-        jobs: [job],
-        el: { detailSeriesAnchor: button },
-      }, job, item);
-      return { disabled: button.disabled, text: button.textContent, title: button.title };
-    };
-    return {
-      unavailable: resolve({}),
-      available: resolve({ contract: { visual_language: ["一致"] } }),
-      current: resolve({ contract: { visual_language: ["一致"] }, current: true }),
-    };
-  });
-
-  expect(seriesStates).toEqual({
-    unavailable: {
-      disabled: true,
-      text: "设为系列基准",
-      title: "需先用 AI 整理提示词生成系列契约；之后可将此图设为系列固定参考。",
-    },
-    available: {
-      disabled: false,
-      text: "设为系列基准",
-      title: "将当前图设为系列固定参考；后续只改变新需求允许的内容，并保持主体、风格和构图一致。",
-    },
-    current: {
-      disabled: true,
-      text: "当前系列基准",
-      title: "当前图已是系列固定参考；后续生成会优先保持主体、风格和构图一致。",
-    },
   });
 });
 
@@ -131,7 +85,6 @@ test("background removal compares parallel model results and selects the best", 
       image_url: sourceUrl,
       thumbnail_url: sourceUrl,
       download_url: sourceUrl,
-      review: {},
     }],
   };
   const models = [
@@ -371,45 +324,33 @@ test("detail reference actions share one request without enabling unavailable ac
     const detailReuse = document.createElement("button");
     const detailUiKit = document.createElement("button");
     const detailMaskEdit = document.createElement("button");
-    const detailSeriesAnchor = document.createElement("button");
-    const detailApplyReview = document.createElement("button");
     const target = {
       detailItemId: "detail-item",
       detailJobId: "detail-job",
       activeWorkspace: { id: "workspace" },
       jobs: [],
       detailReferenceBusy: false,
-      detailReviewSuggestion: "只改变一个问题",
       el: {
         detailReuse,
         detailUiKit,
         detailMaskEdit,
-        detailSeriesAnchor,
-        detailApplyReview,
         imageDialog: document.createElement("dialog"),
       },
       applyReferenceAsset: async () => {},
-      refreshDetailSeriesAnchorState() {
-        window.ImageGenStudio.StudioApp.prototype.refreshDetailSeriesAnchorState.call(this);
-      },
     };
     try {
       const first = window.ImageGenStudio.StudioApp.prototype.useDetailAsReference.call(target);
       const second = window.ImageGenStudio.StudioApp.prototype.useDetailAsReference.call(target);
       const disabledDuringRequest = detailReuse.disabled
         && detailUiKit.disabled
-        && detailMaskEdit.disabled
-        && detailSeriesAnchor.disabled
-        && detailApplyReview.disabled;
+        && detailMaskEdit.disabled;
       release();
       await Promise.all([first, second]);
       return {
         calls,
         disabledDuringRequest,
         eligibleActionsDisabledAfterRequest: detailReuse.disabled
-          || detailUiKit.disabled
-          || detailApplyReview.disabled,
-        seriesAnchorDisabledAfterRequest: detailSeriesAnchor.disabled,
+          || detailUiKit.disabled,
         maskEditDisabledAfterRequest: detailMaskEdit.disabled,
       };
     } finally {
@@ -421,7 +362,6 @@ test("detail reference actions share one request without enabling unavailable ac
     calls: 1,
     disabledDuringRequest: true,
     eligibleActionsDisabledAfterRequest: false,
-    seriesAnchorDisabledAfterRequest: true,
     maskEditDisabledAfterRequest: true,
   });
 });
@@ -524,7 +464,6 @@ test("local repaint creates a PNG mask and submits only its source image", {
       image_url: sourceUrl,
       thumbnail_url: sourceUrl,
       download_url: sourceUrl,
-      review: {},
     }],
   };
   let submitted = null;
@@ -714,7 +653,6 @@ test("image detail keeps its reference through multi-turn refinement", {
       image_url: imageUrl,
       thumbnail_url: imageUrl,
       download_url: imageUrl,
-      review: {},
     }],
   };
 
@@ -735,63 +673,6 @@ test("image detail keeps its reference through multi-turn refinement", {
     status: 201,
     json: { asset: referenceAsset },
   }));
-  let reviewRequest = null;
-  let markReviewStarted;
-  const reviewStarted = new Promise((resolve) => {
-    markReviewStarted = resolve;
-  });
-  let releaseReview;
-  const reviewCanFinish = new Promise((resolve) => {
-    releaseReview = resolve;
-  });
-  let markReviewRetryStarted;
-  const reviewRetryStarted = new Promise((resolve) => {
-    markReviewRetryStarted = resolve;
-  });
-  let releaseReviewRetry;
-  const reviewRetryCanFinish = new Promise((resolve) => {
-    releaseReviewRetry = resolve;
-  });
-  let reviewAttempts = 0;
-  await page.route(`**/api/generation-items/${itemId}/review`, async (route) => {
-    reviewAttempts += 1;
-    reviewRequest = route.request().postDataJSON();
-    if (reviewAttempts > 1) {
-      markReviewRetryStarted();
-      await reviewRetryCanFinish;
-      await route.fulfill({
-        status: 503,
-        json: { error: "E2E 验收服务暂时不可用", code: "review_unavailable" },
-      });
-      return;
-    }
-    markReviewStarted();
-    await reviewCanFinish;
-    await route.fulfill({
-      json: {
-        review: {
-          verdict: "revise",
-          hard_checks: [
-            {
-              id: "instruction_following",
-              label: "整体指令遵循",
-              passed: true,
-              evidence: "主体与构图符合要求",
-            },
-            {
-              id: "criterion_1",
-              label: "画面中不得出现文字",
-              passed: false,
-              evidence: "鞋盒右下角存在多余文字",
-            },
-          ],
-          scores: { composition: 4.2, visual_quality: 3.8, usability: 2.5 },
-          findings: Array(18).fill("这里是一段用于验证长验收内容滚动布局的说明。"),
-          suggested_edit: "只改变鞋盒右下角，移除多余文字；必须保持运动鞋和构图不变。",
-        },
-      },
-    });
-  });
   let chatRound = 0;
   const sentAttachmentIds = [];
   const sentGenerationReferenceIds = [];
@@ -891,31 +772,6 @@ test("image detail keeps its reference through multi-turn refinement", {
   await expect(page.locator("#imageViewerZoomLabel")).toHaveText("200%");
   await page.locator('#imageViewerDialog [data-close-dialog="imageViewerDialog"]').click();
   await expect(page.locator("#imageDialog")).toBeVisible();
-  await page.locator("#detailRunReview").click();
-  await reviewStarted;
-  await expect(page.locator("#detailReview")).toBeVisible();
-  await expect(page.locator("#detailReview")).toHaveAttribute("aria-busy", "true");
-  await expect(page.locator("#detailReviewVerdict")).toHaveText("正在验收");
-  await expect(page.locator("#detailReviewProgress")).toBeVisible();
-  await expect(page.locator("#detailRunReview")).toBeDisabled();
-  await expect(page.locator("#detailRunReview")).toContainText("正在验收");
-  expect(reviewRequest).toEqual({ model_id: "e2e-chat" });
-
-  await page.locator('#imageDialog [data-close-dialog="imageDialog"]').click();
-  await expect(page.locator("#imageDialog")).toBeHidden();
-  await page.locator(`[data-item-id="${itemId}"]`).click();
-  await expect(page.locator("#detailReview")).toBeVisible();
-  await expect(page.locator("#detailReviewVerdict")).toHaveText("正在验收");
-  await expect(page.locator("#detailReviewProgress")).toBeVisible();
-  await expect(page.locator("#detailRunReview")).toBeDisabled();
-
-  releaseReview();
-  await expect(page.locator("#detailReviewVerdict")).toHaveText("需要精修");
-  await expect(page.locator("#detailReview")).toHaveAttribute("aria-busy", "false");
-  await expect(page.locator("#detailReviewProgress")).toBeHidden();
-  await expect(page.locator("#detailRunReview")).toBeEnabled();
-  await expect(page.locator("#detailReviewScores")).toContainText("4.2");
-  await expect(page.locator("#detailReviewChecks")).toContainText("鞋盒右下角存在多余文字");
 
   if (page.viewportSize().width > 920) {
     const layoutState = await page.evaluate(() => {
@@ -934,7 +790,6 @@ test("image detail keeps its reference through multi-turn refinement", {
       const downloadBox = download.getBoundingClientRect();
       return {
         dialogFitsViewport: dialogBox.height <= window.innerHeight * 0.9,
-        bodyScrolls: scroller.scrollHeight > scroller.clientHeight,
         bodyOverflow: getComputedStyle(scroller).overflowY,
         infoOverflow: getComputedStyle(info).overflowY,
         layoutOverflow: getComputedStyle(layout).overflowY,
@@ -946,7 +801,6 @@ test("image detail keeps its reference through multi-turn refinement", {
     });
     expect(layoutState).toEqual({
       dialogFitsViewport: true,
-      bodyScrolls: true,
       bodyOverflow: "auto",
       infoOverflow: "hidden",
       layoutOverflow: "hidden",
@@ -956,24 +810,7 @@ test("image detail keeps its reference through multi-turn refinement", {
     });
   }
 
-  await page.locator("#detailRunReview").click();
-  await reviewRetryStarted;
-  await expect(page.locator("#detailReviewVerdict")).toHaveText("正在重新验收");
-  await expect(page.locator("#detailReviewProgress")).toBeVisible();
-  await page.locator("#detailRunReview").dispatchEvent("click");
-  expect(reviewAttempts).toBe(2);
-  releaseReviewRetry();
-  await expect(page.locator("#detailReviewVerdict")).toHaveText("需要精修");
-  await expect(page.locator("#detailReviewProgress")).toBeHidden();
-  await expect(page.locator("#detailRunReview")).toBeEnabled();
-
-  await page.locator("#detailApplyReview").click();
-  await expect(page.locator("#imageDialog")).toBeHidden();
-  await expect(page.locator("#chatInput"))
-    .toHaveValue("只改变鞋盒右下角，移除多余文字；必须保持运动鞋和构图不变。");
-
   const uiKitSize = await page.locator("#sizeInput").inputValue();
-  await page.locator(`[data-item-id="${itemId}"]`).click();
   await page.locator("#detailUiKit").click();
   await expect(page.locator("#imageDialog")).toBeHidden();
   await expect(page.locator("#chatInput")).toHaveValue(/不要抠取、分割或复制原图像素/);
