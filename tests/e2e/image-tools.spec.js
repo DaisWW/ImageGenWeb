@@ -755,6 +755,7 @@ test("image detail keeps its reference through multi-turn refinement", {
   await expect(page.locator("#chatInput"))
     .toHaveValue("只改变鞋盒右下角，移除多余文字；必须保持运动鞋和构图不变。");
 
+  const uiKitSize = await page.locator("#sizeInput").inputValue();
   await page.locator(`[data-item-id="${itemId}"]`).click();
   await page.locator("#detailUiKit").click();
   await expect(page.locator("#imageDialog")).toBeHidden();
@@ -765,8 +766,8 @@ test("image detail keeps its reference through multi-turn refinement", {
   await expect(page.locator("#referenceList .reference-card.selected")).toHaveCount(1);
   await expect(page.locator("#creativeDirectionSelect")).toHaveValue("game_ui");
   await expect(page.locator("#formatSelect")).toHaveValue("png");
-  await expect(page.locator("#sizeInput")).toHaveValue("1024x1024");
-  await expect(page.locator("#transparentBackground")).toHaveCount(0);
+  await expect(page.locator("#sizeInput")).toHaveValue(uiKitSize);
+  await expect(page.locator("#transparentBackground")).toBeDisabled();
   await expect(page.locator("#batchCount")).toHaveValue("1");
 
   await page.locator(`[data-item-id="${itemId}"]`).click();

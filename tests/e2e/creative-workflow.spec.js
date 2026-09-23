@@ -140,7 +140,7 @@ test("AI automatically prepares a gallery template before generation", {
   await expect(page.locator("#canvasConflictMessage")).toContainText("1920×1080");
   await expect(page.locator("#generateButton")).toBeDisabled();
   await page.locator("#canvasConflictApply").click();
-  await expect(page.locator("#sizeInput")).toHaveValue("1920x1080");
+  await expect(page.locator("#sizeInput")).toHaveValue("2048x1152");
   await expect(page.locator("#canvasConflictMessage")).toContainText("已应用对话画幅");
   await expect(page.locator("#generateButton")).toBeEnabled();
   await page.locator("#sizeInput").fill("1024x1024");
