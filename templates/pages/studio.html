@@ -143,6 +143,7 @@
           <section class="mask-edit-notice" id="maskEditNotice" hidden>
             <div><i data-lucide="scan-line"></i><span id="maskEditNoticeLabel">已选择局部重绘区域</span></div>
             <div>
+              <button class="button ghost small" type="button" id="maskEditPreview" data-image-preview="true" hidden><i data-lucide="eye"></i>查看区域</button>
               <button class="button ghost small" type="button" id="maskEditChange">重新框选</button>
               <button class="button ghost small" type="button" id="maskEditClear">退出局部重绘</button>
             </div>
@@ -218,6 +219,7 @@
   <div class="image-dialog-layout">
     <div class="image-dialog-preview">
       <img id="detailImage" alt="生成结果" decoding="async">
+      <button class="button ghost small image-dialog-mask-preview" type="button" id="detailMaskPreviewButton" hidden data-image-preview="true" title="查看局部重绘区域" aria-label="查看局部重绘区域"><i data-lucide="scan-line"></i><span>查看重绘区域</span></button>
       <button class="icon-button image-dialog-preview-button" type="button" id="detailImagePreviewButton" data-image-preview="true" title="放大预览生成结果" aria-label="放大预览生成结果"><i data-lucide="zoom-in"></i></button>
     </div>
     <div class="image-dialog-info">

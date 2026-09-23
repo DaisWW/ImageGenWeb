@@ -121,6 +121,26 @@
   background: rgb(8 10 12 / 88%);
 }
 
+.image-dialog-mask-preview {
+  position: absolute;
+  z-index: 2;
+  top: 16px;
+  left: 16px;
+  color: #fff;
+  border-color: rgb(255 255 255 / 38%);
+  background: rgb(8 10 12 / 88%);
+}
+
+.image-dialog-mask-preview[hidden] {
+  display: none;
+}
+
+.image-dialog-mask-preview:hover,
+.image-dialog-mask-preview:focus-visible {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .image-dialog-preview-button:hover,
 .image-dialog-preview-button:focus-visible {
   color: var(--accent);
@@ -193,6 +213,21 @@
   gap: 7px;
 }
 
+.image-viewer-mask-toggle {
+  flex: none;
+  white-space: nowrap;
+}
+
+.image-viewer-mask-toggle[hidden] {
+  display: none;
+}
+
+.image-viewer-mask-toggle[aria-pressed="true"] {
+  color: var(--surface-1);
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
 .image-viewer-controls input[type="range"] {
   width: min(20vw, 180px);
   accent-color: var(--accent);
@@ -246,6 +281,24 @@
   transform-origin: center;
   user-select: none;
   will-change: transform;
+}
+
+.image-viewer-stage canvas {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
+  pointer-events: none;
+  transform-origin: center;
+  user-select: none;
+  will-change: transform;
+}
+
+.image-viewer-stage canvas[hidden] {
+  display: none;
 }
 
 .image-dialog-info {

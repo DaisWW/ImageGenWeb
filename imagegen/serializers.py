@@ -263,6 +263,9 @@ def job_dict(
         "transparent_background": job.transparent_background,
         "has_mask": bool(job.mask_storage_path),
         "mask_target_asset_id": job.mask_target_asset_id,
+        "mask_url": (
+            url_for("web.generation_mask_file", job_id=job.id) if job.mask_storage_path else None
+        ),
         "moderation": moderation,
         "requested_count": job.requested_count,
         "price_per_image_rmb": _amount(job.price_per_image_rmb),

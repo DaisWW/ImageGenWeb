@@ -365,12 +365,16 @@
         if (!workspace.assets.some((asset) => asset.id === source.asset.id)) {
           workspace.assets.push(source.asset);
         }
+        if (this.pendingMaskEdit?.previewUrl) {
+          URL.revokeObjectURL(this.pendingMaskEdit.previewUrl);
+        }
         this.pendingMaskEdit = {
           workspaceId: workspace.id,
           assetId: source.asset.id,
           asset: source.asset,
           blob,
           coverage: this.maskEditorController.coverage,
+          previewUrl: URL.createObjectURL(blob),
         };
         workspace.settings.prompt_draft_id = "";
         this.setGenerationStrategy("sample", false);
@@ -395,14 +399,30 @@
       const edit = this.pendingMaskEdit;
       const visible = Boolean(edit && edit.workspaceId === this.activeWorkspace?.id);
       setHidden(this.el.maskEditNotice, !visible);
-      if (!visible) return;
+      setHidden(this.el.maskEditPreview, !visible);
+      if (!visible) {
+        [
+          "imagePreviewSrc",
+          "imagePreviewMaskUrl",
+          "imagePreviewMaskSource",
+          "imagePreviewMaskLabel",
+          "imagePreviewMaskInitial",
+        ].forEach((key) => delete this.el.maskEditPreview.dataset[key]);
+        return;
+      }
       const coverage = Math.max(1, Math.round(edit.coverage * 100));
       this.el.maskEditNoticeLabel.textContent = `局部重绘 · ${edit.asset.name} · 约 ${coverage}% 区域`;
+      this.el.maskEditPreview.dataset.imagePreviewSrc = edit.asset.url;
+      this.el.maskEditPreview.dataset.imagePreviewMaskUrl = edit.previewUrl;
+      this.el.maskEditPreview.dataset.imagePreviewMaskSource = edit.asset.url;
+      this.el.maskEditPreview.dataset.imagePreviewMaskLabel = "局部重绘区域";
+      this.el.maskEditPreview.dataset.imagePreviewMaskInitial = "true";
       UI.icons(this.el.maskEditNotice);
     },
 
     clearPendingMaskEdit({ silent = false } = {}) {
       if (!this.pendingMaskEdit) return;
+      if (this.pendingMaskEdit.previewUrl) URL.revokeObjectURL(this.pendingMaskEdit.previewUrl);
       this.pendingMaskEdit = null;
       this.el.promptInput.placeholder = "输入画面描述...";
       this.renderMaskEditNotice();

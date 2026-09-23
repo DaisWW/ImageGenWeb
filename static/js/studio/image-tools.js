@@ -28,11 +28,34 @@ const BACKGROUND_REMOVAL_ADAPTER_LABEL = {
   two_pass_chroma: "本地绿幕双通道",
 };
 
-  Object.assign(StudioApp.prototype, {
+  const MASK_PREVIEW_DATA_KEYS = [
+    "imagePreviewMaskUrl",
+    "imagePreviewMaskSource",
+    "imagePreviewMaskLabel",
+    "imagePreviewMaskInitial",
+  ];
 
+  const setMaskPreviewData = (element, mask, { initial = false } = {}) => {
+    if (!element) return;
+    MASK_PREVIEW_DATA_KEYS.forEach((key) => delete element.dataset[key]);
+    if (!mask?.url || !mask.source) return;
+    element.dataset.imagePreviewMaskUrl = mask.url;
+    element.dataset.imagePreviewMaskSource = mask.source;
+    element.dataset.imagePreviewMaskLabel = mask.label || "局部重绘区域";
+    element.dataset.imagePreviewMaskInitial = String(initial);
+  };
+
+  Object.assign(StudioApp.prototype, {
     showDetail(job, item) {
       this.detailItemId = item.id;
       this.detailJobId = job.id;
+      const maskTarget = job.has_mask && job.mask_url
+        ? job.references?.find((asset) => asset.id === job.mask_target_asset_id)
+          || job.references?.[0]
+        : null;
+      const maskPreview = maskTarget && job.mask_url
+        ? { url: job.mask_url, source: maskTarget.url, label: "局部重绘区域" }
+        : null;
       this.el.detailImage.src = item.image_url;
       this.el.detailImage.dataset.imagePreview = "true";
       this.el.detailImage.dataset.imagePreviewSrc = item.image_url;
@@ -41,9 +64,25 @@ const BACKGROUND_REMOVAL_ADAPTER_LABEL = {
       this.el.detailImage.title = "放大预览生成结果";
       this.el.detailImage.tabIndex = 0;
       this.el.detailImage.setAttribute("role", "button");
+      setMaskPreviewData(this.el.detailImage, maskPreview);
       this.el.detailImagePreviewButton.dataset.imagePreviewSrc = item.image_url;
       this.el.detailImagePreviewButton.dataset.imagePreviewAlt = "生成结果";
       this.el.detailImagePreviewButton.dataset.imagePreviewTitle = "放大预览生成结果";
+      setMaskPreviewData(this.el.detailImagePreviewButton, maskPreview);
+      setHidden(this.el.detailMaskPreviewButton, !maskPreview);
+      if (maskPreview) {
+        // Open from the result so the viewer can switch back after showing
+        // the original image with the persisted mask overlaid.
+        this.el.detailMaskPreviewButton.dataset.imagePreviewSrc = item.image_url;
+        this.el.detailMaskPreviewButton.dataset.imagePreviewAlt = "生成结果";
+        this.el.detailMaskPreviewButton.dataset.imagePreviewTitle = "生成结果";
+        setMaskPreviewData(this.el.detailMaskPreviewButton, maskPreview, { initial: true });
+      } else {
+        delete this.el.detailMaskPreviewButton.dataset.imagePreviewSrc;
+        delete this.el.detailMaskPreviewButton.dataset.imagePreviewAlt;
+        delete this.el.detailMaskPreviewButton.dataset.imagePreviewTitle;
+        setMaskPreviewData(this.el.detailMaskPreviewButton, null);
+      }
       this.prepareImageReveal(this.el.detailImage);
       this.el.detailPrompt.textContent = item.prompt || job.prompt;
       const transparentLabel = job.transparent_background ? " · 透明背景" : "";
@@ -93,6 +132,9 @@ const BACKGROUND_REMOVAL_ADAPTER_LABEL = {
           image.dataset.imagePreviewSrc = asset.url;
           image.dataset.imagePreviewAlt = asset.name;
           image.dataset.imagePreviewTitle = `放大预览 ${asset.name}`;
+          if (maskPreview && asset.id === job.mask_target_asset_id) {
+            setMaskPreviewData(image, maskPreview, { initial: true });
+          }
           image.tabIndex = 0;
           image.setAttribute("role", "button");
           image.decoding = "async";

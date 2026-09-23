@@ -166,7 +166,11 @@ class TestGenerations(PlatformTestCase):
         serialized = response.json["job"]
         self.assertTrue(serialized["has_mask"])
         self.assertEqual(serialized["mask_target_asset_id"], reference.id)
+        self.assertEqual(serialized["mask_url"], f"/media/generation-masks/{serialized['id']}")
         self.assertEqual([asset["id"] for asset in serialized["references"]], [reference.id])
+        mask_response = self.user_client().get(serialized["mask_url"])
+        self.assertEqual(mask_response.status_code, 200)
+        self.assertEqual(mask_response.mimetype, "image/png")
         job = db.session.get(GenerationJob, serialized["id"])
         self.assertEqual(job.mask_target_asset_id, reference.id)
         self.assertEqual(job.mask_width, 64)
@@ -181,6 +185,26 @@ class TestGenerations(PlatformTestCase):
         worker._process_item(item_id)
         self.assertEqual(worker.providers.adapter.request.mask.content, stored_mask)
         self.assertEqual(len(worker.providers.adapter.request.references), 1)
+
+        outsider = self.services.users.create(
+            username="mask-outsider",
+            password="StrongPass123!",
+            balance_rmb="5",
+            actor_user_id=self.admin.id,
+        )
+        outsider_username = outsider.username
+        self.context.pop()
+        try:
+            outsider_client = self.app.test_client()
+            login = outsider_client.post(
+                "/login",
+                data={"username": outsider_username, "password": "StrongPass123!"},
+            )
+            self.assertEqual(login.status_code, 302)
+            self.assertEqual(outsider_client.get(serialized["mask_url"]).status_code, 404)
+            self.assertEqual(self.admin_client().get(serialized["mask_url"]).status_code, 200)
+        finally:
+            self.context.push()
 
     def test_masked_generation_rejects_stale_target_and_empty_selection(self):
         workspace = self.create_workspace("局部重绘校验")

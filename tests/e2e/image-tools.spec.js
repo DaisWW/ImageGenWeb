@@ -467,6 +467,7 @@ test("local repaint creates a PNG mask and submits only its source image", {
     }],
   };
   let submitted = null;
+  let submittedJob = null;
 
   await page.route("**/api/generations*", async (route) => {
     const request = route.request();
@@ -491,41 +492,39 @@ test("local repaint creates a PNG mask and submits only its source image", {
           signature: maskBytes.subarray(0, 8).toString("hex"),
         },
       };
-      await route.fulfill({
-        status: 202,
-        json: {
-          job: {
-            ...completedJob,
-            id: "e2e-masked-submission",
-            status: "canceled",
-            progress_percent: 0,
-            prompt: payload.prompt,
-            mode: "img2img",
-            model: payload.model,
-            size: payload.size,
-            quality: payload.quality,
-            output_format: payload.output_format,
-            compression: payload.compression,
-            transparent_background: payload.transparent_background,
-            requested_count: payload.batch_count,
-            charged_rmb: "0.0000",
-            succeeded_count: 0,
-            canceled_count: payload.batch_count,
-            has_mask: true,
-            mask_target_asset_id: referenceAsset.id,
-            references: [referenceAsset],
-            items: [],
-          },
-        },
-      });
+      submittedJob = {
+        ...completedJob,
+        id: "e2e-masked-submission",
+        status: "queued",
+        progress_percent: 0,
+        prompt: payload.prompt,
+        mode: "img2img",
+        model: payload.model,
+        size: payload.size,
+        quality: payload.quality,
+        output_format: payload.output_format,
+        compression: payload.compression,
+        transparent_background: payload.transparent_background,
+        requested_count: payload.batch_count,
+        charged_rmb: "0.0000",
+        reserved_rmb: "0.0300",
+        succeeded_count: 0,
+        can_cancel: true,
+        has_mask: true,
+        mask_url: `data:image/png;base64,${maskBytes.toString("base64")}`,
+        mask_target_asset_id: referenceAsset.id,
+        references: [referenceAsset],
+        items: [],
+      };
+      await route.fulfill({ status: 202, json: { job: submittedJob } });
       return;
     }
     if (url.pathname === "/api/generations/active") {
-      await route.fulfill({ json: { jobs: [] } });
+      await route.fulfill({ json: { jobs: submittedJob ? [submittedJob] : [] } });
       return;
     }
     if (url.pathname === "/api/generations") {
-      await route.fulfill({ json: { jobs: [completedJob], queue_total: 0 } });
+      await route.fulfill({ json: { jobs: submittedJob ? [submittedJob, completedJob] : [completedJob], queue_total: submittedJob ? 1 : 0 } });
       return;
     }
     await route.continue();
@@ -556,6 +555,14 @@ test("local repaint creates a PNG mask and submits only its source image", {
   await expect(page.locator("#maskEditorDialog")).toBeHidden();
   await expect(page.locator("#generationForm")).toBeVisible();
   await expect(page.locator("#maskEditNotice")).toContainText("局部重绘");
+  await page.locator("#maskEditPreview").click();
+  await expect(page.locator("#imageViewerDialog")).toBeVisible();
+  await expect(page.locator("#imageViewerMaskToggle")).toBeVisible();
+  await expect(page.locator("#imageViewerMaskToggle")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("#imageViewerMaskOverlay")).not.toBeHidden();
+  await page.locator("#imageViewerMaskToggle").click();
+  await expect(page.locator("#imageViewerMaskToggle")).toHaveAttribute("aria-pressed", "false");
+  await page.locator('#imageViewerDialog [data-close-dialog="imageViewerDialog"]').click();
   await expect(page.locator("#referenceList .reference-card.selected")).toHaveCount(1);
   await expect(page.locator("#referenceList .reference-card.selected img"))
     .toHaveAttribute("alt", referenceAsset.name);
@@ -574,6 +581,13 @@ test("local repaint creates a PNG mask and submits only its source image", {
     signature: "89504e470d0a1a0a",
   });
   expect(submitted.mask.size).toBeGreaterThan(100);
+  await expect(page.locator('[data-job-id="e2e-masked-submission"] [data-job-mask-preview]')).toBeVisible();
+  await page.locator('[data-job-id="e2e-masked-submission"] [data-job-mask-preview]').click();
+  await expect(page.locator("#imageViewerMaskToggle")).toHaveText("隐藏重绘区域");
+  await expect(page.locator("#imageViewerMaskOverlay")).not.toBeHidden();
+  await page.locator('#imageViewerDialog [data-close-dialog="imageViewerDialog"]').click();
+  await page.reload();
+  await expect(page.locator('[data-job-id="e2e-masked-submission"] [data-job-mask-preview]')).toBeVisible();
 });
 
 test("image detail keeps its reference through multi-turn refinement", {
@@ -586,6 +600,7 @@ test("image detail keeps its reference through multi-turn refinement", {
   const jobId = "e2e-detail-job";
   const itemId = "e2e-detail-item";
   const imageUrl = "/static/assets/brand-mark-v2.png";
+  const maskUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFklEQVR4nGP8//8/AwMDw38mEAFiAQA+9wT/1EKbhAAAAABJRU5ErkJggg==";
   const referenceAsset = {
     id: "e2e-result-reference",
     name: "result.png",
@@ -634,7 +649,10 @@ test("image detail keeps its reference through multi-turn refinement", {
     failed_count: 0,
     canceled_count: 0,
     can_cancel: false,
-    references: [],
+    has_mask: true,
+    mask_target_asset_id: referenceAsset.id,
+    mask_url: maskUrl,
+    references: [referenceAsset],
     items: [{
       id: itemId,
       position: 0,
@@ -766,6 +784,14 @@ test("image detail keeps its reference through multi-turn refinement", {
   await expect(page.locator("#detailList")).toContainText("实际图片");
   await expect(page.locator("#detailList")).toContainText("采用对话画幅");
   await expect(page.locator("#detailList")).toContainText("商品商业视觉");
+  await page.locator("#detailMaskPreviewButton").click();
+  await expect(page.locator("#imageViewerDialog")).toBeVisible();
+  await expect(page.locator("#imageViewerMaskToggle")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("#imageViewerMaskOverlay")).not.toBeHidden();
+  await page.locator("#imageViewerMaskToggle").click();
+  await expect(page.locator("#imageViewerMaskToggle")).toHaveAttribute("aria-pressed", "false");
+  await page.locator('#imageViewerDialog [data-close-dialog="imageViewerDialog"]').click();
+  await expect(page.locator("#imageDialog")).toBeVisible();
   await page.locator("#detailImage").click();
   await expect(page.locator("#imageViewerDialog")).toBeVisible();
   await page.locator("#imageViewerZoomSlider").fill("2");

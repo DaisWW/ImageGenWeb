@@ -9,7 +9,7 @@ from sqlalchemy import select
 from ..errors import ServiceError
 from ..extensions import db
 from ..image_masks import MAX_MASK_BYTES
-from ..models import Asset, Workspace
+from ..models import Asset, GenerationJob, Workspace
 from ..serializers import job_dict, job_status_dict
 from ..services import GenerationMaskInput, GenerationWorkflow, SubmitGeneration
 from ..services.common import canvas_request_conflicts
@@ -290,6 +290,22 @@ def output_file(item_id: str):
         download_name=(f"image_{item.id}.{image_extension(item.output_mime_type)}"),
         conditional=True,
     )
+
+
+@web.get("/media/generation-masks/<job_id>")
+@login_required
+def generation_mask_file(job_id: str):
+    query = select(GenerationJob).where(GenerationJob.id == job_id)
+    if not current_user.is_admin:
+        query = query.where(GenerationJob.user_id == current_user.id)
+    job = db.session.scalar(query)
+    if job is None or not job.mask_storage_path:
+        abort(404)
+    try:
+        mask_path = storage().read(job.mask_storage_path)
+    except FileNotFoundError:
+        abort(404)
+    return send_file(mask_path, mimetype="image/png", conditional=True)
 
 
 @web.get("/media/thumbnails/<item_id>")

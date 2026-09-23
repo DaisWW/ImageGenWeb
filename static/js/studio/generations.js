@@ -330,6 +330,7 @@
           </div>
           <div class="job-actions">
             <span data-job-eta hidden><i data-lucide="clock-3"></i><span></span></span>
+            <button class="button ghost small" type="button" data-job-mask-preview data-image-preview="true" hidden><i data-lucide="scan-line"></i>查看重绘区域</button>
             <button class="button ghost small" type="button" data-job-retry hidden><i data-lucide="refresh-cw"></i>重试生成</button>
             <button class="button danger small" type="button" data-job-cancel hidden><i data-lucide="square"></i>取消</button>
           </div>
@@ -371,6 +372,7 @@
         time: fields.jobTime,
         eta: fields.jobEta,
         etaLabel: fields.jobEta.querySelector("span"),
+        maskPreview: fields.jobMaskPreview,
         retry: fields.jobRetry,
         cancel: fields.jobCancel,
         progress: fields.jobProgress,
@@ -417,6 +419,18 @@
       setText(elements.etaLabel, job.estimated_end_at
         ? (job.is_over_estimate ? "仍在处理" : `预计 ${UI.timeOnly(job.estimated_end_at)}`)
         : "");
+      const maskTarget = job.has_mask && job.mask_url
+        ? job.references?.find((asset) => asset.id === job.mask_target_asset_id)
+        : null;
+      setHidden(elements.maskPreview, !maskTarget);
+      if (maskTarget) {
+        const resultUrl = job.items?.find((item) => item.image_url)?.image_url;
+        elements.maskPreview.dataset.imagePreviewSrc = resultUrl || maskTarget.url;
+        elements.maskPreview.dataset.imagePreviewTitle = resultUrl ? "生成结果" : "局部重绘原图";
+        elements.maskPreview.dataset.imagePreviewMaskUrl = job.mask_url;
+        elements.maskPreview.dataset.imagePreviewMaskSource = maskTarget.url;
+        elements.maskPreview.dataset.imagePreviewMaskInitial = "true";
+      }
       setHidden(elements.cancel, !job.can_cancel);
       if (job.can_cancel) {
         if (elements.cancel.dataset.cancelJob !== String(job.id)) {
@@ -458,6 +472,7 @@
       setText(elements.errorMessage, failureReasons.join("；"));
       this.reconcileOutputTiles(elements.outputGrid, job);
       if (!elements.eta.hidden) UI.icons(elements.eta);
+      if (!elements.maskPreview.hidden) UI.icons(elements.maskPreview);
       if (!elements.retry.hidden) UI.icons(elements.retry);
       if (!elements.cancel.hidden) UI.icons(elements.cancel);
       if (!elements.error.hidden) UI.icons(elements.error);
