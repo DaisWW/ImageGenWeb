@@ -285,9 +285,7 @@ class ChatModelRegistry(ReloadableConfigRegistry[ChatModelSnapshot]):
                 continue
             merged = dict(item)
             if "fallback_model_ids" not in merged or merged["fallback_model_ids"] is None:
-                fallback = file_models.get(str(merged.get("id", "")), {}).get(
-                    "fallback_model_ids"
-                )
+                fallback = file_models.get(str(merged.get("id", "")), {}).get("fallback_model_ids")
                 if isinstance(fallback, list):
                     merged["fallback_model_ids"] = list(fallback)
                     changed = True

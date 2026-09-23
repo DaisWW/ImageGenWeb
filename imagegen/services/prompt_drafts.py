@@ -44,8 +44,7 @@ _VISIBLE_MESSAGE_KEYS = (
 )
 _VISIBLE_MESSAGE_NESTING_KEYS = ("message", "result", "output", "data")
 _HIDDEN_REASONING_BLOCK = re.compile(
-    r"<\s*(think|analysis|reasoning|internal|scratchpad)\b[^>]*>.*?"
-    r"(?:<\s*/\s*\1\s*>|$)",
+    r"<\s*(think|analysis|reasoning|internal|scratchpad)\b[^>]*>.*?" r"(?:<\s*/\s*\1\s*>|$)",
     re.IGNORECASE | re.DOTALL,
 )
 _HIDDEN_REASONING_CLOSE = re.compile(
