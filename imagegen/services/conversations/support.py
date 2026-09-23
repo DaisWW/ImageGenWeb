@@ -89,7 +89,7 @@ class ConversationSupport:
         progress_callback: Callable[[ChatProgress], None] | None = None,
     ) -> tuple[ChatModelConfig, ChatCompletion]:
         candidates = [model]
-        for identifier in model.fallback_model_ids:
+        for identifier in model.fallback_model_names:
             try:
                 candidate = self.chat_models.get(identifier)
             except ValueError:

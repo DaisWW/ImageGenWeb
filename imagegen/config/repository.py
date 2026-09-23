@@ -16,7 +16,7 @@ from ..extensions import db
 from ..models import AuditLog, SystemState, utcnow
 
 CHANNEL_CONFIG_KEY = "runtime_config.channels.v1"
-CHAT_CONFIG_KEY = "runtime_config.chat_models.v1"
+CHAT_CONFIG_KEY = "runtime_config.chat_models.v2"
 MATTING_CONFIG_KEY = "runtime_config.matting_models.v1"
 
 
@@ -187,7 +187,7 @@ class RuntimeConfigRepository:
         for item in items:
             secret = str(item.pop("api_key", ""))
             item["api_key_encrypted"] = self._cipher.encrypt(secret)
-            item_ids.append(str(item.get("id", "")))
+            item_ids.append(str(item.get("id") or item.get("label", "")))
 
         serialized = json.dumps(
             {"schema": 1, "document": stored_document},

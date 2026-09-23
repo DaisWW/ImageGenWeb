@@ -179,8 +179,11 @@ class RuntimeConfigService:
         for raw in raw_models:
             if not isinstance(raw, dict):
                 raise ServiceError("对话模型条目格式无效")
-            identifier = str(raw.get("id", "")).strip()
-            old = existing.get(identifier)
+            label = str(raw.get("label", "")).strip()
+            source_label = str(
+                raw.get("original_label") or raw.get("copy_from_label") or label
+            ).strip()
+            old = existing.get(source_label)
             review_reasoning_effort = (
                 raw["review_reasoning_effort"]
                 if "review_reasoning_effort" in raw
@@ -188,19 +191,18 @@ class RuntimeConfigService:
                 if old
                 else ""
             )
-            fallback_model_ids = (
-                raw["fallback_model_ids"]
-                if "fallback_model_ids" in raw
-                else list(old.fallback_model_ids)
+            fallback_model_names = (
+                raw["fallback_model_names"]
+                if "fallback_model_names" in raw
+                else list(old.fallback_model_names)
                 if old
                 else []
             )
-            if not isinstance(fallback_model_ids, list):
+            if not isinstance(fallback_model_names, list):
                 raise ServiceError("备用模型列表格式无效")
             models.append(
                 {
-                    "id": identifier,
-                    "label": str(raw.get("label", "")).strip(),
+                    "label": label,
                     "enabled": as_bool(raw.get("enabled", True)),
                     "base_url": str(raw.get("base_url", "")).strip(),
                     "api_key": _resolved_key(raw, old.api_key if old else ""),
@@ -209,7 +211,7 @@ class RuntimeConfigService:
                     "review_reasoning_effort": str(review_reasoning_effort).strip(),
                     "timeout_seconds": raw.get("timeout_seconds"),
                     "max_output_tokens": raw.get("max_output_tokens"),
-                    "fallback_model_ids": [str(item).strip() for item in fallback_model_ids],
+                    "fallback_model_names": [str(item).strip() for item in fallback_model_names],
                 }
             )
         context = payload.get("context")
@@ -228,7 +230,7 @@ class RuntimeConfigService:
         if not isinstance(system_prompts, dict):
             raise ServiceError("系统提示词格式无效")
         return {
-            "version": 1,
+            "version": 2,
             "system_prompts": {"chat": system_prompts.get("chat")},
             "workspace_prompts": {
                 kind: workspace_prompts.get(kind) for kind in DEFAULT_WORKSPACE_PROMPTS

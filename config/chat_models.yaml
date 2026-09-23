@@ -1,4 +1,4 @@
-version: 1
+version: 2
 
 workspace_prompts:
   image: |-
@@ -11,8 +11,7 @@ context:
   max_context_tokens: 32000
 
 models:
-  - id: gpt
-    label: GPT 5.6 SOL
+  - label: GPT 5.6 SOL
     enabled: true
     base_url: http://xjbkw.weiw:18080
     base_url_env: GPT_CHAT_API_BASE_URL
@@ -24,9 +23,8 @@ models:
     review_reasoning_effort: medium
     timeout_seconds: 300
     max_output_tokens: 16000
-    fallback_model_ids: [gpt-5-6-terra, gpt-5-6-luna]
-  - id: gpt-5-6-luna
-    label: GPT 5.6 LUNA
+    fallback_model_names: [GPT 5.6 TERRA, GPT 5.6 LUNA]
+  - label: GPT 5.6 LUNA
     enabled: true
     base_url: http://xjbkw.weiw:18080
     base_url_env: GPT_CHAT_API_BASE_URL
@@ -36,9 +34,8 @@ models:
     review_reasoning_effort: medium
     timeout_seconds: 300
     max_output_tokens: 16000
-    fallback_model_ids: [gpt-5-6-terra, gpt]
-  - id: gpt-5-6-terra
-    label: GPT 5.6 TERRA
+    fallback_model_names: [GPT 5.6 TERRA, GPT 5.6 SOL]
+  - label: GPT 5.6 TERRA
     enabled: true
     base_url: http://xjbkw.weiw:18080
     base_url_env: GPT_CHAT_API_BASE_URL
@@ -48,4 +45,4 @@ models:
     review_reasoning_effort: medium
     timeout_seconds: 300
     max_output_tokens: 16000
-    fallback_model_ids: [gpt-5-6-luna, gpt]
+    fallback_model_names: [GPT 5.6 LUNA, GPT 5.6 SOL]

@@ -65,7 +65,7 @@
         </div>
       </div>
       <div class="inline-alert" id="chatConfigError" hidden></div>
-      <div class="table-wrap"><table><thead><tr><th>名称</th><th>状态</th><th>模型</th><th>上下文策略</th><th class="actions-cell">操作</th></tr></thead><tbody id="chatModelTableBody"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>名称（拖拽排序）</th><th>状态</th><th>模型</th><th>上下文策略</th><th class="actions-cell">操作</th></tr></thead><tbody id="chatModelTableBody"></tbody></table></div>
     </div>
     <div class="admin-config-section">
       <div class="view-toolbar">
@@ -249,11 +249,8 @@
 <dialog class="modal" id="chatModelDialog">
   <form class="modal-form" id="chatModelForm">
     <div class="modal-header"><div><span class="eyebrow">Chat Provider</span><h2 id="chatModelDialogTitle">新增对话模型</h2></div><button class="icon-button" type="button" data-close-dialog="chatModelDialog" aria-label="关闭"><i data-lucide="x"></i></button></div>
-    <input type="hidden" name="original_id">
-    <div class="form-grid two-columns">
-      <label class="field"><span>配置 ID</span><input name="id" maxlength="64" pattern="[A-Za-z0-9_-]+" required></label>
-      <label class="field"><span>显示名称</span><input name="label" maxlength="100" required></label>
-    </div>
+    <input type="hidden" name="original_label">
+    <label class="field"><span>显示名称</span><input name="label" maxlength="64" required></label>
     <label class="check-line"><input type="checkbox" name="enabled" checked><span>启用模型</span></label>
     <label class="field"><span>API 地址</span><input type="url" name="base_url" maxlength="500" required></label>
     <div class="form-grid two-columns">
@@ -261,7 +258,7 @@
       <label class="field"><span>上游模型</span><input name="model" maxlength="150" required></label>
     </div>
     <label class="check-line" data-clear-chat-key-row hidden><input type="checkbox" name="clear_api_key"><span>清除已保存的 API Key</span></label>
-    <label class="field"><span>备用模型 ID（逗号分隔）</span><input name="fallback_model_ids" maxlength="300" placeholder="model-b, model-c"></label>
+    <label class="field"><span>备用模型名称（逗号分隔）</span><input name="fallback_model_names" maxlength="300" placeholder="备用模型 A, 备用模型 B"></label>
     <div class="form-grid four-columns">
       <label class="field"><span>推理强度</span><select name="reasoning_effort"><option value="">默认</option><option value="none">None</option><option value="minimal">Minimal</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="max">Max</option></select></label>
       <label class="field"><span>需求整理推理强度</span><select name="review_reasoning_effort"><option value="">继承通用</option><option value="none">None</option><option value="minimal">Minimal</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="max">Max</option></select></label>

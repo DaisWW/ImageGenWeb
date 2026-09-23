@@ -120,12 +120,11 @@ channels:
 
 
 CHAT_CONFIG = """\
-version: 1
+version: 2
 context:
   max_context_tokens: 32000
 models:
-  - id: test-chat
-    label: 测试 GPT
+  - label: test-chat
     enabled: true
     base_url: https://chat.example
     api_key_env: TEST_CHAT_KEY

@@ -1164,8 +1164,7 @@ class TestPromptDrafts(PlatformTestCase):
         config = self.admin_client().get("/api/admin/chat-models").json["config"]
         config["models"].append(
             {
-                "id": "creative-chat",
-                "label": "创意模型",
+                "label": "creative-chat",
                 "enabled": True,
                 "base_url": "https://chat.example",
                 "api_key": "creative-chat-key",
@@ -1180,8 +1179,7 @@ class TestPromptDrafts(PlatformTestCase):
         self.assertEqual(response.status_code, 200)
         public_models = self.user_client().get("/api/chat-models").json["models"]
         self.assertEqual(
-            [model["id"] for model in public_models],
-            ["test-chat", "creative-chat"],
+            [model["label"] for model in public_models], ["test-chat", "creative-chat"]
         )
 
         workspace = self.create_workspace()

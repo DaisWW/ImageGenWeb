@@ -94,7 +94,7 @@ test("chat waits for message persistence and resends stored messages with new ID
   workspaceId = await page.locator("#workspaceList .workspace-item.active")
     .getAttribute("data-workspace-id");
 
-  await expect(page.locator("#chatModelSelect")).toHaveValue("e2e-chat");
+  await expect(page.locator("#chatModelSelect")).toHaveValue("E2E 助手");
   await page.locator("#chatInput").fill(content);
   await page.locator("#chatForm").evaluate((form) => form.requestSubmit());
 

@@ -181,6 +181,10 @@
       this.el.contextSettingsButton.addEventListener("click", () => this.openContextDialog());
       this.el.createChatModelButton.addEventListener("click", () => this.openChatModelDialog());
       this.el.chatModelTableBody.addEventListener("click", (event) => this.handleChatModelAction(event));
+      this.el.chatModelTableBody.addEventListener("dragstart", (event) => this.startChatModelDrag(event));
+      this.el.chatModelTableBody.addEventListener("dragover", (event) => this.overChatModelDrag(event));
+      this.el.chatModelTableBody.addEventListener("drop", (event) => this.dropChatModel(event));
+      this.el.chatModelTableBody.addEventListener("dragend", () => this.endChatModelDrag());
       this.el.chatModelForm.addEventListener("submit", (event) => this.saveChatModel(event));
       this.el.createMattingModelButton.addEventListener("click", () => this.openMattingModelDialog());
       this.el.mattingModelTableBody.addEventListener("click", (event) => this.handleMattingModelAction(event));
@@ -961,27 +965,26 @@
       this.el.chatConfigVersion.textContent = `${origin} · 版本 ${config.version} · 最大上下文 ${context.max_context_tokens.toLocaleString()} tokens`;
       this.el.chatConfigError.hidden = !config.last_error;
       this.el.chatConfigError.textContent = config.last_error || "";
-      this.el.chatModelTableBody.innerHTML = config.models.map((model) => `
-        <tr>
-          <td><strong>${UI.escapeHtml(model.label)}</strong><small class="subline">${UI.escapeHtml(model.id)}</small></td>
+      this.el.chatModelTableBody.innerHTML = config.models.map((model, index) => `
+        <tr draggable="true" data-chat-model-index="${index}">
+          <td><span class="chat-model-name"><i data-lucide="grip-vertical" aria-hidden="true"></i><strong>${UI.escapeHtml(model.label)}</strong></span></td>
           <td><span class="status-badge ${model.configured ? "succeeded" : "failed"}"><span></span>${model.configured ? "可用" : model.enabled ? "缺少 Key" : "停用"}</span></td>
-          <td>${UI.escapeHtml(model.model)}<small class="subline">通用推理 ${UI.escapeHtml(model.reasoning_effort || "继承默认")}</small><small class="subline">备用 ${UI.escapeHtml((model.fallback_model_ids || []).join(", ") || "无")}</small></td>
+          <td>${UI.escapeHtml(model.model)}<small class="subline">通用推理 ${UI.escapeHtml(model.reasoning_effort || "继承默认")}</small><small class="subline">备用 ${UI.escapeHtml((model.fallback_model_names || []).join(", ") || "无")}</small></td>
           <td><div class="capability-list"><span>超限直接截断较早内容</span><span>历史图片和生成结果优先</span></div></td>
           <td class="actions-cell"><div class="row-actions">
-            <button class="icon-button" type="button" data-edit-chat-model="${UI.escapeHtml(model.id)}" title="编辑模型" aria-label="编辑模型"><i data-lucide="pencil"></i></button>
-            <button class="icon-button danger" type="button" data-delete-chat-model="${UI.escapeHtml(model.id)}" title="删除模型" aria-label="删除模型"><i data-lucide="trash-2"></i></button>
+            <button class="icon-button" type="button" data-copy-chat-model="${index}" title="复制模型" aria-label="复制模型"><i data-lucide="copy"></i></button>
+            <button class="icon-button" type="button" data-edit-chat-model="${index}" title="编辑模型" aria-label="编辑模型"><i data-lucide="pencil"></i></button>
+            <button class="icon-button danger" type="button" data-delete-chat-model="${index}" title="删除模型" aria-label="删除模型"><i data-lucide="trash-2"></i></button>
           </div></td>
         </tr>`).join("");
       UI.icons(this.el.chatModelTableBody);
     }
 
-    openChatModelDialog(identifier = "") {
-      const model = this.chatConfig?.models.find((item) => item.id === identifier) || null;
+    openChatModelDialog(index = -1) {
+      const model = this.chatConfig?.models[index] || null;
       const form = this.el.chatModelForm;
       form.reset();
-      form.elements.original_id.value = model?.id || "";
-      form.elements.id.value = model?.id || "";
-      form.elements.id.readOnly = Boolean(model);
+      form.elements.original_label.value = model?.label || "";
       form.elements.label.value = model?.label || "";
       form.elements.enabled.checked = model ? model.enabled : true;
       form.elements.base_url.value = model?.base_url || "";
@@ -993,7 +996,7 @@
       form.elements.model.value = model?.model || "";
       form.elements.reasoning_effort.value = model?.reasoning_effort || "";
       form.elements.review_reasoning_effort.value = model?.review_reasoning_effort || "";
-      form.elements.fallback_model_ids.value = (model?.fallback_model_ids || []).join(", ");
+      form.elements.fallback_model_names.value = (model?.fallback_model_names || []).join(", ");
       form.elements.timeout_seconds.value = model?.timeout_seconds ?? 300;
       form.elements.max_output_tokens.value = model?.max_output_tokens ?? 2000;
       this.el.chatModelDialogTitle.textContent = model ? `编辑 ${model.label}` : "新增对话模型";
@@ -1001,17 +1004,39 @@
     }
 
     async handleChatModelAction(event) {
+      const duplicate = event.target.closest("[data-copy-chat-model]");
+      if (duplicate) {
+        const source = this.chatConfig.models[Number(duplicate.dataset.copyChatModel)];
+        const next = copy(this.chatConfig);
+        const labels = new Set(next.models.map((item) => item.label));
+        let label;
+        for (let number = 1; ; number += 1) {
+          const suffix = number === 1 ? " 副本" : ` 副本 ${number}`;
+          label = `${source.label.slice(0, 64 - suffix.length)}${suffix}`;
+          if (!labels.has(label)) break;
+        }
+        next.models.push({ ...copy(source), label, copy_from_label: source.label });
+        try {
+          await this.persistChatModels(next, "对话模型已复制");
+        } catch (error) {
+          UI.toast(error.message, "error");
+        }
+        return;
+      }
       const edit = event.target.closest("[data-edit-chat-model]");
       if (edit) {
-        this.openChatModelDialog(edit.dataset.editChatModel);
+        this.openChatModelDialog(Number(edit.dataset.editChatModel));
         return;
       }
       const remove = event.target.closest("[data-delete-chat-model]");
       if (!remove) return;
-      const model = this.chatConfig.models.find((item) => item.id === remove.dataset.deleteChatModel);
+      const model = this.chatConfig.models[Number(remove.dataset.deleteChatModel)];
       if (!window.confirm(`删除对话模型“${model.label}”？`)) return;
       const next = copy(this.chatConfig);
-      next.models = next.models.filter((item) => item.id !== model.id);
+      next.models = next.models.filter((item) => item.label !== model.label);
+      next.models.forEach((item) => {
+        item.fallback_model_names = item.fallback_model_names.filter((name) => name !== model.label);
+      });
       try {
         await this.persistChatModels(next, "对话模型已删除");
       } catch (error) {
@@ -1026,8 +1051,8 @@
       try {
         const form = this.el.chatModelForm;
         const model = {
-          id: form.elements.id.value.trim(),
           label: form.elements.label.value.trim(),
+          original_label: form.elements.original_label.value,
           enabled: form.elements.enabled.checked,
           base_url: form.elements.base_url.value.trim(),
           api_key: form.elements.api_key.value.trim(),
@@ -1037,23 +1062,74 @@
           review_reasoning_effort: form.elements.review_reasoning_effort.value,
           timeout_seconds: Number(form.elements.timeout_seconds.value),
           max_output_tokens: Number(form.elements.max_output_tokens.value),
-          fallback_model_ids: form.elements.fallback_model_ids.value
+          fallback_model_names: form.elements.fallback_model_names.value
             .split(",")
             .map((item) => item.trim())
             .filter(Boolean),
         };
         const next = copy(this.chatConfig);
-        const originalId = form.elements.original_id.value;
-        const index = next.models.findIndex((item) => item.id === originalId);
-        if (index >= 0) next.models[index] = model;
-        else next.models.push(model);
-        await this.persistChatModels(next, originalId ? "对话模型已更新" : "对话模型已创建");
+        const originalLabel = form.elements.original_label.value;
+        const index = next.models.findIndex((item) => item.label === originalLabel);
+        if (index >= 0) {
+          next.models[index] = model;
+          if (originalLabel !== model.label) next.models.forEach((item) => {
+            item.fallback_model_names = item.fallback_model_names.map((name) => (
+              name === originalLabel ? model.label : name
+            ));
+          });
+        } else next.models.push(model);
+        await this.persistChatModels(next, originalLabel ? "对话模型已更新" : "对话模型已创建");
         UI.closeDialog(this.el.chatModelDialog);
       } catch (error) {
         UI.toast(error.message, "error");
       } finally {
         submit.disabled = false;
       }
+    }
+
+    startChatModelDrag(event) {
+      if (event.target.closest("button")) return;
+      const row = event.target.closest("[data-chat-model-index]");
+      if (!row) return;
+      this.draggedChatModelIndex = Number(row.dataset.chatModelIndex);
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", row.dataset.chatModelIndex);
+    }
+
+    overChatModelDrag(event) {
+      if (this.draggedChatModelIndex === undefined) return;
+      const row = event.target.closest("[data-chat-model-index]");
+      if (!row) return;
+      event.preventDefault();
+      this.el.chatModelTableBody.querySelectorAll(".chat-model-drop-target")
+        .forEach((item) => item.classList.remove("chat-model-drop-target"));
+      if (Number(row.dataset.chatModelIndex) !== this.draggedChatModelIndex) {
+        row.classList.add("chat-model-drop-target");
+      }
+    }
+
+    async dropChatModel(event) {
+      if (this.draggedChatModelIndex === undefined) return;
+      event.preventDefault();
+      const row = event.target.closest("[data-chat-model-index]");
+      const from = this.draggedChatModelIndex;
+      this.endChatModelDrag();
+      if (!row) return;
+      const to = Number(row.dataset.chatModelIndex);
+      if (from === to) return;
+      const next = copy(this.chatConfig);
+      next.models.splice(to, 0, next.models.splice(from, 1)[0]);
+      try {
+        await this.persistChatModels(next, "对话模型顺序已更新");
+      } catch (error) {
+        UI.toast(error.message, "error");
+      }
+    }
+
+    endChatModelDrag() {
+      this.draggedChatModelIndex = undefined;
+      this.el.chatModelTableBody.querySelectorAll(".chat-model-drop-target")
+        .forEach((item) => item.classList.remove("chat-model-drop-target"));
     }
 
     openWorkspacePromptsDialog() {

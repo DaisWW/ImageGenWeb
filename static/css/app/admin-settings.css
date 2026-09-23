@@ -157,6 +157,26 @@ tbody tr:hover td {
   height: 15px;
 }
 
+#chatModelTableBody tr[draggable] {
+  cursor: grab;
+}
+
+#chatModelTableBody tr.chat-model-drop-target td {
+  border-top: 2px solid var(--accent);
+}
+
+.chat-model-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-model-name svg {
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+}
+
 .form-grid {
   display: grid;
   gap: 14px;

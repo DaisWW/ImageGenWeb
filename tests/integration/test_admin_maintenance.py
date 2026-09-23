@@ -399,15 +399,50 @@ class TestAdminAndMaintenance(PlatformTestCase):
         stored = db.session.get(SystemState, CHAT_CONFIG_KEY)
         self.assertNotIn("replacement-chat-key", stored.value)
 
+    def test_chat_model_names_control_order_fallbacks_and_copy_credentials(self):
+        client = self.admin_client()
+        config = client.get("/api/admin/chat-models").json["config"]
+        source = config["models"][0]
+        self.assertNotIn("id", source)
+        clone = dict(source)
+        clone.update(label="测试副本", copy_from_label=source["label"], fallback_model_names=[])
+        source["fallback_model_names"] = ["测试副本"]
+        config["models"].insert(0, clone)
+
+        response = client.put("/api/admin/chat-models", json=config)
+
+        self.assertEqual(response.status_code, 200)
+        saved = response.json["config"]
+        self.assertEqual([model["label"] for model in saved["models"]], ["测试副本", "test-chat"])
+        self.assertEqual(
+            [model["label"] for model in self.user_client().get("/api/chat-models").json["models"]],
+            ["测试副本", "test-chat"],
+        )
+        registry = self.app.extensions["chat_model_registry"]
+        self.assertEqual(registry.get("测试副本").api_key, registry.get("test-chat").api_key)
+        self.assertEqual(registry.get("test-chat").fallback_model_names, ("测试副本",))
+        self.assertNotIn("test-chat-key-not-secret", json.dumps(saved))
+        audit = db.session.scalar(
+            select(AuditLog).where(AuditLog.action == "runtime.chat_models.update")
+        )
+        self.assertEqual(audit.details["items"], ["测试副本", "test-chat"])
+
+        saved["models"][1]["fallback_model_names"] = ["不存在"]
+        self.assertEqual(client.put("/api/admin/chat-models", json=saved).status_code, 400)
+        saved["models"][1]["fallback_model_names"] = []
+        saved["models"][1]["label"] = "测试副本"
+        self.assertEqual(client.put("/api/admin/chat-models", json=saved).status_code, 400)
+        saved["models"][1]["label"] = "逗号,模型"
+        self.assertEqual(client.put("/api/admin/chat-models", json=saved).status_code, 400)
+
     def test_admin_can_explicitly_clear_chat_fallbacks(self):
         self.chat_path.write_text(
             """\
-version: 1
+version: 2
 context:
   max_context_tokens: 32000
 models:
-  - id: test-chat
-    label: 测试 GPT
+  - label: test-chat
     enabled: true
     base_url: https://chat.example
     api_key_env: TEST_CHAT_KEY
@@ -416,9 +451,8 @@ models:
     review_reasoning_effort: medium
     timeout_seconds: 30
     max_output_tokens: 1000
-    fallback_model_ids: [fallback-chat]
-  - id: fallback-chat
-    label: 备用 GPT
+    fallback_model_names: [fallback-chat]
+  - label: fallback-chat
     enabled: true
     base_url: https://fallback.example
     api_key_env: TEST_CHAT_KEY
@@ -433,19 +467,19 @@ models:
         self.app.extensions["chat_model_registry"].reload(force=True)
         client = self.admin_client()
         config = client.get("/api/admin/chat-models").json["config"]
-        config["models"][0]["fallback_model_ids"] = []
+        config["models"][0]["fallback_model_names"] = []
 
         response = client.put("/api/admin/chat-models", json=config)
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json["config"]["models"][0]["fallback_model_ids"], [])
+        self.assertEqual(response.json["config"]["models"][0]["fallback_model_names"], [])
         self.assertEqual(
-            self.app.extensions["chat_model_registry"].get("test-chat").fallback_model_ids,
+            self.app.extensions["chat_model_registry"].get("test-chat").fallback_model_names,
             (),
         )
         stored = db.session.get(SystemState, CHAT_CONFIG_KEY)
         document = json.loads(stored.value)["document"]
-        self.assertEqual(document["models"][0]["fallback_model_ids"], [])
+        self.assertEqual(document["models"][0]["fallback_model_names"], [])
 
     def test_admin_matting_config_preserves_order_without_recommendation_metadata(self):
         client = self.admin_client()

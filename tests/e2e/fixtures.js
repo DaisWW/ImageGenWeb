@@ -78,7 +78,6 @@ async function mockConfiguredChatModel(page, version = "e2e-chat-models") {
     json: {
       version,
       models: [{
-        id: "e2e-chat",
         label: "E2E 助手",
         enabled: true,
         configured: true,

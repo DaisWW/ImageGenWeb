@@ -29,12 +29,11 @@ class TestConversations(PlatformTestCase):
     def test_chat_switches_to_configured_fallback_before_first_output(self):
         self.chat_path.write_text(
             """\
-version: 1
+version: 2
 context:
   max_context_tokens: 32000
 models:
-  - id: primary
-    label: Primary
+  - label: primary
     enabled: true
     base_url: https://primary.example
     api_key_env: TEST_CHAT_KEY
@@ -43,9 +42,8 @@ models:
     review_reasoning_effort: medium
     timeout_seconds: 30
     max_output_tokens: 1000
-    fallback_model_ids: [fallback]
-  - id: fallback
-    label: Fallback
+    fallback_model_names: [fallback]
+  - label: fallback
     enabled: true
     base_url: https://fallback.example
     api_key_env: TEST_CHAT_KEY
@@ -83,11 +81,10 @@ models:
     def test_chat_retries_current_model_before_switching_to_fallback(self):
         client = self.admin_client()
         config = client.get("/api/admin/chat-models").json["config"]
-        config["models"][0]["fallback_model_ids"] = ["fallback"]
+        config["models"][0]["fallback_model_names"] = ["fallback"]
         config["models"].append(
             {
-                "id": "fallback",
-                "label": "备用 GPT",
+                "label": "fallback",
                 "enabled": True,
                 "base_url": "https://fallback.example",
                 "api_key": "test-chat-key-not-secret",
@@ -96,7 +93,7 @@ models:
                 "review_reasoning_effort": "medium",
                 "timeout_seconds": 30,
                 "max_output_tokens": 1000,
-                "fallback_model_ids": [],
+                "fallback_model_names": [],
             }
         )
         self.assertEqual(client.put("/api/admin/chat-models", json=config).status_code, 200)
@@ -165,10 +162,9 @@ models:
     def test_chat_retries_current_model_without_routing_to_fallback(self):
         client = self.admin_client()
         config = client.get("/api/admin/chat-models").json["config"]
-        config["models"][0]["fallback_model_ids"] = []
+        config["models"][0]["fallback_model_names"] = []
         config["models"].append(
             {
-                "id": "astra",
                 "label": "Astra",
                 "enabled": True,
                 "base_url": "https://astra.example",
@@ -178,12 +174,12 @@ models:
                 "review_reasoning_effort": "medium",
                 "timeout_seconds": 30,
                 "max_output_tokens": 1000,
-                "fallback_model_ids": [],
+                "fallback_model_names": [],
             }
         )
         self.assertEqual(client.put("/api/admin/chat-models", json=config).status_code, 200)
         saved_config = client.get("/api/admin/chat-models").json["config"]
-        self.assertEqual(saved_config["models"][0]["fallback_model_ids"], [])
+        self.assertEqual(saved_config["models"][0]["fallback_model_names"], [])
         settings = self.services.settings.editable_config()
         settings["runtime"].update(
             {
@@ -230,12 +226,11 @@ models:
     def test_chat_does_not_retry_fallback_model(self):
         self.chat_path.write_text(
             """\
-version: 1
+version: 2
 context:
   max_context_tokens: 32000
 models:
-  - id: primary
-    label: Primary
+  - label: primary
     enabled: true
     base_url: https://primary.example
     api_key_env: TEST_CHAT_KEY
@@ -244,9 +239,8 @@ models:
     review_reasoning_effort: medium
     timeout_seconds: 30
     max_output_tokens: 1000
-    fallback_model_ids: [fallback]
-  - id: fallback
-    label: Fallback
+    fallback_model_names: [fallback]
+  - label: fallback
     enabled: true
     base_url: https://fallback.example
     api_key_env: TEST_CHAT_KEY
@@ -306,12 +300,11 @@ models:
     def test_chat_switches_after_missing_terminal_event_even_with_http_200(self):
         self.chat_path.write_text(
             """\
-version: 1
+version: 2
 context:
   max_context_tokens: 32000
 models:
-  - id: primary
-    label: Primary
+  - label: primary
     enabled: true
     base_url: https://primary.example
     api_key_env: TEST_CHAT_KEY
@@ -320,9 +313,8 @@ models:
     review_reasoning_effort: medium
     timeout_seconds: 30
     max_output_tokens: 1000
-    fallback_model_ids: [fallback]
-  - id: fallback
-    label: Fallback
+    fallback_model_names: [fallback]
+  - label: fallback
     enabled: true
     base_url: https://fallback.example
     api_key_env: TEST_CHAT_KEY
@@ -388,12 +380,11 @@ models:
     def test_chat_failover_uses_each_model_timeout_budget(self):
         self.chat_path.write_text(
             """\
-version: 1
+version: 2
 context:
   max_context_tokens: 32000
 models:
-  - id: primary
-    label: Primary
+  - label: primary
     enabled: true
     base_url: https://primary.example
     api_key_env: TEST_CHAT_KEY
@@ -402,9 +393,8 @@ models:
     review_reasoning_effort: medium
     timeout_seconds: 30
     max_output_tokens: 1000
-    fallback_model_ids: [fallback]
-  - id: fallback
-    label: Fallback
+    fallback_model_names: [fallback]
+  - label: fallback
     enabled: true
     base_url: https://fallback.example
     api_key_env: TEST_CHAT_KEY
@@ -466,12 +456,11 @@ models:
     def test_chat_does_not_switch_after_non_streaming_output_started(self):
         self.chat_path.write_text(
             """\
-version: 1
+version: 2
 context:
   max_context_tokens: 32000
 models:
-  - id: primary
-    label: Primary
+  - label: primary
     enabled: true
     base_url: https://primary.example
     api_key_env: TEST_CHAT_KEY
@@ -480,9 +469,8 @@ models:
     review_reasoning_effort: medium
     timeout_seconds: 30
     max_output_tokens: 1000
-    fallback_model_ids: [fallback]
-  - id: fallback
-    label: Fallback
+    fallback_model_names: [fallback]
+  - label: fallback
     enabled: true
     base_url: https://fallback.example
     api_key_env: TEST_CHAT_KEY
@@ -603,12 +591,11 @@ models:
     def test_chat_repair_uses_failover_and_the_fallback_output_limit(self):
         self.chat_path.write_text(
             """\
-version: 1
+version: 2
 context:
   max_context_tokens: 32000
 models:
-  - id: primary
-    label: Primary
+  - label: primary
     enabled: true
     base_url: https://primary.example
     api_key_env: TEST_CHAT_KEY
@@ -617,9 +604,8 @@ models:
     review_reasoning_effort: medium
     timeout_seconds: 30
     max_output_tokens: 1000
-    fallback_model_ids: [repair-fallback]
-  - id: repair-fallback
-    label: Repair Fallback
+    fallback_model_names: [repair-fallback]
+  - label: repair-fallback
     enabled: true
     base_url: https://fallback.example
     api_key_env: TEST_CHAT_KEY

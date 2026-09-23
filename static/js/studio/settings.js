@@ -112,7 +112,7 @@
       const available = this.chatModels.filter((model) => model.enabled && model.configured);
       const options = available.map((model) => {
         const option = document.createElement("option");
-        option.value = model.id;
+        option.value = model.label;
         const reasoning = model.reasoning_effort ? ` · 推理 ${model.reasoning_effort}` : "";
         option.textContent = model.label;
         option.title = `${model.model}${reasoning}`;
@@ -125,9 +125,9 @@
         options.push(option);
       }
       this.el.chatModelSelect.replaceChildren(...options);
-      this.el.chatModelSelect.value = available.some((model) => model.id === selectedId)
+      this.el.chatModelSelect.value = available.some((model) => model.label === selectedId)
         ? selectedId
-        : (available[0]?.id || "");
+        : (available[0]?.label || "");
       this.updateInteractionState();
     },
 
