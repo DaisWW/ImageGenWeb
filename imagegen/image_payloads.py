@@ -60,3 +60,80 @@ def prepared_filename(filename: str, mime_type: str) -> str:
         return filename
     path = PurePath(filename or "image")
     return f"{path.stem or 'image'}.webp"
+
+
+def visual_image_size(content: bytes) -> tuple[int, int]:
+    """Return the dimensions users see after applying EXIF orientation."""
+
+    try:
+        with Image.open(io.BytesIO(content)) as source:
+            oriented = ImageOps.exif_transpose(source)
+            return oriented.size
+    except (
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+        UnidentifiedImageError,
+        OSError,
+        ValueError,
+    ) as exc:
+        raise ValueError("局部重绘原图无效") from exc
+
+
+def prepare_masked_image_bytes(
+    content: bytes,
+    mime_type: str,
+    mask_content: bytes,
+    *,
+    max_side: int = IMAGE_MAX_SIDE,
+    quality: int = 95,
+) -> tuple[bytes, str, bytes]:
+    """Normalize the first edit image and mask with identical geometry."""
+
+    source = None
+    mask = None
+    normalized_mask = None
+    alpha = None
+    try:
+        with Image.open(io.BytesIO(content)) as opened_source:
+            source = ImageOps.exif_transpose(opened_source).copy()
+        with Image.open(io.BytesIO(mask_content)) as opened_mask:
+            mask = opened_mask.convert("RGBA")
+            mask.load()
+
+        source.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+        has_alpha = "A" in source.getbands() or "transparency" in source.info
+        converted_source = source.convert("RGBA" if has_alpha else "RGB")
+        source.close()
+        source = converted_source
+        if mask.size != source.size:
+            resized_mask = mask.resize(source.size, Image.Resampling.NEAREST)
+            mask.close()
+            mask = resized_mask
+
+        alpha = mask.getchannel("A").point(lambda value: 0 if value < 128 else 255)
+        normalized_mask = Image.new("RGBA", source.size, (255, 255, 255, 255))
+        normalized_mask.putalpha(alpha)
+
+        source_stream = io.BytesIO()
+        source.save(
+            source_stream,
+            format="WEBP",
+            quality=quality,
+            method=4,
+            lossless=has_alpha,
+        )
+        mask_stream = io.BytesIO()
+        normalized_mask.save(mask_stream, format="PNG", optimize=True)
+        return source_stream.getvalue(), "image/webp", mask_stream.getvalue()
+    except (
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+        UnidentifiedImageError,
+        OSError,
+        ValueError,
+    ) as exc:
+        raise ValueError("局部重绘图片或蒙版无效") from exc
+    finally:
+        for image in (source, mask, normalized_mask, alpha):
+            if image is not None:
+                image.close()

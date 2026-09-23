@@ -42,6 +42,12 @@ class GenerationRequestValidator:
             raise ServiceError("工作站类型无效")
         if request.mode not in channel.capabilities.modes:
             raise ServiceError(f"{channel.label} 不支持当前生成模式")
+        if request.mask is not None and not channel.capabilities.supports_mask:
+            raise ServiceError(
+                f"{channel.label} 尚未启用局部重绘蒙版能力",
+                code="mask_not_supported",
+                status_code=422,
+            )
         prompt = request.prompt.strip()
         if not prompt or len(prompt) > runtime.max_prompt_characters:
             raise ServiceError(f"提示词长度必须在 1 到 {runtime.max_prompt_characters} 个字符之间")

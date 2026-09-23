@@ -15,6 +15,7 @@ from imagegen.image_payloads import prepare_image_bytes, prepared_filename
 from imagegen.integrations.diagnostics import response_summary
 from imagegen.integrations.images import (
     GenerationRequest,
+    MaskPayload,
     OpenAIImagesAdapter,
     ProviderError,
     ReferencePayload,
@@ -33,6 +34,7 @@ from tests.support.platform import (
     PlatformTestCase,
     RecordingChatSession,
     RecordingImageSession,
+    mask_png_bytes,
     png_bytes,
 )
 
@@ -211,6 +213,43 @@ models:
         )
         self.assertNotIn("Content-Type", session.request["headers"])
         self.assertEqual(edit_result.content, session.transparent_content)
+
+    def test_masked_edit_normalizes_first_image_and_mask_as_one_pair(self):
+        channel = self.app.extensions["channel_registry"].get("test")
+        adapter = OpenAIImagesAdapter()
+        session = RecordingImageSession()
+        adapter._local.session = session
+
+        adapter.generate(
+            channel,
+            GenerationRequest(
+                prompt="替换局部对象",
+                model="model-a",
+                size="1024x1024",
+                quality="high",
+                output_format="png",
+                compression=90,
+                references=(ReferencePayload("source.png", png_bytes(), "image/png"),),
+                mask=MaskPayload(
+                    "mask.png",
+                    mask_png_bytes(size=(32, 24), box=(8, 6, 24, 18)),
+                ),
+            ),
+        )
+
+        self.assertEqual(
+            [part[0] for part in session.request["files"]],
+            ["image[]", "mask"],
+        )
+        image_part, mask_part = session.request["files"]
+        self.assertEqual(image_part[1][2], "image/webp")
+        self.assertEqual(mask_part[1][0], "mask.png")
+        self.assertEqual(mask_part[1][2], "image/png")
+        with Image.open(io.BytesIO(image_part[1][1])) as prepared_image:
+            image_size = prepared_image.size
+        with Image.open(io.BytesIO(mask_part[1][1])) as prepared_mask:
+            self.assertEqual(prepared_mask.size, image_size)
+            self.assertEqual(prepared_mask.getchannel("A").getextrema(), (0, 255))
 
     def test_channel_can_omit_optional_user_identifier_for_strict_proxies(self):
         channel = replace(

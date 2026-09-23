@@ -28,6 +28,7 @@ from .extensions import db
 from .integrations.background_removal import MattingAdapterFactory
 from .integrations.images import (
     GenerationRequest,
+    MaskPayload,
     ProviderError,
     ProviderFactory,
     ReferencePayload,
@@ -1137,6 +1138,13 @@ class GenerationWorker:
         except ValueError:
             return False
         references = getattr(item.job, "references", ())
+        if item.job.mask_storage_path:
+            if (
+                not channel.capabilities.supports_mask
+                or len(references) != 1
+                or references[0].asset_id != item.job.mask_target_asset_id
+            ):
+                return False
         if len(references) > channel.capabilities.max_reference_images:
             return False
         reference_bytes = []
@@ -1196,6 +1204,7 @@ class GenerationWorker:
             try:
                 channel = self.channels.get(item.channel_id)
                 references = self._request_references(item)
+                mask = self._request_mask(item)
                 db.session.expire_all()
                 latest_item = db.session.scalar(
                     select(GenerationItem)
@@ -1229,6 +1238,7 @@ class GenerationWorker:
                             self.app.config["SECRET_KEY"], item.job.user_id, channel.identifier
                         ),
                         references=references,
+                        mask=mask,
                         idempotency_key=attempt.idempotency_key,
                     ),
                 )
@@ -1343,6 +1353,21 @@ class GenerationWorker:
                 mime_type=reference.asset.mime_type,
             )
             for reference in item.job.references
+        )
+
+    def _request_mask(self, item: GenerationItem) -> MaskPayload | None:
+        job = item.job
+        if not job.mask_storage_path:
+            return None
+        references = tuple(job.references)
+        if len(references) != 1 or references[0].asset_id != job.mask_target_asset_id:
+            raise ProviderError(
+                "局部重绘原图与蒙版目标不一致",
+                code="invalid_request",
+            )
+        return MaskPayload(
+            filename="mask.png",
+            content=self.storage.read_bytes(job.mask_storage_path),
         )
 
     def _record_channel_success(

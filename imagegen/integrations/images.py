@@ -14,7 +14,11 @@ import requests
 from requests.adapters import HTTPAdapter
 
 from ..config.channels import Channel
-from ..image_payloads import prepare_image_bytes, prepared_filename
+from ..image_payloads import (
+    prepare_image_bytes,
+    prepare_masked_image_bytes,
+    prepared_filename,
+)
 from .diagnostics import response_summary
 from .matting import image_has_real_alpha
 
@@ -63,6 +67,13 @@ class ReferencePayload:
 
 
 @dataclass(frozen=True)
+class MaskPayload:
+    filename: str
+    content: bytes
+    mime_type: str = "image/png"
+
+
+@dataclass(frozen=True)
 class GenerationRequest:
     prompt: str
     model: str
@@ -74,6 +85,7 @@ class GenerationRequest:
     moderation: str = "auto"
     user: str = ""
     references: tuple[ReferencePayload, ...] = ()
+    mask: MaskPayload | None = None
     idempotency_key: str = ""
 
 
@@ -88,6 +100,11 @@ class OpenAIImagesAdapter:
         self._local = threading.local()
 
     def generate(self, channel: Channel, request: GenerationRequest) -> ProviderResult:
+        if request.mask is not None and not request.references:
+            raise ProviderError(
+                "局部重绘蒙版缺少目标图片",
+                code="invalid_request",
+            )
         endpoint = "edits" if request.references else "generations"
         url = _api_endpoint(channel.base_url, f"images/{endpoint}")
         payload: dict[str, Any] = {
@@ -111,13 +128,43 @@ class OpenAIImagesAdapter:
             headers["Idempotency-Key"] = request.idempotency_key
         request_data: dict[str, Any]
         if request.references:
+            source_references = list(request.references)
+            prepared_mask = request.mask
+            if request.mask is not None:
+                first = source_references[0]
+                try:
+                    image_content, image_mime_type, mask_content = prepare_masked_image_bytes(
+                        first.content,
+                        first.mime_type,
+                        request.mask.content,
+                    )
+                except ValueError as exc:
+                    raise ProviderError(
+                        str(exc),
+                        code="invalid_request",
+                    ) from exc
+                source_references[0] = ReferencePayload(
+                    filename=prepared_filename(first.filename, image_mime_type),
+                    content=image_content,
+                    mime_type=image_mime_type,
+                )
+                prepared_mask = MaskPayload(
+                    filename="mask.png",
+                    content=mask_content,
+                )
             references: list[ReferencePayload] = []
             seen_hashes: set[str] = set()
-            for reference in request.references:
+            for index, reference in enumerate(source_references):
                 source_hash = hashlib.sha256(reference.content).hexdigest()
                 if source_hash in seen_hashes:
                     continue
-                content, mime_type = prepare_image_bytes(reference.content, reference.mime_type)
+                if request.mask is not None and index == 0:
+                    content, mime_type = reference.content, reference.mime_type
+                else:
+                    content, mime_type = prepare_image_bytes(
+                        reference.content,
+                        reference.mime_type,
+                    )
                 prepared_hash = hashlib.sha256(content).hexdigest()
                 if prepared_hash in seen_hashes:
                     continue
@@ -129,15 +176,27 @@ class OpenAIImagesAdapter:
                         mime_type=mime_type,
                     )
                 )
+            files = [
+                (
+                    "image[]",
+                    (reference.filename, reference.content, reference.mime_type),
+                )
+                for reference in references
+            ]
+            if prepared_mask is not None:
+                files.append(
+                    (
+                        "mask",
+                        (
+                            prepared_mask.filename,
+                            prepared_mask.content,
+                            prepared_mask.mime_type,
+                        ),
+                    )
+                )
             request_data = {
                 "data": {key: str(value) for key, value in payload.items()},
-                "files": [
-                    (
-                        "image[]",
-                        (reference.filename, reference.content, reference.mime_type),
-                    )
-                    for reference in references
-                ],
+                "files": files,
             }
         else:
             headers["Content-Type"] = "application/json"

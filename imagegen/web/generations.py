@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import json
+
 from flask import abort, jsonify, request, send_file
 from flask_login import current_user, login_required
 from sqlalchemy import select
 
 from ..errors import ServiceError
 from ..extensions import db
+from ..image_masks import MAX_MASK_BYTES
 from ..models import Asset, Workspace
 from ..serializers import job_dict, job_status_dict
-from ..services import GenerationWorkflow, SubmitGeneration
+from ..services import GenerationMaskInput, GenerationWorkflow, SubmitGeneration
 from ..services.common import canvas_request_conflicts
 from ..services.generations.contracts import CANVAS_RESOLUTIONS
 from ..services.generations.planning import GenerationPlan, normalize_generation_strategy
@@ -43,10 +46,52 @@ def _job_payload(generation_service, job):
     )
 
 
+def _generation_submission_body() -> tuple[dict, GenerationMaskInput | None]:
+    if request.mimetype != "multipart/form-data":
+        data = json_body()
+        if str(data.get("mask_target_asset_id", "")).strip():
+            raise ServiceError(
+                "局部重绘请求缺少 PNG 蒙版",
+                code="invalid_mask",
+                status_code=422,
+            )
+        return data, None
+
+    raw_payload = request.form.get("payload", "")
+    try:
+        data = json.loads(raw_payload)
+    except (TypeError, ValueError) as exc:
+        raise ServiceError("局部重绘参数必须是有效 JSON") from exc
+    if not isinstance(data, dict):
+        raise ServiceError("局部重绘参数必须是 JSON 对象")
+    upload = request.files.get("mask")
+    if upload is None:
+        raise ServiceError(
+            "局部重绘请求缺少 PNG 蒙版",
+            code="invalid_mask",
+            status_code=422,
+        )
+    target_asset_id = str(data.get("mask_target_asset_id", "")).strip().lower()
+    if not target_asset_id:
+        raise ServiceError(
+            "局部重绘请求缺少目标图片",
+            code="invalid_mask",
+            status_code=422,
+        )
+    content = upload.stream.read(MAX_MASK_BYTES + 1)
+    if len(content) > MAX_MASK_BYTES:
+        raise ServiceError(
+            "蒙版不能超过 4 MiB",
+            code="invalid_mask",
+            status_code=422,
+        )
+    return data, GenerationMaskInput(target_asset_id=target_asset_id, content=content)
+
+
 @web.post("/api/generations")
 @login_required
 def submit_generation():
-    data = json_body()
+    data, mask = _generation_submission_body()
     workspace = owned_workspace(str(data.get("workspace_id", "")))
     reference_ids = data.get("reference_ids", [])
     if not isinstance(reference_ids, list):
@@ -68,6 +113,12 @@ def submit_generation():
             (workspace.settings or {}).get("generation_strategy", "sample"),
         )
     )
+    if mask is not None and strategy != "sample":
+        raise ServiceError(
+            "局部重绘当前仅支持同提示词抽样",
+            code="mask_strategy_invalid",
+            status_code=422,
+        )
     series_anchor = None
     if strategy == "series":
         series_anchor = ResolvedSeriesAnchor.for_workspace(
@@ -134,6 +185,7 @@ def submit_generation():
         workflow=workflow.metadata,
         transparent_background=json_bool(data.get("transparent_background", False)),
         moderation=str(data.get("moderation", "auto")).strip().lower(),
+        mask=mask,
     )
     generation_service = application_services.generations
     operation_id = str(data.get("operation_id", "")).strip().lower()

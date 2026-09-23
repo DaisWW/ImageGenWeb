@@ -29,6 +29,7 @@ MIXED_CHANNEL_LABEL = "多渠道自动调度"
 @dataclass(frozen=True)
 class ChannelCapabilities:
     modes: tuple[str, ...]
+    supports_mask: bool
     max_reference_images: int
     max_reference_image_mb: int
     max_reference_total_mb: int
@@ -37,6 +38,7 @@ class ChannelCapabilities:
     def public_dict(self) -> dict[str, Any]:
         return {
             "modes": list(self.modes),
+            "supports_mask": self.supports_mask,
             "max_reference_images": self.max_reference_images,
             "max_reference_image_mb": self.max_reference_image_mb,
             "max_reference_total_mb": self.max_reference_total_mb,
@@ -286,6 +288,7 @@ class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
 
         capabilities = ChannelCapabilities(
             modes=modes,
+            supports_mask=as_bool(capabilities_raw.get("supports_mask", False)),
             max_reference_images=bounded_int(capabilities_raw, "max_reference_images", 1, 0, 16),
             max_reference_image_mb=bounded_int(
                 capabilities_raw, "max_reference_image_mb", 10, 1, 50

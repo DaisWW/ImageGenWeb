@@ -41,6 +41,19 @@ def transparent_icon_png_bytes() -> bytes:
     return stream.getvalue()
 
 
+def mask_png_bytes(
+    *,
+    size: tuple[int, int] = (64, 48),
+    box: tuple[int, int, int, int] = (16, 12, 48, 36),
+) -> bytes:
+    image = Image.new("RGBA", size, (255, 255, 255, 255))
+    transparent = Image.new("RGBA", (box[2] - box[0], box[3] - box[1]), (255, 255, 255, 0))
+    image.paste(transparent, box[:2])
+    stream = io.BytesIO()
+    image.save(stream, format="PNG")
+    return stream.getvalue()
+
+
 def checkerboard_png_bytes(
     *, transparent_hole: bool = False, transparent_center: bool = False
 ) -> bytes:
@@ -94,6 +107,7 @@ channels:
     price_rmb: 1.2500
     capabilities:
       modes: [text2img, img2img]
+      supports_mask: true
       max_reference_images: 8
       max_reference_image_mb: 10
       max_reference_total_mb: 40

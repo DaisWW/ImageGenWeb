@@ -210,6 +210,17 @@ class GenerationJob(TimestampMixin, db.Model):
     __table_args__ = (
         Index("ix_generation_jobs_workspace_created", "workspace_id", "created_at"),
         Index("ix_generation_jobs_user_status", "user_id", "status"),
+        UniqueConstraint("mask_storage_path", name="uq_generation_jobs_mask_storage_path"),
+        CheckConstraint(
+            "(mask_storage_path IS NULL AND mask_target_asset_id IS NULL "
+            "AND mask_sha256 IS NULL AND mask_byte_count IS NULL "
+            "AND mask_width IS NULL AND mask_height IS NULL) OR "
+            "(mask_storage_path IS NOT NULL AND mask_target_asset_id IS NOT NULL "
+            "AND mask_sha256 IS NOT NULL AND mask_byte_count IS NOT NULL "
+            "AND mask_byte_count > 0 AND mask_width IS NOT NULL "
+            "AND mask_width > 0 AND mask_height IS NOT NULL AND mask_height > 0)",
+            name="ck_generation_jobs_mask_complete",
+        ),
     )
 
     id: Mapped[str] = mapped_column(db.String(32), primary_key=True, default=new_public_id)
@@ -230,6 +241,14 @@ class GenerationJob(TimestampMixin, db.Model):
     output_format: Mapped[str] = mapped_column(db.String(20))
     compression: Mapped[int]
     transparent_background: Mapped[bool] = mapped_column(default=False)
+    mask_target_asset_id: Mapped[str | None] = mapped_column(
+        ForeignKey("assets.id", ondelete="RESTRICT"), index=True
+    )
+    mask_storage_path: Mapped[str | None] = mapped_column(db.String(500))
+    mask_sha256: Mapped[str | None] = mapped_column(db.String(64))
+    mask_byte_count: Mapped[int | None]
+    mask_width: Mapped[int | None]
+    mask_height: Mapped[int | None]
     requested_count: Mapped[int]
     price_per_image_rmb: Mapped[Decimal] = mapped_column(MONEY_TYPE)
     reserved_rmb: Mapped[Decimal] = mapped_column(MONEY_TYPE)

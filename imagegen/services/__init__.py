@@ -4,7 +4,12 @@ from .background_removal import BackgroundRemovalService
 from .billing import BillingService, SpendingSummary
 from .common import money
 from .conversations import ConversationService
-from .generations import GenerationService, GenerationWorkflow, SubmitGeneration
+from .generations import (
+    GenerationMaskInput,
+    GenerationService,
+    GenerationWorkflow,
+    SubmitGeneration,
+)
 from .image_library import ImageLibraryService
 from .retention import RetentionService
 from .runtime_logs import RuntimeLogService
@@ -23,6 +28,7 @@ __all__ = [
     "BillingService",
     "ConversationService",
     "GenerationService",
+    "GenerationMaskInput",
     "GenerationWorkflow",
     "ImageLibraryService",
     "RetentionService",

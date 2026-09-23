@@ -133,6 +133,22 @@ class ImageStorage:
         relative = directory / f"{item_id}.{inspected.extension}"
         return self._save_with_thumbnail(relative, content, inspected)
 
+    def save_generation_mask(
+        self,
+        *,
+        user_id: int,
+        workspace_id: str,
+        job_id: str,
+        content: bytes,
+    ) -> StoredImage:
+        inspected = self.inspect(content)
+        if inspected.mime_type != "image/png":
+            raise InvalidImageError("蒙版必须是 PNG 图片")
+        directory = Path("users") / str(user_id) / "workspaces" / workspace_id / "generations"
+        relative = directory / job_id / "mask.png"
+        self._atomic_write(relative, content)
+        return replace(inspected, relative_path=relative.as_posix())
+
     def save_background_removal(
         self,
         *,

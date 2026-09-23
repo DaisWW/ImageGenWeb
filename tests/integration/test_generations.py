@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import threading
 from decimal import Decimal
@@ -7,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from imagegen.config.channels import ChannelRegistry
 from imagegen.extensions import db
@@ -25,6 +27,7 @@ from tests.support.platform import (
     FakeProviderFactory,
     HoldingExecutor,
     PlatformTestCase,
+    mask_png_bytes,
     png_bytes,
 )
 
@@ -134,6 +137,217 @@ class TestGenerations(PlatformTestCase):
             [item["id"] for item in image_response.json["job"]["references"]],
             [reference.id],
         )
+
+    def test_masked_generation_persists_one_target_and_reaches_worker(self):
+        workspace = self.create_workspace("局部重绘")
+        reference = self.services.workspaces.add_assets(
+            workspace,
+            [("source.png", png_bytes())],
+        )[0]
+        payload = {
+            "workspace_id": workspace.id,
+            "channel_id": "test",
+            "model": "model-b",
+            "prompt": "将框选区域替换为白色陶瓷杯，保持其他内容不变",
+            "reference_ids": [reference.id],
+            "mask_target_asset_id": reference.id,
+        }
+
+        response = self.user_client().post(
+            "/api/generations",
+            data={
+                "payload": json.dumps(payload, ensure_ascii=False),
+                "mask": (io.BytesIO(mask_png_bytes()), "mask.png"),
+            },
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 202, response.get_data(as_text=True))
+        serialized = response.json["job"]
+        self.assertTrue(serialized["has_mask"])
+        self.assertEqual(serialized["mask_target_asset_id"], reference.id)
+        self.assertEqual([asset["id"] for asset in serialized["references"]], [reference.id])
+        job = db.session.get(GenerationJob, serialized["id"])
+        self.assertEqual(job.mask_target_asset_id, reference.id)
+        self.assertEqual(job.mask_width, 64)
+        self.assertEqual(job.mask_height, 48)
+        stored_mask = self.app.extensions["image_storage"].read_bytes(job.mask_storage_path)
+
+        worker = self.create_worker()
+        worker.providers = FakeProviderFactory()
+        channel = self.app.extensions["channel_registry"].get("test")
+        item_id = serialized["items"][0]["id"]
+        self.assertTrue(worker._claim(item_id, channel))
+        worker._process_item(item_id)
+        self.assertEqual(worker.providers.adapter.request.mask.content, stored_mask)
+        self.assertEqual(len(worker.providers.adapter.request.references), 1)
+
+    def test_masked_generation_rejects_stale_target_and_empty_selection(self):
+        workspace = self.create_workspace("局部重绘校验")
+        references = self.services.workspaces.add_assets(
+            workspace,
+            [
+                ("first.png", png_bytes()),
+                ("second.png", png_bytes((90, 80, 170))),
+            ],
+        )
+        client = self.user_client()
+
+        stale = client.post(
+            "/api/generations",
+            data={
+                "payload": json.dumps(
+                    {
+                        "workspace_id": workspace.id,
+                        "channel_id": "test",
+                        "model": "model-b",
+                        "prompt": "替换框选区域",
+                        "reference_ids": [references[0].id],
+                        "mask_target_asset_id": references[1].id,
+                    }
+                ),
+                "mask": (io.BytesIO(mask_png_bytes()), "mask.png"),
+            },
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(stale.status_code, 409)
+        self.assertEqual(stale.json["code"], "mask_target_conflict")
+
+        opaque = client.post(
+            "/api/generations",
+            data={
+                "payload": json.dumps(
+                    {
+                        "workspace_id": workspace.id,
+                        "channel_id": "test",
+                        "model": "model-b",
+                        "prompt": "替换框选区域",
+                        "reference_ids": [references[0].id],
+                        "mask_target_asset_id": references[0].id,
+                    }
+                ),
+                "mask": (io.BytesIO(png_bytes()), "opaque.png"),
+            },
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(opaque.status_code, 422)
+        self.assertEqual(opaque.json["code"], "invalid_mask")
+        self.assertIn("尚未选择", opaque.json["error"])
+
+    def test_generation_mask_metadata_constraint_rejects_partial_record(self):
+        workspace = self.create_workspace("局部重绘元数据约束")
+        reference = self.services.workspaces.add_assets(
+            workspace,
+            [("source.png", png_bytes())],
+        )[0]
+        job = self.submit(workspace)
+        job.mask_target_asset_id = reference.id
+        job.mask_storage_path = (
+            f"users/{self.user.id}/workspaces/{workspace.id}/generations/{job.id}/mask.png"
+        )
+        job.mask_sha256 = "a" * 64
+        job.mask_width = 64
+        job.mask_height = 48
+
+        with self.assertRaises(IntegrityError):
+            db.session.flush()
+        db.session.rollback()
+
+    def test_masked_generation_reports_missing_reference_file(self):
+        workspace = self.create_workspace("局部重绘文件校验")
+        reference = self.services.workspaces.add_assets(
+            workspace,
+            [("source.png", png_bytes())],
+        )[0]
+        self.app.extensions["image_storage"].delete(reference.storage_path)
+
+        response = self.user_client().post(
+            "/api/generations",
+            data={
+                "payload": json.dumps(
+                    {
+                        "workspace_id": workspace.id,
+                        "channel_id": "test",
+                        "model": "model-b",
+                        "prompt": "替换框选区域",
+                        "reference_ids": [reference.id],
+                        "mask_target_asset_id": reference.id,
+                    }
+                ),
+                "mask": (io.BytesIO(mask_png_bytes()), "mask.png"),
+            },
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json["code"], "reference_unavailable")
+        self.assertEqual(db.session.scalar(select(func.count(GenerationJob.id))), 0)
+
+    def test_masked_generation_workspace_delete_removes_mask_file(self):
+        workspace = self.create_workspace("局部重绘清理")
+        reference = self.services.workspaces.add_assets(
+            workspace,
+            [("source.png", png_bytes())],
+        )[0]
+        response = self.user_client().post(
+            "/api/generations",
+            data={
+                "payload": json.dumps(
+                    {
+                        "workspace_id": workspace.id,
+                        "channel_id": "test",
+                        "model": "model-b",
+                        "prompt": "替换框选区域",
+                        "reference_ids": [reference.id],
+                        "mask_target_asset_id": reference.id,
+                    }
+                ),
+                "mask": (io.BytesIO(mask_png_bytes()), "mask.png"),
+            },
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 202)
+        job = db.session.get(GenerationJob, response.json["job"]["id"])
+        mask_path = job.mask_storage_path
+
+        self.services.workspaces.delete(workspace)
+
+        self.assertIsNone(db.session.get(GenerationJob, job.id))
+        self.assertFalse((self.app.extensions["image_storage"].root / mask_path).exists())
+
+    def test_masked_generation_rejects_channel_without_mask_capability(self):
+        workspace = self.create_workspace("局部重绘渠道能力")
+        reference = self.services.workspaces.add_assets(
+            workspace,
+            [("source.png", png_bytes())],
+        )[0]
+        self.channel_path.write_text(
+            CHANNEL_CONFIG.replace("supports_mask: true", "supports_mask: false"),
+            encoding="utf-8",
+        )
+        self.assertTrue(self.app.extensions["channel_registry"].reload(force=True))
+
+        response = self.user_client().post(
+            "/api/generations",
+            data={
+                "payload": json.dumps(
+                    {
+                        "workspace_id": workspace.id,
+                        "channel_id": "test",
+                        "model": "model-b",
+                        "prompt": "替换框选区域",
+                        "reference_ids": [reference.id],
+                        "mask_target_asset_id": reference.id,
+                    }
+                ),
+                "mask": (io.BytesIO(mask_png_bytes()), "mask.png"),
+            },
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json["code"], "mask_not_supported")
+        self.assertEqual(db.session.scalar(select(func.count(GenerationJob.id))), 0)
 
     def test_generation_api_keeps_quality_independent_from_reviewed_stage(self):
         client = self.user_client()

@@ -261,6 +261,8 @@ def job_dict(
         "output_format": job.output_format,
         "compression": job.compression,
         "transparent_background": job.transparent_background,
+        "has_mask": bool(job.mask_storage_path),
+        "mask_target_asset_id": job.mask_target_asset_id,
         "moderation": moderation,
         "requested_count": job.requested_count,
         "price_per_image_rmb": _amount(job.price_per_image_rmb),

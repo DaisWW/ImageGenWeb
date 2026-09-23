@@ -132,6 +132,7 @@ class RuntimeConfigService:
                     "price_rmb": raw.get("price_rmb", "0"),
                     "capabilities": {
                         "modes": _strings(raw.get("capabilities"), "modes"),
+                        "supports_mask": as_bool(_nested(raw, "capabilities", "supports_mask")),
                         "max_reference_images": _nested(
                             raw, "capabilities", "max_reference_images"
                         ),

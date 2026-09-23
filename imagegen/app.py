@@ -150,7 +150,7 @@ def create_app(config: dict | None = None) -> Flask:
         users=users,
         workspaces=workspaces,
         image_library=ImageLibraryService(storage),
-        generations=GenerationService(channels, billing, settings),
+        generations=GenerationService(channels, billing, settings, storage),
         conversations=ConversationService(
             chat_models,
             storage,

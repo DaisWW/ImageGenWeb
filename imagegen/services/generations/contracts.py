@@ -11,6 +11,12 @@ GENERATION_QUALITIES = {"auto", "low", "medium", "high", "xhigh", "max"}
 CANVAS_RESOLUTIONS = {"panel", "conversation"}
 
 
+@dataclass(frozen=True, slots=True)
+class GenerationMaskInput:
+    target_asset_id: str
+    content: bytes
+
+
 @dataclass(frozen=True)
 class SubmitGeneration:
     model: str
@@ -26,6 +32,7 @@ class SubmitGeneration:
     workflow: dict[str, object] = field(default_factory=dict)
     transparent_background: bool = False
     moderation: str = "auto"
+    mask: GenerationMaskInput | None = None
     # Empty values keep the compatibility auto-routing path.  A concrete ID
     # pins the request to that user-selected channel.
     channel_id: str = ""

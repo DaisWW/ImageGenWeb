@@ -5,7 +5,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterable
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
@@ -389,8 +389,28 @@ class WorkspaceService:
                 Decimal("0"),
             )
             self.billing.release(user, job, releasable)
+        messages = list(
+            db.session.scalars(
+                select(ConversationMessage).where(
+                    ConversationMessage.workspace_id == locked_workspace.id
+                )
+            )
+        )
+        state = db.session.get(ConversationState, locked_workspace.id)
+        assets = list(
+            db.session.scalars(select(Asset).where(Asset.workspace_id == locked_workspace.id))
+        )
         self.storage.delete_workspace(locked_workspace.user_id, locked_workspace.id)
-        db.session.delete(locked_workspace)
+        for record in [*jobs, *messages]:
+            db.session.delete(record)
+        if state:
+            db.session.delete(state)
+        # Delete foreign-key dependents before assets.  Generation references
+        # and conversation attachments both retain their source asset.
+        db.session.flush()
+        for asset in assets:
+            db.session.delete(asset)
+        db.session.execute(delete(Workspace).where(Workspace.id == locked_workspace.id))
         db.session.commit()
 
     def clear(self, workspace: Workspace) -> Workspace:

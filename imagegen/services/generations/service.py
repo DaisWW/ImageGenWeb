@@ -23,14 +23,17 @@ from ...models import (
     GenerationReference,
     User,
     Workspace,
+    new_public_id,
     utcnow,
 )
+from ...storage import ImageStorage
 from ..billing import BillingService
 from ..common import is_gpt_image_2_5_model, is_gpt_image_2_model, money
 from ..settings import SystemSettingsService
 from ..workspace_settings import sanitize_workspace_settings
 from .contracts import SubmitGeneration, sanitize_workflow
 from .estimates import GenerationDurationEstimator
+from .masks import GenerationMaskManager
 from .validation import GenerationRequestValidator
 
 
@@ -40,11 +43,14 @@ class GenerationService:
         channels: ChannelRegistry,
         billing: BillingService,
         settings: SystemSettingsService,
+        storage: ImageStorage,
     ):
         self.channels = channels
         self.billing = billing
         self.settings = settings
+        self.storage = storage
         self.validator = GenerationRequestValidator(settings)
+        self.masks = GenerationMaskManager(storage)
         self.duration_estimator = GenerationDurationEstimator()
 
     def submit(
@@ -54,6 +60,7 @@ class GenerationService:
         request: SubmitGeneration,
     ) -> GenerationJob:
         references = self.validator.load_references(workspace, request.reference_ids)
+        generation_mask = self.masks.validate(request.mask, references)
         routing_channels, selected_model, normalized_size = self._resolve_routing(
             request,
             workspace.kind,
@@ -100,6 +107,7 @@ class GenerationService:
             "candidate_labels": [channel.label for channel in routing_channels],
         }
         job = GenerationJob(
+            id=new_public_id(),
             user_id=user.id,
             workspace_id=workspace.id,
             # Keep a useful summary for legacy consumers.  The item-level
@@ -123,58 +131,78 @@ class GenerationService:
             charged_rmb=money(0),
             status="queued",
         )
-        db.session.add(job)
-        db.session.flush()
-        for position, asset in enumerate(references):
-            db.session.add(
-                GenerationReference(
-                    job_id=job.id,
-                    asset_id=asset.id,
-                    position=position,
-                )
-            )
-        for position in range(requested_count):
-            db.session.add(
-                GenerationItem(
-                    job_id=job.id,
+        stored_mask_path = ""
+        try:
+            if generation_mask is not None and request.mask is not None:
+                stored_mask = self.masks.save(
+                    generation_mask,
                     user_id=user.id,
-                    channel_id=(
+                    workspace_id=workspace.id,
+                    job_id=job.id,
+                )
+                stored_mask_path = stored_mask.relative_path
+                job.mask_target_asset_id = request.mask.target_asset_id
+                job.mask_storage_path = stored_mask.relative_path
+                job.mask_sha256 = stored_mask.sha256
+                job.mask_byte_count = stored_mask.byte_count
+                job.mask_width = stored_mask.width
+                job.mask_height = stored_mask.height
+            db.session.add(job)
+            for position, asset in enumerate(references):
+                db.session.add(
+                    GenerationReference(
+                        job_id=job.id,
+                        asset_id=asset.id,
+                        position=position,
+                    )
+                )
+            for position in range(requested_count):
+                db.session.add(
+                    GenerationItem(
+                        job_id=job.id,
+                        user_id=user.id,
+                        channel_id=(
+                            primary_channel.identifier if user_selected_channel else AUTO_CHANNEL_ID
+                        ),
+                        channel_label=(
+                            primary_channel.label if user_selected_channel else AUTO_CHANNEL_LABEL
+                        ),
+                        position=position,
+                        prompt=item_prompts[position],
+                        status="queued",
+                        charged_rmb=money(0),
+                        provider_price_rmb=money(0),
+                    )
+                )
+            workspace.settings = sanitize_workspace_settings(
+                {
+                    **(workspace.settings or {}),
+                    "mode": request.mode,
+                    "prompt": request.prompt,
+                    "channel_id": (
                         primary_channel.identifier if user_selected_channel else AUTO_CHANNEL_ID
                     ),
-                    channel_label=(
-                        primary_channel.label if user_selected_channel else AUTO_CHANNEL_LABEL
-                    ),
-                    position=position,
-                    prompt=item_prompts[position],
-                    status="queued",
-                    charged_rmb=money(0),
-                    provider_price_rmb=money(0),
-                )
+                    "model": selected_model.identifier,
+                    "size": normalized_size,
+                    "quality": request.quality,
+                    "output_format": request.output_format,
+                    "compression": request.compression,
+                    "transparent_background": request.transparent_background,
+                    "moderation": request.moderation,
+                    "batch_count": request.batch_count,
+                    "generation_stage": workflow["generation_stage"],
+                    "prompt_draft_id": workflow["prompt_draft_id"],
+                    "creative_direction_id": workflow["creative_direction_id"],
+                    "generation_strategy": workflow.get("generation_strategy", "sample"),
+                },
+                self.settings.runtime(),
             )
-        workspace.settings = sanitize_workspace_settings(
-            {
-                **(workspace.settings or {}),
-                "mode": request.mode,
-                "prompt": request.prompt,
-                "channel_id": (
-                    primary_channel.identifier if user_selected_channel else AUTO_CHANNEL_ID
-                ),
-                "model": selected_model.identifier,
-                "size": normalized_size,
-                "quality": request.quality,
-                "output_format": request.output_format,
-                "compression": request.compression,
-                "transparent_background": request.transparent_background,
-                "moderation": request.moderation,
-                "batch_count": request.batch_count,
-                "generation_stage": workflow["generation_stage"],
-                "prompt_draft_id": workflow["prompt_draft_id"],
-                "creative_direction_id": workflow["creative_direction_id"],
-                "generation_strategy": workflow.get("generation_strategy", "sample"),
-            },
-            self.settings.runtime(),
-        )
-        db.session.commit()
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            if stored_mask_path:
+                self.storage.delete(stored_mask_path)
+            raise
         return self.get_job(job.id, user_id=user.id)
 
     def _resolve_routing(
