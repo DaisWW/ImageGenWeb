@@ -25,8 +25,8 @@ channels:
     price_rmb: 0.0600
     capabilities:
       modes: [text2img, img2img]
-      # 兼容代理完成真实 /images/edits + mask 诊断后再由管理员开启。
-      supports_mask: false
+      # 官方编辑接口支持 /images/edits + mask；兼容代理异常时可由管理员关闭。
+      supports_mask: true
       # 2026-07-17 使用 gpt-image-2、low、PNG 实测垫图合并：
       # 2～8、17、32 张请求均成功；32 张结果完整保留 01～32，未漏图或重复。
       # 32 张仍未触及刀哥的上游硬上限，但返回尺寸有偏离请求值的情况。
@@ -65,8 +65,8 @@ channels:
     price_rmb: 0.0800
     capabilities:
       modes: [text2img, img2img]
-      # 兼容代理完成真实 /images/edits + mask 诊断后再由管理员开启。
-      supports_mask: false
+      # 官方编辑接口支持 /images/edits + mask；兼容代理异常时可由管理员关闭。
+      supports_mask: true
       # 2026-07-17 使用 gpt-image-2、low、PNG 实测垫图合并：
       # 1～8、17、20 张请求均成功；20 张结果完整保留 01～20，未漏图或重复。
       # 21、22、24、31、32 张均返回 HTTP 502，32 张重试仍失败。

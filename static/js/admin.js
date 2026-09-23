@@ -795,7 +795,7 @@
       const capabilities = channel?.capabilities || {};
       this.setChecks(form, "mode", capabilities.modes || ["text2img", "img2img"], ["text2img", "img2img"]);
       this.setChecks(form, "format", capabilities.formats || ["png"], ["png", "jpeg", "webp"]);
-      form.elements.supports_mask.checked = capabilities.supports_mask === true;
+      form.elements.supports_mask.checked = channel ? capabilities.supports_mask === true : true;
       form.elements.max_reference_images.value = capabilities.max_reference_images ?? 1;
       form.elements.max_reference_image_mb.value = capabilities.max_reference_image_mb ?? 10;
       form.elements.max_reference_total_mb.value = capabilities.max_reference_total_mb ?? 40;
