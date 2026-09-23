@@ -76,7 +76,6 @@ class Channel:
     capabilities: ChannelCapabilities
     limits: ChannelLimits
     api_key: str = field(repr=False)
-    priority: int = 100
     send_user_identifier: bool = True
 
     @property
@@ -97,7 +96,6 @@ class Channel:
         return {
             "id": self.identifier,
             "label": self.label,
-            "priority": self.priority,
             "enabled": self.enabled,
             "configured": self.configured,
             "models": [
@@ -115,7 +113,6 @@ class Channel:
         return {
             "id": self.identifier,
             "label": self.label,
-            "priority": self.priority,
             "enabled": self.enabled,
             "configured": self.configured,
             "adapter": self.adapter,
@@ -185,9 +182,8 @@ class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
             channels = list(self._require_snapshot().channels.values())
         if not include_disabled:
             channels = [channel for channel in channels if channel.enabled]
-        # Python's sort is stable, so equal priorities retain the
-        # administrator's configured order.
-        return sorted(channels, key=lambda channel: channel.priority)
+        # The snapshot dict preserves the administrator's configured list order.
+        return channels
 
     def get(self, identifier: str, *, require_available: bool = True) -> Channel:
         self.reload_if_changed()
@@ -209,10 +205,7 @@ class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
                 "last_error": self._last_error,
                 "queue": snapshot.queue.as_dict(),
                 "channels": [
-                    channel.editable_dict()
-                    for channel in sorted(
-                        snapshot.channels.values(), key=lambda item: item.priority
-                    )
+                    channel.editable_dict() for channel in snapshot.channels.values()
                 ],
             }
 
@@ -258,7 +251,6 @@ class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
         if identifier in {AUTO_CHANNEL_ID, MIXED_CHANNEL_ID}:
             raise ValueError(f"渠道 ID 为系统保留值：{identifier}")
         label = required_string(raw, "label", 100, section="渠道")
-        priority = bounded_int(raw, "priority", 100, 1, 10000)
         adapter = raw.get("adapter", "openai_images")
         if adapter not in SUPPORTED_ADAPTERS:
             raise ValueError(f"{label} 使用了不支持的适配器：{adapter}")
@@ -320,7 +312,6 @@ class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
         return Channel(
             identifier=identifier,
             label=label,
-            priority=priority,
             enabled=as_bool(raw.get("enabled", True)),
             adapter=adapter,
             base_url=base_url,

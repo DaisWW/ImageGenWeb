@@ -15,6 +15,60 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class TestMigrationCompatibility(unittest.TestCase):
+    def test_saved_channel_priority_fields_are_removed_without_changing_order(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "channel-order.sqlite"
+            database_url = f"sqlite:///{database_path.as_posix()}"
+            config = Config(str(PROJECT_ROOT / "alembic.ini"))
+            config.set_main_option("script_location", str(PROJECT_ROOT / "migrations"))
+            config.set_main_option("sqlalchemy.url", database_url)
+
+            with patch.dict(os.environ, {"DATABASE_URL": database_url}):
+                command.upgrade(config, "6d3e8a4c2b19")
+
+            engine = create_engine(database_url)
+            document = {
+                "version": 1,
+                "queue": {},
+                "channels": [
+                    {"id": "later", "priority": 10},
+                    {"id": "first", "priority": 1},
+                ],
+            }
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO system_state (key, value, updated_at) "
+                        "VALUES (:key, :value, CURRENT_TIMESTAMP)"
+                    ),
+                    {
+                        "key": "runtime_config.channels.v1",
+                        "value": json.dumps({"schema": 1, "document": document}),
+                    },
+                )
+            engine.dispose()
+
+            with patch.dict(os.environ, {"DATABASE_URL": database_url}):
+                command.upgrade(config, "head")
+                command.check(config)
+
+            engine = create_engine(database_url)
+            try:
+                with engine.connect() as connection:
+                    value = connection.scalar(
+                        text(
+                            "SELECT value FROM system_state "
+                            "WHERE key = 'runtime_config.channels.v1'"
+                        )
+                    )
+                saved = json.loads(value)
+                channels = saved["document"]["channels"]
+                self.assertEqual([channel["id"] for channel in channels], ["later", "first"])
+                self.assertNotIn("priority", channels[0])
+                self.assertNotIn("priority", channels[1])
+            finally:
+                engine.dispose()
+
     def test_old_chat_model_configuration_and_selection_are_removed(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             database_path = Path(temporary_directory) / "chat-models.sqlite"

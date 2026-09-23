@@ -9,10 +9,7 @@
   Object.assign(StudioApp.prototype, {
     routingChannels() {
       return [...(this.channels || [])]
-        .filter((channel) => channel.enabled !== false && channel.configured !== false)
-        .sort((left, right) => (
-          Number(left.priority ?? 100) - Number(right.priority ?? 100)
-        ));
+        .filter((channel) => channel.enabled !== false && channel.configured !== false);
     },
 
     generationRoutingCandidates(

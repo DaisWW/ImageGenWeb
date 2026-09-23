@@ -169,6 +169,10 @@
       this.el.queueSettingsButton.addEventListener("click", () => this.openQueueDialog());
       this.el.createChannelButton.addEventListener("click", () => this.openChannelDialog());
       this.el.channelTableBody.addEventListener("click", (event) => this.handleChannelAction(event));
+      this.el.channelTableBody.addEventListener("dragstart", (event) => this.startChannelDrag(event));
+      this.el.channelTableBody.addEventListener("dragover", (event) => this.overChannelDrag(event));
+      this.el.channelTableBody.addEventListener("drop", (event) => this.dropChannel(event));
+      this.el.channelTableBody.addEventListener("dragend", () => this.endChannelDrag());
       this.el.channelForm.addEventListener("submit", (event) => this.saveChannel(event));
       this.el.addChannelModelButton.addEventListener("click", () => this.addChannelModelRow());
       this.el.channelModelList.addEventListener("click", (event) => {
@@ -759,11 +763,10 @@
       this.el.configVersion.textContent = `${origin} · 版本 ${config.version}`;
       this.el.configError.hidden = !config.last_error;
       this.el.configError.textContent = config.last_error || "";
-      this.el.channelTableBody.innerHTML = config.channels.map((channel) => `
-        <tr>
-          <td><strong>${UI.escapeHtml(channel.label)}</strong><small class="subline">${UI.escapeHtml(channel.id)}</small></td>
+      this.el.channelTableBody.innerHTML = config.channels.map((channel, index) => `
+        <tr draggable="true" data-channel-index="${index}">
+          <td><span class="channel-name"><i data-lucide="grip-vertical" aria-hidden="true"></i><span><strong>${UI.escapeHtml(channel.label)}</strong><small class="subline">${UI.escapeHtml(channel.id)}</small></span></span></td>
           <td><span class="status-badge ${channel.configured ? "succeeded" : "failed"}"><span></span>${channel.configured ? "可用" : channel.enabled ? "缺少 Key" : "停用"}</span></td>
-          <td>${Number(channel.priority ?? 100)}</td>
           <td class="money-cell">${UI.money(channel.price_rmb)}<small class="subline">每张</small></td>
           <td><div class="tag-list">${channel.models.filter((model) => model.enabled).map((model) => `<span>${UI.escapeHtml(model.label)}<small>${UI.escapeHtml(model.id)}</small></span>`).join("")}</div></td>
           <td>${channel.limits.max_concurrency}</td>
@@ -784,7 +787,6 @@
       form.elements.id.value = channel?.id || "";
       form.elements.id.readOnly = Boolean(channel);
       form.elements.label.value = channel?.label || "";
-      form.elements.priority.value = channel?.priority ?? 100;
       form.elements.enabled.checked = channel ? channel.enabled : true;
       form.elements.send_user_identifier.checked = channel?.send_user_identifier !== false;
       form.elements.base_url.value = channel?.base_url || "";
@@ -883,7 +885,6 @@
       return {
         id: form.elements.id.value.trim(),
         label: form.elements.label.value.trim(),
-        priority: Number(form.elements.priority.value),
         enabled: form.elements.enabled.checked,
         send_user_identifier: form.elements.send_user_identifier.checked,
         base_url: form.elements.base_url.value.trim(),
@@ -909,6 +910,51 @@
           half_open_max_probes: Number(form.elements.half_open_max_probes.value),
         },
       };
+    }
+
+    startChannelDrag(event) {
+      if (event.target.closest("button")) return;
+      const row = event.target.closest("[data-channel-index]");
+      if (!row) return;
+      this.draggedChannelIndex = Number(row.dataset.channelIndex);
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", row.dataset.channelIndex);
+    }
+
+    overChannelDrag(event) {
+      if (this.draggedChannelIndex === undefined) return;
+      const row = event.target.closest("[data-channel-index]");
+      if (!row) return;
+      event.preventDefault();
+      this.el.channelTableBody.querySelectorAll(".channel-drop-target")
+        .forEach((item) => item.classList.remove("channel-drop-target"));
+      if (Number(row.dataset.channelIndex) !== this.draggedChannelIndex) {
+        row.classList.add("channel-drop-target");
+      }
+    }
+
+    async dropChannel(event) {
+      if (this.draggedChannelIndex === undefined) return;
+      event.preventDefault();
+      const row = event.target.closest("[data-channel-index]");
+      const from = this.draggedChannelIndex;
+      this.endChannelDrag();
+      if (!row) return;
+      const to = Number(row.dataset.channelIndex);
+      if (from === to) return;
+      const next = copy(this.channelConfig);
+      next.channels.splice(to, 0, next.channels.splice(from, 1)[0]);
+      try {
+        await this.persistChannels(next, "渠道顺序已更新");
+      } catch (error) {
+        UI.toast(error.message, "error");
+      }
+    }
+
+    endChannelDrag() {
+      this.draggedChannelIndex = undefined;
+      this.el.channelTableBody.querySelectorAll(".channel-drop-target")
+        .forEach((item) => item.classList.remove("channel-drop-target"));
     }
 
     openQueueDialog() {

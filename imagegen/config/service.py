@@ -120,7 +120,6 @@ class RuntimeConfigService:
                 {
                     "id": identifier,
                     "label": str(raw.get("label", "")).strip(),
-                    "priority": raw.get("priority", old.priority if old else 100),
                     "enabled": as_bool(raw.get("enabled", True)),
                     "adapter": "openai_images",
                     "send_user_identifier": as_bool(

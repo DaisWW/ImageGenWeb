@@ -300,6 +300,7 @@ class TestAdminAndMaintenance(PlatformTestCase):
         self.assertFalse(initial["managed"])
         self.assertEqual(initial["source"], "file")
         self.assertEqual(initial["queue"]["max_channel_attempts"], 2)
+        self.assertNotIn("priority", initial["channels"][0])
         self.assertEqual(initial["channels"][0]["limits"]["failure_window_seconds"], 120)
         self.assertEqual(initial["channels"][0]["limits"]["failure_threshold"], 3)
         self.assertEqual(initial["channels"][0]["limits"]["circuit_breaker_seconds"], 300)
@@ -338,6 +339,25 @@ class TestAdminAndMaintenance(PlatformTestCase):
         stale = client.put("/api/admin/channels", json=initial)
         self.assertEqual(stale.status_code, 409)
         self.assertEqual(stale.json["code"], "config_conflict")
+
+    def test_admin_channel_order_is_saved_and_used_as_routing_order(self):
+        client = self.admin_client()
+        config = client.get("/api/admin/channels").json["config"]
+        config["channels"] = list(reversed(config["channels"]))
+
+        response = client.put("/api/admin/channels", json=config)
+
+        self.assertEqual(response.status_code, 200)
+        saved = response.json["config"]
+        self.assertEqual(
+            [channel["id"] for channel in saved["channels"]],
+            [channel["id"] for channel in config["channels"]],
+        )
+        self.assertTrue(all("priority" not in channel for channel in saved["channels"]))
+        self.assertEqual(
+            [channel.identifier for channel in self.app.extensions["channel_registry"].list()],
+            [channel["id"] for channel in config["channels"]],
+        )
 
     def test_invalid_admin_channel_config_returns_bad_request(self):
         client = self.admin_client()

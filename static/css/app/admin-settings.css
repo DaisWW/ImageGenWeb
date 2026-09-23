@@ -165,6 +165,14 @@ tbody tr:hover td {
   border-top: 2px solid var(--accent);
 }
 
+#channelTableBody tr[draggable] {
+  cursor: grab;
+}
+
+#channelTableBody tr.channel-drop-target td {
+  border-top: 2px solid var(--accent);
+}
+
 .chat-model-name {
   display: inline-flex;
   align-items: center;
@@ -175,6 +183,22 @@ tbody tr:hover td {
   width: 15px;
   height: 15px;
   color: var(--muted);
+}
+
+.channel-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.channel-name svg {
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+}
+
+.channel-name > span {
+  display: block;
 }
 
 .form-grid {

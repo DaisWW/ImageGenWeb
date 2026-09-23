@@ -992,9 +992,8 @@ class GenerationWorker:
     ) -> Channel | None:
         """Pick the first capable channel with an open slot.
 
-        The registry is priority ordered, so iterating it implements the
-        administrator's lower-number-first policy while still filling the
-        next provider when a higher-priority channel is saturated.
+        The registry follows the administrator's configured list order, while
+        still filling the next provider when an earlier channel is saturated.
         """
 
         if circuit_states is None:

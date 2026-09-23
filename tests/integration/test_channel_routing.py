@@ -6,6 +6,7 @@ from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import Mock, patch
 
+import yaml
 from sqlalchemy import event, func, insert, select
 
 from imagegen.extensions import db
@@ -36,7 +37,6 @@ queue:
 channels:
   - id: current
     label: 刀哥的
-    priority: 1
     enabled: true
     adapter: openai_images
     base_url: https://current.example
@@ -61,7 +61,6 @@ channels:
       half_open_max_probes: 1
   - id: lucen
     label: Lucen
-    priority: 10
     enabled: true
     adapter: openai_images
     base_url: https://lucen.example
@@ -151,6 +150,7 @@ class TestChannelRouting(PlatformTestCase):
         self.assertEqual(job.reserved_rmb, Decimal("0.3600"))
         self.assertEqual({item.channel_id for item in job.items}, {"__auto__"})
         self.assertEqual(job.workflow["channel_routing"]["candidate_ids"], ["current", "lucen"])
+        self.assertEqual(job.workflow["channel_routing"]["mode"], "ordered")
 
     def test_submission_honors_a_user_channel_choice(self):
         workspace = self.create_workspace()
@@ -261,7 +261,7 @@ class TestChannelRouting(PlatformTestCase):
         finally:
             executor.shutdown(wait=True)
 
-    def test_worker_fills_priority_channel_then_falls_back_to_lucen(self):
+    def test_worker_follows_channel_order_then_falls_back_to_lucen(self):
         workspace = self.create_workspace()
         job = self.submit(workspace, channel_id="", batch_count=4)
 
@@ -279,6 +279,30 @@ class TestChannelRouting(PlatformTestCase):
             [item.channel_label for item in saved.items], ["刀哥的", "刀哥的", "Lucen", "Lucen"]
         )
         self.assertEqual(saved.channel_id, "__mixed__")
+
+    def test_worker_follows_reordered_channel_list(self):
+        document = yaml.safe_load(MULTI_CHANNEL_CONFIG)
+        document["channels"].reverse()
+        self.channel_path.write_text(
+            yaml.safe_dump(document, allow_unicode=True, sort_keys=False), encoding="utf-8"
+        )
+        self.app.extensions["channel_registry"].reload(force=True)
+        self.assertEqual(
+            [channel.identifier for channel in self.app.extensions["channel_registry"].list()],
+            ["lucen", "current"],
+        )
+
+        job = self.submit(self.create_workspace(), channel_id="", batch_count=6)
+        worker = self.create_worker()
+        worker._thread_pool = HoldingExecutor()
+        worker._schedule_available()
+
+        db.session.expire_all()
+        saved = db.session.get(GenerationJob, job.id)
+        self.assertEqual(
+            [item.channel_id for item in saved.items],
+            ["lucen", "lucen", "lucen", "lucen", "current", "current"],
+        )
 
     def test_large_single_user_batch_fills_all_channel_slots(self):
         workspace = self.create_workspace()

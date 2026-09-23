@@ -6,7 +6,6 @@ test("new image channels enable local repaint masks by default", async ({ studio
     label: "蒙版渠道",
     enabled: true,
     configured: true,
-    priority: 1,
     base_url: "https://relay.example",
     has_api_key: true,
     api_key_hint: "test****cret",
@@ -53,4 +52,55 @@ test("new image channels enable local repaint masks by default", async ({ studio
 
   await page.locator('[data-edit-channel="masked-channel"]').click();
   await expect(maskCheckbox).not.toBeChecked();
+});
+
+test("channel list order is saved by dragging rows", async ({ studioPage: page }) => {
+  const channel = {
+    id: "first-channel",
+    label: "第一渠道",
+    enabled: true,
+    configured: true,
+    models: [{ id: "gpt-image-2", label: "GPT Image 2", enabled: true }],
+    price_rmb: "0.0600",
+    capabilities: {
+      modes: ["text2img"],
+      supports_mask: false,
+      max_reference_images: 0,
+      max_reference_image_mb: 10,
+      max_reference_total_mb: 40,
+      formats: ["png"],
+    },
+    limits: { max_concurrency: 2 },
+  };
+  const secondChannel = { ...channel, id: "second-channel", label: "第二渠道" };
+  const config = {
+    version: 1,
+    revision: "e2e-channel-order",
+    managed: true,
+    source: "database",
+    last_error: null,
+    queue: { max_channel_attempts: 2, history_retention_days: 30, stale_running_minutes: 20 },
+    channels: [channel, secondChannel],
+  };
+  const savedPayloads = [];
+
+  await page.route("**/api/admin/channels", async (route) => {
+    if (route.request().method() === "PUT") {
+      const payload = route.request().postDataJSON();
+      savedPayloads.push(payload);
+      await route.fulfill({ json: { config: { ...config, revision: "e2e-channel-order-saved", channels: payload.channels } } });
+      return;
+    }
+    await route.fulfill({ json: { config } });
+  });
+  await page.goto("/admin");
+  await page.getByRole("button", { name: "渠道与模型", exact: true }).click();
+  const rows = page.locator("#channelTableBody tr");
+  await expect(rows).toHaveCount(2);
+
+  await rows.nth(0).dragTo(rows.nth(1));
+
+  await expect.poll(() => savedPayloads.length).toBe(1);
+  expect(savedPayloads[0].channels.map((item) => item.id)).toEqual(["second-channel", "first-channel"]);
+  expect(savedPayloads[0].channels.every((item) => !("priority" in item))).toBe(true);
 });

@@ -7,10 +7,9 @@ queue:
   stale_running_minutes: 20
 
 channels:
+  # 列表顺序就是未指定渠道请求的自动调度顺序。
   - id: current
     label: 刀哥的
-    # 数值越小越优先；仅用于未指定渠道的兼容自动调度。
-    priority: 1
     enabled: true
     adapter: openai_images
     # 发送服务端生成的匿名 HMAC user 标识；兼容代理拒绝未知字段时可关闭。
@@ -47,7 +46,6 @@ channels:
 
   - id: lucen
     label: lucen
-    priority: 10
     enabled: true
     adapter: openai_images
     # 发送服务端生成的匿名 HMAC user 标识；兼容代理拒绝未知字段时可关闭。

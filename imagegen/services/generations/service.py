@@ -102,7 +102,7 @@ class GenerationService:
         workflow = sanitize_workflow(request.workflow)
         workflow["moderation"] = request.moderation
         workflow["channel_routing"] = {
-            "mode": "selected" if user_selected_channel else "priority",
+            "mode": "selected" if user_selected_channel else "ordered",
             "candidate_ids": [channel.identifier for channel in routing_channels],
             "candidate_labels": [channel.label for channel in routing_channels],
         }
@@ -214,7 +214,7 @@ class GenerationService:
         """Return the configured channels that can execute this request.
 
         Channel selection is deliberately deferred to the Worker so queued
-        items can use a lower-priority provider when the preferred provider is
+        items can use a later provider when the earlier provider is
         full.  Submission still validates every eligible provider and chooses
         one model shared by the largest number of providers.
         """
@@ -243,8 +243,8 @@ class GenerationService:
         if requested_model:
             model_ids = [requested_model]
         else:
-            # Prefer a model shared by the largest number of channels.  Ties
-            # retain the configured priority order so the first provider stays
+            # Prefer a model shared by the largest number of channels. Ties
+            # retain the configured channel order so the first provider stays
             # deterministic.
             for channel in configured:
                 for model in channel.models:
@@ -373,10 +373,13 @@ class GenerationService:
         job.completed_at = None
         job.workflow = {**(job.workflow or {}), "_retry_pending": True}
         routing = job.workflow.get("channel_routing") if job.workflow else None
-        priority_routing = isinstance(routing, dict) and routing.get("mode") == "priority"
+        ordered_routing = isinstance(routing, dict) and routing.get("mode") in {
+            "ordered",
+            "priority",
+        }
         for item in retryable_items:
             item.status = "queued"
-            if priority_routing:
+            if ordered_routing:
                 item.channel_id = AUTO_CHANNEL_ID
                 item.channel_label = AUTO_CHANNEL_LABEL
             item.provider_price_rmb = money(0)
