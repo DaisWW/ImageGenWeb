@@ -194,6 +194,14 @@
       const selection = this.currentSelection();
       this.ensureSeriesAnchorSelection(selection);
       this.trimReferenceSelection(selection, this.generationReferenceLimit());
+      if (this.pendingMaskEdit?.workspaceId === this.activeWorkspace?.id
+        && (
+          channel.capabilities?.supports_mask !== true
+          || !channel.capabilities?.modes?.includes("img2img")
+          || !selection.has(this.pendingMaskEdit.assetId)
+        )) {
+        this.invalidatePendingMaskEdit("当前渠道或垫图已变化，局部重绘蒙版已清除");
+      }
       this.el.generateButton.disabled = false;
       this.renderReferences();
       this.updatePrice();
@@ -525,6 +533,9 @@
         anchorAvailable,
         img2imgAvailable,
       });
+      if (this.pendingMaskEdit && strategy !== "sample") {
+        this.invalidatePendingMaskEdit("生成方式已变化，局部重绘蒙版已清除");
+      }
       if (requestedStrategy === "explore" && strategy !== requestedStrategy && shouldSave) {
         UI.toast("当前批量上限不足以进行受控探索，已切回同提示词抽样", "info");
       }

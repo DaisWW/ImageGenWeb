@@ -187,6 +187,10 @@
       this.detailJobId = null;
       this.detailReviewItemIds = new Set();
       this.detailReviewSuggestion = "";
+      this.pendingMaskEdit = null;
+      this.maskEditorSource = null;
+      this.maskEditorReturnDialog = null;
+      this.maskEditorCommitted = false;
       this.sliceItemId = null;
       this.sliceAnalysis = null;
       this.sliceBoxes = [];
@@ -234,6 +238,7 @@
         if (active.size) this.chatOperations.set(workspace.id, active);
       });
       this.cacheElements();
+      this.initializeMaskEditor?.();
       this.renderCreativeDirectionOptions();
       this.renderGalleryCategoryOptions();
       this.applyRuntimeSettings(this.limits, this.historyRetentionDays);
@@ -349,6 +354,10 @@
         referenceLibrary: byId("referenceLibrary"),
         referenceList: byId("referenceList"),
         referenceLimit: byId("referenceLimit"),
+        maskEditNotice: byId("maskEditNotice"),
+        maskEditNoticeLabel: byId("maskEditNoticeLabel"),
+        maskEditChange: byId("maskEditChange"),
+        maskEditClear: byId("maskEditClear"),
         promptInput: byId("promptInput"),
         promptCopyButton: byId("promptCopyButton"),
         promptCounter: byId("promptCounter"),
@@ -372,12 +381,24 @@
         detailRunReview: byId("detailRunReview"),
         detailApplyReview: byId("detailApplyReview"),
         detailSeriesAnchor: byId("detailSeriesAnchor"),
+        detailMaskEdit: byId("detailMaskEdit"),
         detailUiKit: byId("detailUiKit"),
         detailSlice: byId("detailSlice"),
         detailBackgroundRemoval: byId("detailBackgroundRemoval"),
         detailSaveLibrary: byId("detailSaveLibrary"),
         detailReuse: byId("detailReuse"),
         detailDownload: byId("detailDownload"),
+        maskEditorDialog: byId("maskEditorDialog"),
+        maskEditorStage: byId("maskEditorStage"),
+        maskEditorCanvas: byId("maskEditorCanvas"),
+        maskEditorLoading: byId("maskEditorLoading"),
+        maskEditorStatus: byId("maskEditorStatus"),
+        maskBrushSize: byId("maskBrushSize"),
+        maskBrushSizeValue: byId("maskBrushSizeValue"),
+        maskEditorUndo: byId("maskEditorUndo"),
+        maskEditorClear: byId("maskEditorClear"),
+        maskEditorApply: byId("maskEditorApply"),
+        maskToolButtons: [...document.querySelectorAll("[data-mask-tool]")],
         backgroundRemovalDialog: byId("backgroundRemovalDialog"),
         backgroundRemovalStatus: byId("backgroundRemovalStatus"),
         backgroundRemovalModelList: byId("backgroundRemovalModelList"),

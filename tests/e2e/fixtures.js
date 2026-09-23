@@ -48,6 +48,7 @@ async function mockConfiguredImageChannel(page) {
     price_rmb: "0.0300",
     capabilities: {
       modes: ["text2img", "img2img"],
+      supports_mask: true,
       max_reference_images: 2,
       max_reference_image_mb: 10,
       max_reference_total_mb: 40,

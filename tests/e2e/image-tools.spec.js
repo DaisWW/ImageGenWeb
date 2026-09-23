@@ -18,6 +18,7 @@ test("image detail actions explain their purpose", async ({ studioPage: page }) 
     detailRunReview: "让 AI 按提示词和硬门槛检查当前图片，并给出单点修正建议。",
     detailApplyReview: "把当前图作为参考并载入验收建议，继续生成精修版本。",
     detailSeriesAnchor: "将当前图设为系列固定参考；后续只改变新需求允许的内容，并保持主体、风格和构图一致。",
+    detailMaskEdit: "框选需要修改的区域，系统会自动生成蒙版并将当前图设为唯一垫图。",
     detailReuse: "将当前图加入参考图，并回到创作区描述需要改变的内容。",
     detailDownload: "下载当前生成结果的原始文件。",
   });
@@ -369,6 +370,7 @@ test("detail reference actions share one request without enabling unavailable ac
     };
     const detailReuse = document.createElement("button");
     const detailUiKit = document.createElement("button");
+    const detailMaskEdit = document.createElement("button");
     const detailSeriesAnchor = document.createElement("button");
     const detailApplyReview = document.createElement("button");
     const target = {
@@ -381,6 +383,7 @@ test("detail reference actions share one request without enabling unavailable ac
       el: {
         detailReuse,
         detailUiKit,
+        detailMaskEdit,
         detailSeriesAnchor,
         detailApplyReview,
         imageDialog: document.createElement("dialog"),
@@ -395,6 +398,7 @@ test("detail reference actions share one request without enabling unavailable ac
       const second = window.ImageGenStudio.StudioApp.prototype.useDetailAsReference.call(target);
       const disabledDuringRequest = detailReuse.disabled
         && detailUiKit.disabled
+        && detailMaskEdit.disabled
         && detailSeriesAnchor.disabled
         && detailApplyReview.disabled;
       release();
@@ -406,6 +410,7 @@ test("detail reference actions share one request without enabling unavailable ac
           || detailUiKit.disabled
           || detailApplyReview.disabled,
         seriesAnchorDisabledAfterRequest: detailSeriesAnchor.disabled,
+        maskEditDisabledAfterRequest: detailMaskEdit.disabled,
       };
     } finally {
       window.ImageGenStudio.UI.api = originalApi;
@@ -417,7 +422,219 @@ test("detail reference actions share one request without enabling unavailable ac
     disabledDuringRequest: true,
     eligibleActionsDisabledAfterRequest: false,
     seriesAnchorDisabledAfterRequest: true,
+    maskEditDisabledAfterRequest: true,
   });
+});
+
+test("mask editing skips a text-only channel that only advertises the mask flag", async ({
+  studioPage: page,
+}) => {
+  const result = await page.evaluate(() => {
+    const fallback = {
+      id: "img2img-mask",
+      capabilities: { supports_mask: true, modes: ["img2img"] },
+    };
+    const target = {
+      currentChannel: () => ({
+        id: "text-only-mask",
+        capabilities: { supports_mask: true, modes: ["text2img"] },
+      }),
+      maskCapableChannels: () => [fallback],
+      el: { channelSelect: { value: "text-only-mask" } },
+      applyChannel: () => {},
+    };
+    const selected = window.ImageGenStudio.StudioApp.prototype.ensureMaskCapableChannel.call(target);
+    return { id: selected?.id || "", selectedValue: target.el.channelSelect.value };
+  });
+
+  expect(result).toEqual({ id: "img2img-mask", selectedValue: "img2img-mask" });
+});
+
+test("local repaint creates a PNG mask and submits only its source image", {
+  tag: "@responsive",
+}, async ({ studioPage: page }) => {
+  await mockConfiguredImageChannel(page);
+  const workspaceId = await page.locator("#workspaceList .workspace-item.active")
+    .getAttribute("data-workspace-id");
+  const createdAt = new Date().toISOString();
+  const itemId = "e2e-mask-item";
+  const sourceUrl = "/static/assets/brand-mark-v2.png";
+  const referenceAsset = {
+    id: "e2e-mask-source",
+    name: "mask-source.png",
+    url: sourceUrl,
+    thumbnail_url: sourceUrl,
+    mime_type: "image/png",
+    bytes: 2048,
+    width: 512,
+    height: 512,
+    created_at: createdAt,
+  };
+  const completedJob = {
+    id: "e2e-mask-source-job",
+    workspace_id: workspaceId,
+    status: "succeeded",
+    progress_percent: 100,
+    queue_position: null,
+    queue_total: 0,
+    estimated_end_at: null,
+    is_over_estimate: false,
+    kind: "image",
+    channel_id: "e2e",
+    channel: "E2E 渠道",
+    mode: "text2img",
+    prompt: "需要局部修改的品牌图",
+    model: "e2e-image",
+    size: "1024x1024",
+    quality: "high",
+    workflow: { generation_stage: "final" },
+    output_format: "png",
+    compression: 90,
+    transparent_background: false,
+    requested_count: 1,
+    price_per_image_rmb: "0.0300",
+    charged_rmb: "0.0300",
+    reserved_rmb: "0.0000",
+    created_at: createdAt,
+    started_at: createdAt,
+    completed_at: createdAt,
+    succeeded_count: 1,
+    failed_count: 0,
+    canceled_count: 0,
+    can_cancel: false,
+    can_retry: false,
+    has_mask: false,
+    mask_target_asset_id: null,
+    references: [],
+    items: [{
+      id: itemId,
+      position: 0,
+      status: "succeeded",
+      progress_percent: 100,
+      started_at: createdAt,
+      completed_at: createdAt,
+      estimated_seconds: 1,
+      estimated_end_at: createdAt,
+      elapsed_seconds: 1,
+      charged_rmb: "0.0300",
+      error: null,
+      width: 512,
+      height: 512,
+      bytes: 2048,
+      image_url: sourceUrl,
+      thumbnail_url: sourceUrl,
+      download_url: sourceUrl,
+      review: {},
+    }],
+  };
+  let submitted = null;
+
+  await page.route("**/api/generations*", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() === "POST" && url.pathname === "/api/generations") {
+      const contentType = request.headers()["content-type"] || "";
+      const multipart = await new Request(request.url(), {
+        method: "POST",
+        headers: { "Content-Type": contentType },
+        body: request.postDataBuffer(),
+      }).formData();
+      const payload = JSON.parse(String(multipart.get("payload")));
+      const mask = multipart.get("mask");
+      const maskBytes = Buffer.from(await mask.arrayBuffer());
+      submitted = {
+        contentType,
+        payload,
+        mask: {
+          name: mask.name,
+          type: mask.type,
+          size: mask.size,
+          signature: maskBytes.subarray(0, 8).toString("hex"),
+        },
+      };
+      await route.fulfill({
+        status: 202,
+        json: {
+          job: {
+            ...completedJob,
+            id: "e2e-masked-submission",
+            status: "canceled",
+            progress_percent: 0,
+            prompt: payload.prompt,
+            mode: "img2img",
+            model: payload.model,
+            size: payload.size,
+            quality: payload.quality,
+            output_format: payload.output_format,
+            compression: payload.compression,
+            transparent_background: payload.transparent_background,
+            requested_count: payload.batch_count,
+            charged_rmb: "0.0000",
+            succeeded_count: 0,
+            canceled_count: payload.batch_count,
+            has_mask: true,
+            mask_target_asset_id: referenceAsset.id,
+            references: [referenceAsset],
+            items: [],
+          },
+        },
+      });
+      return;
+    }
+    if (url.pathname === "/api/generations/active") {
+      await route.fulfill({ json: { jobs: [] } });
+      return;
+    }
+    if (url.pathname === "/api/generations") {
+      await route.fulfill({ json: { jobs: [completedJob], queue_total: 0 } });
+      return;
+    }
+    await route.continue();
+  });
+  await page.route(`**/api/generation-items/${itemId}/reference`, (route) => route.fulfill({
+    status: 201,
+    json: { asset: referenceAsset },
+  }));
+
+  await page.reload();
+  await page.locator(`[data-item-id="${itemId}"]`).click();
+  await expect(page.locator("#detailMaskEdit")).toBeEnabled();
+  await page.locator("#detailMaskEdit").click();
+  await expect(page.locator("#maskEditorDialog")).toBeVisible();
+  await expect(page.locator("#maskEditorLoading")).toBeHidden();
+
+  const canvas = page.locator("#maskEditorCanvas");
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  await page.mouse.move(bounds.x + bounds.width * 0.25, bounds.y + bounds.height * 0.25);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + bounds.width * 0.7, bounds.y + bounds.height * 0.7);
+  await page.mouse.up();
+  await expect(page.locator("#maskEditorStatus")).toContainText("已选择约");
+  await expect(page.locator("#maskEditorApply")).toBeEnabled();
+  await page.locator("#maskEditorApply").click();
+
+  await expect(page.locator("#maskEditorDialog")).toBeHidden();
+  await expect(page.locator("#generationForm")).toBeVisible();
+  await expect(page.locator("#maskEditNotice")).toContainText("局部重绘");
+  await expect(page.locator("#referenceList .reference-card.selected")).toHaveCount(1);
+  await expect(page.locator("#referenceList .reference-card.selected img"))
+    .toHaveAttribute("alt", referenceAsset.name);
+  await page.locator("#promptInput").fill("将框选区域改为蓝色，保持其余内容不变");
+  await page.locator("#generateButton").click();
+
+  await expect.poll(() => submitted).not.toBeNull();
+  expect(submitted.contentType).toContain("multipart/form-data; boundary=");
+  expect(submitted.payload.prompt).toBe("将框选区域改为蓝色，保持其余内容不变");
+  expect(submitted.payload.reference_ids).toEqual([referenceAsset.id]);
+  expect(submitted.payload.mask_target_asset_id).toBe(referenceAsset.id);
+  expect(submitted.mask).toEqual({
+    name: "mask.png",
+    type: "image/png",
+    size: expect.any(Number),
+    signature: "89504e470d0a1a0a",
+  });
+  expect(submitted.mask.size).toBeGreaterThan(100);
 });
 
 test("image detail keeps its reference through multi-turn refinement", {

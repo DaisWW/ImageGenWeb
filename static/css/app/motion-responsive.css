@@ -96,6 +96,10 @@
   .image-dialog-info { grid-template-rows: auto; overflow: visible; border-top: 1px solid var(--line); border-left: 0; }
   .image-dialog-info > .modal-header { position: sticky; z-index: 2; top: 0; }
   .image-dialog-scroll { min-height: auto; overflow: visible; overscroll-behavior: auto; }
+  .mask-editor-modal { height: auto; max-height: 92vh; }
+  .mask-editor-layout { max-height: 92vh; grid-template-columns: 1fr; grid-template-rows: auto minmax(300px, 58vh) auto; overflow: auto; }
+  .mask-editor-stage { min-height: 300px; }
+  .mask-editor-controls { overflow: visible; border-top: 1px solid var(--line); border-left: 0; }
 }
 
 @media (max-width: 720px) {
@@ -222,6 +226,9 @@
   .composer-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .compact-field select { padding-inline: 7px; }
   .modal-actions .button { flex: 1; }
+  .mask-edit-notice { align-items: stretch; flex-direction: column; }
+  .mask-edit-notice > div:last-child { justify-content: flex-end; }
+  .mask-tool-group { grid-template-columns: 1fr; }
   .image-dialog-preview { min-height: 260px; }
   .image-viewer-toolbar { align-items: stretch; flex-direction: column; gap: 10px; padding: 10px 12px; }
   .image-viewer-controls { width: 100%; gap: 5px; }

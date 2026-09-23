@@ -79,6 +79,7 @@ const BACKGROUND_REMOVAL_ADAPTER_LABEL = {
       }[job.workflow?.canvas_resolution] || "";
       const details = [
         ["渠道", `${item.channel || job.channel} · ${job.model}`],
+        ...(job.has_mask ? [["编辑方式", "局部重绘 · 蒙版作用于参考图 1"]] : []),
         ["请求参数", [
           job.size,
           job.quality,
@@ -104,7 +105,7 @@ const BACKGROUND_REMOVAL_ADAPTER_LABEL = {
       this.el.detailReferences.replaceChildren();
       if (job.references.length) {
         const label = document.createElement("span");
-        label.textContent = "垫图";
+        label.textContent = job.has_mask ? "局部重绘原图" : "垫图";
         const list = document.createElement("div");
         job.references.forEach((asset) => {
           const image = document.createElement("img");
@@ -125,6 +126,13 @@ const BACKGROUND_REMOVAL_ADAPTER_LABEL = {
       }
       this.renderDetailReview(item.review || {});
       this.el.detailDownload.href = item.download_url;
+      setDisabled(
+        this.el.detailMaskEdit,
+        this.detailReferenceBusy || !this.maskCapableChannels?.().length,
+      );
+      this.el.detailMaskEdit.title = this.el.detailMaskEdit.disabled
+        ? "暂无已启用局部重绘蒙版能力的生图渠道"
+        : "框选需要修改的区域，系统会自动生成蒙版并将当前图设为唯一垫图。";
       this.refreshDetailSeriesAnchorState(job, item);
       UI.openDialog(this.el.imageDialog);
     },
@@ -879,6 +887,7 @@ const BACKGROUND_REMOVAL_ADAPTER_LABEL = {
       this.detailReferenceBusy = true;
       setDisabled(this.el.detailReuse, true);
       setDisabled(this.el.detailUiKit, true);
+      setDisabled(this.el.detailMaskEdit, true);
       this.refreshDetailSeriesAnchorState();
       setDisabled(this.el.detailApplyReview, true);
       try {
@@ -898,6 +907,7 @@ const BACKGROUND_REMOVAL_ADAPTER_LABEL = {
         this.detailReferenceBusy = false;
         setDisabled(this.el.detailReuse, false);
         setDisabled(this.el.detailUiKit, false);
+        setDisabled(this.el.detailMaskEdit, !this.maskCapableChannels?.().length);
         this.refreshDetailSeriesAnchorState();
         setDisabled(this.el.detailApplyReview, !this.detailReviewSuggestion);
       }

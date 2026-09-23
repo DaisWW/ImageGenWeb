@@ -141,6 +141,14 @@
             <div class="reference-list" id="referenceList"></div>
           </div>
 
+          <section class="mask-edit-notice" id="maskEditNotice" hidden>
+            <div><i data-lucide="scan-line"></i><span id="maskEditNoticeLabel">已选择局部重绘区域</span></div>
+            <div>
+              <button class="button ghost small" type="button" id="maskEditChange">重新框选</button>
+              <button class="button ghost small" type="button" id="maskEditClear">退出局部重绘</button>
+            </div>
+          </section>
+
           <div class="prompt-row">
             <div class="prompt-field">
               <label class="sr-only" for="promptInput">提示词</label>
@@ -238,10 +246,44 @@
         <button class="button secondary" type="button" id="detailRunReview" title="让 AI 按提示词和硬门槛检查当前图片，并给出单点修正建议。"><i data-lucide="scan-search"></i>AI 验收</button>
         <button class="button secondary" type="button" id="detailApplyReview" title="把当前图作为参考并载入验收建议，继续生成精修版本。" hidden><i data-lucide="wrench"></i>按建议继续</button>
         <button class="button secondary" type="button" id="detailSeriesAnchor" title="将当前图设为系列固定参考；后续只改变新需求允许的内容，并保持主体、风格和构图一致。"><i data-lucide="layers-3"></i>设为系列基准</button>
+        <button class="button secondary" type="button" id="detailMaskEdit" title="框选需要修改的区域，系统会自动生成蒙版并将当前图设为唯一垫图。"><i data-lucide="scan-line"></i>局部重绘</button>
         <button class="button secondary" type="button" id="detailReuse" title="将当前图加入参考图，并回到创作区描述需要改变的内容。"><i data-lucide="image-plus"></i><span id="detailReuseLabel">基于此图继续</span></button>
         <a class="button primary" id="detailDownload" title="下载当前生成结果的原始文件。" download><i data-lucide="download"></i>下载原图</a>
       </div>
     </div>
+  </div>
+</dialog>
+
+<dialog class="modal mask-editor-modal" id="maskEditorDialog" aria-labelledby="maskEditorTitle">
+  <div class="mask-editor-layout">
+    <header class="mask-editor-header">
+      <div><span class="eyebrow">Masked Edit</span><h2 id="maskEditorTitle">框选局部重绘区域</h2></div>
+      <button class="icon-button" type="button" data-close-dialog="maskEditorDialog" aria-label="关闭"><i data-lucide="x"></i></button>
+    </header>
+    <section class="mask-editor-stage" id="maskEditorStage" aria-label="局部重绘蒙版编辑区">
+      <canvas id="maskEditorCanvas"></canvas>
+      <div class="mask-editor-loading" id="maskEditorLoading" role="status"><i data-lucide="loader-circle"></i><span>正在准备原图</span></div>
+    </section>
+    <aside class="mask-editor-controls">
+      <p class="mask-editor-help">红色区域会被重新生成。先拖动框选；需要时再用画笔补充或擦除。</p>
+      <div class="mask-tool-group" role="group" aria-label="蒙版工具">
+        <button class="button secondary small active" type="button" data-mask-tool="rectangle" aria-pressed="true"><i data-lucide="square-dashed"></i>框选</button>
+        <button class="button secondary small" type="button" data-mask-tool="brush" aria-pressed="false"><i data-lucide="paintbrush"></i>画笔</button>
+        <button class="button secondary small" type="button" data-mask-tool="eraser" aria-pressed="false"><i data-lucide="eraser"></i>擦除</button>
+      </div>
+      <label class="mask-brush-size" for="maskBrushSize"><span>笔刷大小</span><strong id="maskBrushSizeValue">6%</strong></label>
+      <input id="maskBrushSize" type="range" min="1" max="20" value="6" step="1">
+      <div class="mask-editor-secondary-actions">
+        <button class="button ghost small" type="button" id="maskEditorUndo"><i data-lucide="undo-2"></i>撤销</button>
+        <button class="button ghost small" type="button" id="maskEditorClear"><i data-lucide="trash-2"></i>清空</button>
+      </div>
+      <p class="mask-editor-status" id="maskEditorStatus" aria-live="polite">请框选需要修改的区域</p>
+      <p class="mask-editor-caveat">蒙版用于约束编辑范围，但模型仍可能轻微调整区域边缘。</p>
+      <div class="mask-editor-actions">
+        <button class="button secondary" type="button" data-close-dialog="maskEditorDialog">取消</button>
+        <button class="button primary" type="button" id="maskEditorApply" disabled>使用此区域</button>
+      </div>
+    </aside>
   </div>
 </dialog>
 
@@ -363,6 +405,7 @@
 {% endblock %}
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/studio/core.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/studio/mask-editor.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/studio/selections.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/studio/workspaces.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/studio/settings.js') }}" defer></script>

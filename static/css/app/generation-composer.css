@@ -347,6 +347,35 @@
   aspect-ratio: 1;
 }
 
+.reference-mask-edit {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  bottom: 3px;
+  display: grid;
+  width: 19px;
+  height: 19px;
+  padding: 0;
+  place-items: center;
+  color: #fff;
+  border: 1px solid rgb(255 255 255 / 38%);
+  border-radius: 50%;
+  background: rgb(8 10 12 / 88%);
+  box-shadow: 0 2px 7px rgb(0 0 0 / 45%);
+  transform: translateX(-50%);
+}
+
+.reference-mask-edit:hover,
+.reference-mask-edit:focus-visible {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.reference-mask-edit svg {
+  width: 11px;
+  height: 11px;
+}
+
 .reference-order {
   font-size: 10px;
   font-weight: 700;
@@ -530,6 +559,49 @@
 .reference-upload-card .reference-remove:disabled {
   cursor: default;
   opacity: .62;
+}
+
+.mask-edit-notice {
+  display: flex;
+  width: 100%;
+  max-width: 1380px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 auto 9px;
+  padding: 8px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent-muted);
+}
+
+.mask-edit-notice[hidden] {
+  display: none;
+}
+
+.mask-edit-notice > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.mask-edit-notice > div:first-child {
+  min-width: 0;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.mask-edit-notice > div:first-child span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mask-edit-notice svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: var(--accent);
 }
 
 .prompt-row {

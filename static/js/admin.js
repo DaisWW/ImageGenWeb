@@ -763,7 +763,7 @@
           <td class="money-cell">${UI.money(channel.price_rmb)}<small class="subline">每张</small></td>
           <td><div class="tag-list">${channel.models.filter((model) => model.enabled).map((model) => `<span>${UI.escapeHtml(model.label)}<small>${UI.escapeHtml(model.id)}</small></span>`).join("")}</div></td>
           <td>${channel.limits.max_concurrency}</td>
-          <td><div class="capability-list"><span>${channel.capabilities.modes.includes("img2img") ? `最多 ${channel.capabilities.max_reference_images} 张垫图` : "仅文生图"}</span><span>${channel.capabilities.formats.join(" / ")}</span></div></td>
+          <td><div class="capability-list"><span>${channel.capabilities.modes.includes("img2img") ? `最多 ${channel.capabilities.max_reference_images} 张垫图` : "仅文生图"}</span><span>${channel.capabilities.supports_mask ? "支持局部重绘" : "未启用蒙版"}</span><span>${channel.capabilities.formats.join(" / ")}</span></div></td>
           <td class="actions-cell"><div class="row-actions">
             <button class="icon-button" type="button" data-edit-channel="${UI.escapeHtml(channel.id)}" title="编辑渠道" aria-label="编辑渠道"><i data-lucide="pencil"></i></button>
             <button class="icon-button danger" type="button" data-delete-channel="${UI.escapeHtml(channel.id)}" title="删除渠道" aria-label="删除渠道"><i data-lucide="trash-2"></i></button>
@@ -795,6 +795,7 @@
       const capabilities = channel?.capabilities || {};
       this.setChecks(form, "mode", capabilities.modes || ["text2img", "img2img"], ["text2img", "img2img"]);
       this.setChecks(form, "format", capabilities.formats || ["png"], ["png", "jpeg", "webp"]);
+      form.elements.supports_mask.checked = capabilities.supports_mask === true;
       form.elements.max_reference_images.value = capabilities.max_reference_images ?? 1;
       form.elements.max_reference_image_mb.value = capabilities.max_reference_image_mb ?? 10;
       form.elements.max_reference_total_mb.value = capabilities.max_reference_total_mb ?? 40;
@@ -889,6 +890,7 @@
         capabilities: {
           modes: this.readChecks(form, "mode", ["text2img", "img2img"]),
           formats: this.readChecks(form, "format", ["png", "jpeg", "webp"]),
+          supports_mask: form.elements.supports_mask.checked,
           max_reference_images: Number(form.elements.max_reference_images.value),
           max_reference_image_mb: Number(form.elements.max_reference_image_mb.value),
           max_reference_total_mb: Number(form.elements.max_reference_total_mb.value),

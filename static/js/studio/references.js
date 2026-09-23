@@ -222,9 +222,20 @@
           remove.title = "删除垫图";
           remove.setAttribute("aria-label", remove.title);
           remove.innerHTML = '<i data-lucide="x"></i>';
+          const maskEdit = document.createElement("button");
+          maskEdit.type = "button";
+          maskEdit.className = "reference-mask-edit";
+          maskEdit.dataset.maskEditAsset = asset.id;
+          maskEdit.disabled = !this.maskCapableChannels?.().length;
+          maskEdit.title = maskEdit.disabled
+            ? "暂无已启用蒙版能力的渠道"
+            : `局部重绘 ${asset.name}`;
+          maskEdit.setAttribute("aria-label", maskEdit.title);
+          maskEdit.innerHTML = '<i data-lucide="scan-line"></i>';
           card.append(
             toggle,
             this.referencePreviewButton(asset.url, asset.name, `放大预览 ${asset.name}`),
+            maskEdit,
             this.librarySaveButton(asset),
             remove,
           );
@@ -235,6 +246,7 @@
       UI.icons(this.el.referenceList);
       this.updatePrice();
       this.updateInteractionState();
+      this.renderMaskEditNotice?.();
     },
 
     uploadReferences(files, target) {
@@ -341,6 +353,9 @@
         ? this.currentChatSelection(workspace.id)
         : this.currentSelection(workspace.id);
       const limit = this.referenceSelectionLimit(upload.target, workspace);
+      if (upload.target === "generation" && this.pendingMaskEdit?.workspaceId === workspace.id) {
+        this.invalidatePendingMaskEdit();
+      }
       this.trimReferenceSelection(selection, limit);
       if (selection.size < limit) selection.add(asset.id);
       if (upload.target === "generation" && this.activeWorkspace?.id === workspace.id) {
@@ -388,6 +403,14 @@
         return;
       }
       if (this.referenceUploadPending) return;
+      const maskEdit = event.target.closest("[data-mask-edit-asset]");
+      if (maskEdit) {
+        const asset = this.activeWorkspace?.assets.find(
+          (candidate) => candidate.id === maskEdit.dataset.maskEditAsset,
+        );
+        if (asset) await this.openMaskEditorForAsset(asset);
+        return;
+      }
       const remove = event.target.closest("[data-reference-remove]");
       if (remove) {
         await this.removeReference(remove.dataset.referenceRemove);
@@ -397,8 +420,7 @@
       if (!toggle) return;
       const id = toggle.dataset.referenceToggle;
       const selection = this.currentSelection();
-      if (selection.has(id)) selection.delete(id);
-      else {
+      if (!selection.has(id)) {
         const max = this.generationReferenceLimit();
         if (selection.size >= max) {
           UI.toast(
@@ -409,6 +431,10 @@
           );
           return;
         }
+      }
+      if (this.pendingMaskEdit) this.invalidatePendingMaskEdit();
+      if (selection.has(id)) selection.delete(id);
+      else {
         selection.add(id);
       }
       this.renderReferences();
@@ -421,6 +447,10 @@
       const workspace = this.activeWorkspace;
       try {
         await UI.api(`/api/workspaces/${workspace.id}/assets/${id}`, { method: "DELETE" });
+        if (this.pendingMaskEdit?.workspaceId === workspace.id
+          && this.pendingMaskEdit.assetId === id) {
+          this.invalidatePendingMaskEdit("局部重绘原图已删除，蒙版已清除");
+        }
         workspace.assets = workspace.assets.filter((asset) => asset.id !== id);
         this.referenceSelections.get(workspace.id)?.delete(id);
         this.chatReferenceSelections.get(workspace.id)?.delete(id);

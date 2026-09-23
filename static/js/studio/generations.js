@@ -119,6 +119,16 @@
         UI.toast(`渠道垫图上限已更新，已取消 ${omitted} 张超限图片`, "info");
       }
       const referenceIds = this.orderedGenerationReferenceIds(workspace.id, selection);
+      const maskEdit = this.pendingMaskEdit?.workspaceId === workspace.id
+        ? this.pendingMaskEdit
+        : null;
+      if (maskEdit && (
+        referenceIds.length !== 1
+        || referenceIds[0] !== maskEdit.assetId
+      )) {
+        this.invalidatePendingMaskEdit("局部重绘原图已变化，请重新框选区域");
+        return;
+      }
       const reviewedDraft = this.currentPromptDraft();
       const settings = {
         ...this.collectSettings(),
@@ -150,8 +160,17 @@
         this.el.promptInput.focus();
         return;
       }
-      if (!this.generationRoutingCandidates(settings, workspace.id).length) {
-        UI.toast("所选渠道不支持当前模型、模式、格式或垫图数量", "error");
+      if (!this.generationRoutingCandidates(
+        settings,
+        workspace.id,
+        { requiresMask: Boolean(maskEdit) },
+      ).length) {
+        UI.toast(
+          maskEdit
+            ? "所选渠道或模型未启用局部重绘蒙版能力"
+            : "所选渠道不支持当前模型、模式、格式或垫图数量",
+          "error",
+        );
         return;
       }
       settings.prompt_draft_id = reviewedDraft?.id || "";
@@ -166,13 +185,21 @@
         reference_ids: [...referenceIds],
         operation_id: operationId,
       };
+      let submissionBody = requestBody;
+      if (maskEdit) {
+        requestBody.mask_target_asset_id = maskEdit.assetId;
+        const form = new FormData();
+        form.append("payload", JSON.stringify(requestBody));
+        form.append("mask", maskEdit.blob, "mask.png");
+        submissionBody = form;
+      }
       this.generationSubmissionMap(workspace.id, true).set(operationId, operation);
       this.updateInteractionState();
       try {
         await this.flushSettings(workspace.id);
         const data = await UI.api("/api/generations", {
           method: "POST",
-          body: requestBody,
+          body: submissionBody,
         });
         this.setWorkspaceJob(data.job);
         this.schedulePoll(ACTIVE_POLL_INTERVAL);
@@ -180,6 +207,7 @@
         if (this.activeWorkspace?.id === workspace.id) {
           this.jobs.unshift(data.job);
           this.renderJobs();
+          if (maskEdit) this.clearPendingMaskEdit({ silent: true });
           this.setComposerMode("chat");
         }
         await this.refreshBalance();

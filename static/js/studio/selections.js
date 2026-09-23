@@ -15,7 +15,11 @@
         ));
     },
 
-    generationRoutingCandidates(settings = {}, workspaceId = this.activeWorkspace?.id) {
+    generationRoutingCandidates(
+      settings = {},
+      workspaceId = this.activeWorkspace?.id,
+      { requiresMask = false } = {},
+    ) {
       const channelId = String(settings.channel_id || "").trim();
       const modelId = String(settings.model || "").trim();
       const mode = this.generationMode(workspaceId);
@@ -52,6 +56,7 @@
           return false;
         }
         if (mode && !(channel.capabilities?.modes || []).includes(mode)) return false;
+        if (requiresMask && channel.capabilities?.supports_mask !== true) return false;
         if (
           outputFormat
           && !(channel.capabilities?.formats || []).includes(outputFormat)
@@ -88,6 +93,7 @@
       let maxReferenceImages = 0;
       let maxReferenceImageMb = 0;
       let maxReferenceTotalMb = 0;
+      let supportsMask = false;
       channels.forEach((channel) => {
         (channel.models || []).forEach((model) => {
           if (!modelIds.has(model.id)) {
@@ -109,6 +115,8 @@
           maxReferenceTotalMb,
           Number(channel.capabilities?.max_reference_total_mb || 0),
         );
+        supportsMask ||= channel.capabilities?.supports_mask === true
+          && channel.capabilities?.modes?.includes("img2img");
       });
       return {
         id: "__auto__",
@@ -118,6 +126,7 @@
         models,
         capabilities: {
           modes: [...modes],
+          supports_mask: supportsMask,
           formats: [...formats],
           max_reference_images: maxReferenceImages,
           max_reference_image_mb: maxReferenceImageMb,
