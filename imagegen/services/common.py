@@ -17,11 +17,17 @@ IMAGE_MAX_PIXELS = 8_294_400
 IMAGE_MAX_ASPECT_RATIO = 3
 CANVAS_RATIO_PATTERN = re.compile(r"^([1-9]\d{0,3}):([1-9]\d{0,3})$")
 GPT_IMAGE_2_MODEL_PATTERN = re.compile(r"^gpt-image-2(?:$|[.-])", re.IGNORECASE)
+GPT_IMAGE_2_5_MODEL_PATTERN = re.compile(r"^gpt-image-2\.5(?:$|[.-])", re.IGNORECASE)
 
 
 def is_gpt_image_2_model(value: Any) -> bool:
     """Return whether a model identifier belongs to the GPT Image 2 family."""
     return bool(GPT_IMAGE_2_MODEL_PATTERN.match(str(value or "").strip()))
+
+
+def is_gpt_image_2_5_model(value: Any) -> bool:
+    """Return whether a model identifier belongs to the GPT Image 2.5 family."""
+    return bool(GPT_IMAGE_2_5_MODEL_PATTERN.match(str(value or "").strip()))
 
 
 def money(value: Decimal | str | int | float) -> Decimal:

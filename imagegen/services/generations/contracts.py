@@ -6,8 +6,8 @@ from ...errors import ServiceError
 from ..common import normalize_canvas_request
 from ..creative import get_creative_direction
 
-GENERATION_STAGE_QUALITY = {"draft": "low", "refine": "medium", "final": "high"}
-GENERATION_QUALITIES = set(GENERATION_STAGE_QUALITY.values())
+GENERATION_STAGES = {"draft", "refine", "final"}
+GENERATION_QUALITIES = {"auto", "low", "medium", "high", "xhigh", "max"}
 CANVAS_RESOLUTIONS = {"panel", "conversation"}
 
 
@@ -22,7 +22,7 @@ class SubmitGeneration:
     batch_count: int
     reference_ids: tuple[str, ...]
     item_prompts: tuple[str, ...] = ()
-    quality: str = "high"
+    quality: str = "auto"
     workflow: dict[str, object] = field(default_factory=dict)
     transparent_background: bool = False
     moderation: str = "auto"
@@ -33,7 +33,6 @@ class SubmitGeneration:
 
 @dataclass(frozen=True, slots=True)
 class GenerationWorkflow:
-    quality: str
     metadata: dict[str, object]
 
     @classmethod
@@ -48,7 +47,7 @@ class GenerationWorkflow:
         plan_metadata: dict[str, object] | None = None,
     ) -> GenerationWorkflow:
         normalized_stage = str(stage).strip().lower()
-        if normalized_stage not in GENERATION_STAGE_QUALITY:
+        if normalized_stage not in GENERATION_STAGES:
             raise ServiceError("生成阶段无效")
 
         requested_direction_id = str(
@@ -106,10 +105,7 @@ class GenerationWorkflow:
             metadata["canvas_request"] = canvas_request
             if normalized_canvas_resolution:
                 metadata["canvas_resolution"] = normalized_canvas_resolution
-        return cls(
-            quality=GENERATION_STAGE_QUALITY[normalized_stage],
-            metadata=metadata,
-        )
+        return cls(metadata=metadata)
 
 
 def sanitize_workflow(value: object) -> dict[str, object]:

@@ -22,6 +22,7 @@ ALLOWED_WORKSPACE_SETTING_KEYS = {
     "channel_id",
     "model",
     "size",
+    "quality",
     "output_format",
     "compression",
     "transparent_background",
@@ -45,6 +46,7 @@ def default_workspace_settings() -> dict[str, Any]:
         "channel_id": "",
         "model": "",
         "size": "1024x1024",
+        "quality": "auto",
         "output_format": "png",
         "compression": 90,
         "transparent_background": False,
@@ -104,6 +106,9 @@ def sanitize_workspace_settings(
         if legacy_size is None or settings["size"] != legacy_size:
             raise
         settings["size"] = "auto"
+    settings["quality"] = str(settings["quality"]).strip().lower()
+    if settings["quality"] not in {"auto", "low", "medium", "high", "xhigh", "max"}:
+        settings["quality"] = "auto"
     settings["output_format"] = str(settings["output_format"])[:20]
     settings["transparent_background"] = as_bool(settings["transparent_background"])
     if settings["output_format"] not in {"png", "webp"}:

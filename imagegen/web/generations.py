@@ -130,7 +130,7 @@ def submit_generation():
         batch_count=batch_count,
         reference_ids=ordered_reference_ids,
         item_prompts=plan.prompts,
-        quality=workflow.quality,
+        quality=str(data.get("quality", "auto")).strip().lower(),
         workflow=workflow.metadata,
         transparent_background=json_bool(data.get("transparent_background", False)),
         moderation=str(data.get("moderation", "auto")).strip().lower(),

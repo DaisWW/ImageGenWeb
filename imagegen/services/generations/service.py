@@ -26,7 +26,7 @@ from ...models import (
     utcnow,
 )
 from ..billing import BillingService
-from ..common import is_gpt_image_2_model, money
+from ..common import is_gpt_image_2_5_model, is_gpt_image_2_model, money
 from ..settings import SystemSettingsService
 from ..workspace_settings import sanitize_workspace_settings
 from .contracts import SubmitGeneration, sanitize_workflow
@@ -61,6 +61,10 @@ class GenerationService:
         )
         if request.moderation == "low" and not is_gpt_image_2_model(selected_model.identifier):
             raise ServiceError("低强度内容审核仅支持 GPT Image 2 系列")
+        if request.quality in {"xhigh", "max"} and not is_gpt_image_2_5_model(
+            selected_model.identifier
+        ):
+            raise ServiceError("xhigh 和 max 质量仅支持 GPT Image 2.5 系列")
         requested_count = request.batch_count
         item_prompts = tuple(
             str(item).strip()
@@ -157,6 +161,7 @@ class GenerationService:
                 ),
                 "model": selected_model.identifier,
                 "size": normalized_size,
+                "quality": request.quality,
                 "output_format": request.output_format,
                 "compression": request.compression,
                 "transparent_background": request.transparent_background,

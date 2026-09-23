@@ -41,9 +41,10 @@ class TestGenerations(PlatformTestCase):
         self.assertEqual(user.reserved_rmb, Decimal("3.7500"))
         self.assertEqual(len(job.items), 3)
 
-    def test_generation_api_defaults_to_final_high_quality(self):
-        workspace = self.create_workspace("默认成品质量")
+    def test_generation_api_defaults_to_final_auto_quality(self):
+        workspace = self.create_workspace("默认自动质量")
         self.assertEqual(workspace.settings["generation_stage"], "final")
+        self.assertEqual(workspace.settings["quality"], "auto")
 
         response = self.user_client().post(
             "/api/generations",
@@ -52,12 +53,12 @@ class TestGenerations(PlatformTestCase):
                 "channel_id": "test",
                 "model": "model-b",
                 "mode": "text2img",
-                "prompt": "默认使用成品质量",
+                "prompt": "默认使用自动质量",
             },
         )
 
         self.assertEqual(response.status_code, 202, response.get_data(as_text=True))
-        self.assertEqual(response.json["job"]["quality"], "high")
+        self.assertEqual(response.json["job"]["quality"], "auto")
         self.assertEqual(response.json["job"]["moderation"], "auto")
         self.assertEqual(response.json["job"]["workflow"]["generation_stage"], "final")
         self.assertEqual(response.json["job"]["workflow"]["moderation"], "auto")
@@ -134,12 +135,12 @@ class TestGenerations(PlatformTestCase):
             [reference.id],
         )
 
-    def test_generation_api_maps_reviewed_stages_to_quality_and_workflow(self):
+    def test_generation_api_keeps_quality_independent_from_reviewed_stage(self):
         client = self.user_client()
-        for stage, expected_quality in (
-            ("draft", "low"),
-            ("refine", "medium"),
-            ("final", "high"),
+        for stage, quality in (
+            ("draft", "high"),
+            ("refine", "low"),
+            ("final", "medium"),
         ):
             with self.subTest(stage=stage):
                 workspace = self.create_workspace(f"{stage} 阶段")
@@ -160,13 +161,13 @@ class TestGenerations(PlatformTestCase):
                         "prompt": prompt,
                         "prompt_draft_id": draft.id,
                         "generation_stage": stage,
-                        "quality": "high" if expected_quality != "high" else "low",
+                        "quality": quality,
                     },
                 )
 
                 self.assertEqual(response.status_code, 202, response.get_data(as_text=True))
                 job = response.json["job"]
-                self.assertEqual(job["quality"], expected_quality)
+                self.assertEqual(job["quality"], quality)
                 self.assertEqual(job["workflow"]["generation_stage"], stage)
                 self.assertEqual(job["workflow"]["prompt_draft_id"], draft.id)
                 self.assertEqual(job["workflow"]["creative_direction_id"], "poster")
@@ -180,6 +181,42 @@ class TestGenerations(PlatformTestCase):
                 self.assertNotIn("canvas_resolution", job["workflow"])
                 db.session.refresh(workspace)
                 self.assertEqual(workspace.settings["generation_stage"], stage)
+                self.assertEqual(workspace.settings["quality"], quality)
+
+    def test_generation_quality_options_follow_gpt_image_model(self):
+        self.channel_path.write_text(
+            CHANNEL_CONFIG.replace("id: model-b", "id: gpt-image-2"), encoding="utf-8"
+        )
+        self.assertTrue(self.app.extensions["channel_registry"].reload(force=True))
+
+        for quality in ("auto", "low", "medium", "high"):
+            with self.subTest(model="gpt-image-2", quality=quality):
+                workspace = self.create_workspace(f"GPT Image 2 {quality}")
+                job = self.submit(workspace, model="gpt-image-2", quality=quality)
+                self.assertEqual(job.quality, quality)
+                self.assertEqual(workspace.settings["quality"], quality)
+
+        for quality in ("xhigh", "max"):
+            with self.subTest(model="gpt-image-2", quality=quality):
+                workspace = self.create_workspace(f"GPT Image 2 拒绝 {quality}")
+                with self.assertRaisesRegex(ServiceError, "仅支持 GPT Image 2.5"):
+                    self.submit(workspace, model="gpt-image-2", quality=quality)
+
+        self.channel_path.write_text(
+            CHANNEL_CONFIG.replace("id: model-b", "id: gpt-image-2.5-flare"),
+            encoding="utf-8",
+        )
+        self.assertTrue(self.app.extensions["channel_registry"].reload(force=True))
+        for quality in ("xhigh", "max"):
+            with self.subTest(model="gpt-image-2.5-flare", quality=quality):
+                workspace = self.create_workspace(f"GPT Image 2.5 {quality}")
+                job = self.submit(workspace, model="gpt-image-2.5-flare", quality=quality)
+                self.assertEqual(job.quality, quality)
+                self.assertEqual(workspace.settings["quality"], quality)
+
+        workspace = self.create_workspace("非法质量")
+        with self.assertRaisesRegex(ServiceError, "生成质量无效"):
+            self.submit(workspace, model="gpt-image-2.5-flare", quality="ultra")
 
     def test_img2img_style_contract_reaches_worker_provider_request(self):
         workspace = self.create_workspace("风格契约闭环")

@@ -82,6 +82,7 @@
   };
 
   const isGptImage2Model = (value) => /^gpt-image-2(?:$|[.-])/i.test(String(value || "").trim());
+  const isGptImage25Model = (value) => /^gpt-image-2\.5(?:$|[.-])/i.test(String(value || "").trim());
 
   class GenerationStrategyPolicy {
     constructor(maxBatchImages) {
@@ -329,6 +330,8 @@
         modelSelect: byId("modelSelect"),
         sizeInput: byId("sizeInput"),
         formatSelect: byId("formatSelect"),
+        qualityControl: byId("qualityControl"),
+        qualitySelect: byId("qualitySelect"),
         moderationSelect: byId("moderationSelect"),
         transparentBackground: byId("transparentBackground"),
         transparentBackgroundControl: byId("transparentBackgroundControl"),
@@ -573,10 +576,12 @@
         this.applyChannel(null, true);
       });
       this.el.modelSelect.addEventListener("change", () => {
+        this.updateQualityState();
         this.updateModerationState();
         this.updateTransparentBackgroundState();
         this.settingChanged();
       });
+      this.el.qualitySelect.addEventListener("change", () => this.settingChanged());
       this.el.moderationSelect.addEventListener("change", () => this.settingChanged());
       this.el.formatSelect.addEventListener("change", () => {
         this.updateTransparentBackgroundState();
@@ -727,6 +732,7 @@
     IMAGE_MAX_ASPECT_RATIO,
     isValidImageSize,
     isGptImage2Model,
+    isGptImage25Model,
     REFERENCE_IMAGE_TYPES,
     REFERENCE_IMAGE_EXTENSION,
     JOB_ELEMENT_SELECTOR,

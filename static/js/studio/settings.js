@@ -14,6 +14,7 @@
     IMAGE_MAX_ASPECT_RATIO,
     isValidImageSize,
     isGptImage2Model,
+    isGptImage25Model,
     GenerationStrategyPolicy,
     setHidden,
     setAttribute,
@@ -156,6 +157,7 @@
         this.el.sizeInput.value = "";
         this.el.sizeInput.disabled = true;
         this.el.sizeInput.setCustomValidity("");
+        this.updateQualityState("auto");
         this.updateModerationState();
         this.updateTransparentBackgroundState();
         this.el.generateButton.disabled = true;
@@ -170,6 +172,7 @@
         "id",
         "label",
       );
+      this.updateQualityState(settings.quality || "auto");
       this.updateModerationState();
       const savedSize = this.normalizeSize(settings.size);
       this.el.sizeInput.value = savedSize && isValidImageSize(savedSize)
@@ -442,6 +445,26 @@
         : "当前模型未确认支持较低审核，仅使用标准审核";
     },
 
+    updateQualityState(preferred = this.el.qualitySelect.value) {
+      const modelId = this.el.modelSelect.value;
+      const supportsQuality = isGptImage2Model(modelId);
+      const qualities = ["auto", "low", "medium", "high"];
+      if (isGptImage25Model(modelId)) qualities.push("xhigh", "max");
+      this.fillSelect(this.el.qualitySelect, qualities, preferred || "auto", null, null, {
+        auto: "自动（auto）",
+        low: "低（low）",
+        medium: "中（medium）",
+        high: "高（high）",
+        xhigh: "超高（xhigh）",
+        max: "最高（max）",
+      });
+      this.el.qualityControl.hidden = !supportsQuality;
+      this.el.qualitySelect.disabled = !supportsQuality;
+      this.el.qualityControl.title = isGptImage25Model(modelId)
+        ? "默认 auto；GPT Image 2.5 支持 low、medium、high、xhigh、max"
+        : "默认 auto；GPT Image 2 支持 low、medium、high";
+    },
+
     generationStrategyPolicy() {
       return new GenerationStrategyPolicy(this.limits.max_batch_images);
     },
@@ -631,6 +654,7 @@
         size: this.normalizeSize(this.el.sizeInput.value)
           || this.activeWorkspace?.settings?.size
           || "1024x1024",
+        quality: this.el.qualitySelect.value || "auto",
         output_format: this.el.formatSelect.value,
         compression: 90,
         transparent_background: this.el.transparentBackground.checked,

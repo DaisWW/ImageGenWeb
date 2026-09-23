@@ -460,7 +460,7 @@ test("direct generation bypasses AI conversation", { tag: "@responsive" }, async
   expect(aiRequests).toBe(0);
 });
 
-test("GPT Image 2 transparency and moderation settings reach generation request", {
+test("GPT Image 2 model options reach generation request", {
   tag: "@responsive",
 }, async ({ studioPage: page }) => {
   const channel = {
@@ -468,7 +468,10 @@ test("GPT Image 2 transparency and moderation settings reach generation request"
     label: "GPT Image 2 测试渠道",
     enabled: true,
     configured: true,
-    models: [{ id: "gpt-image-2", label: "GPT Image 2" }],
+    models: [
+      { id: "gpt-image-2", label: "GPT Image 2" },
+      { id: "gpt-image-2.5-flare", label: "GPT Image 2.5 Flare" },
+    ],
     default_model: "gpt-image-2",
     price_rmb: "0.0300",
     capabilities: {
@@ -491,6 +494,30 @@ test("GPT Image 2 transparency and moderation settings reach generation request"
     .getAttribute("data-workspace-id");
   await page.locator("#directGenerationButton").click();
   await expect(page.locator("#generationForm")).toBeVisible();
+  await expect(page.locator("#modelSelect")).toHaveValue("gpt-image-2");
+  await expect(page.locator("#qualityControl")).toBeVisible();
+  await expect(page.locator("#qualitySelect")).toHaveValue("auto");
+  await expect(page.locator("#qualitySelect option")).toHaveCount(4);
+  await expect(page.locator('#qualitySelect option[value="xhigh"]')).toHaveCount(0);
+  await expect(page.locator('#qualitySelect option[value="max"]')).toHaveCount(0);
+
+  await page.locator("#modelSelect").selectOption("gpt-image-2.5-flare");
+  await expect(page.locator("#qualitySelect option")).toHaveCount(6);
+  await page.locator("#qualitySelect").selectOption("max");
+  await expect.poll(async () => page.evaluate(async (id) => {
+    const data = await window.ImageGen.api("/api/workspaces");
+    return data.workspaces.find((workspace) => workspace.id === id)?.settings;
+  }, workspaceId)).toMatchObject({ model: "gpt-image-2.5-flare", quality: "max" });
+
+  await page.locator("#modelSelect").selectOption("gpt-image-2");
+  await expect(page.locator("#qualitySelect")).toHaveValue("auto");
+  await expect(page.locator("#qualitySelect option")).toHaveCount(4);
+  await expect.poll(async () => page.evaluate(async (id) => {
+    const data = await window.ImageGen.api("/api/workspaces");
+    return data.workspaces.find((workspace) => workspace.id === id)?.settings;
+  }, workspaceId)).toMatchObject({ model: "gpt-image-2", quality: "auto" });
+  await page.locator("#modelSelect").selectOption("gpt-image-2.5-flare");
+  await page.locator("#qualitySelect").selectOption("max");
   await page.locator("#formatSelect").selectOption("jpeg");
   await page.locator("#transparentBackgroundControl").click();
   await expect(page.locator("#transparentBackground")).toBeChecked();
@@ -501,7 +528,12 @@ test("GPT Image 2 transparency and moderation settings reach generation request"
   await expect.poll(async () => page.evaluate(async (id) => {
     const data = await window.ImageGen.api("/api/workspaces");
     return data.workspaces.find((workspace) => workspace.id === id)?.settings;
-  }, workspaceId)).toMatchObject({ transparent_background: true, moderation: "low" });
+  }, workspaceId)).toMatchObject({
+    model: "gpt-image-2.5-flare",
+    quality: "max",
+    transparent_background: true,
+    moderation: "low",
+  });
 
   const generationRequest = page.waitForRequest((request) => (
     request.method() === "POST" && new URL(request.url()).pathname === "/api/generations"
@@ -511,6 +543,8 @@ test("GPT Image 2 transparency and moderation settings reach generation request"
   expect(body.transparent_background).toBe(true);
   expect(body.output_format).toBe("png");
   expect(body.moderation).toBe("low");
+  expect(body.model).toBe("gpt-image-2.5-flare");
+  expect(body.quality).toBe("max");
 });
 
 test("workspace lifecycle remains usable", { tag: "@responsive" }, async ({

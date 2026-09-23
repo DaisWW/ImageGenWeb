@@ -111,6 +111,7 @@
             <label class="compact-field model-field"><span>模型</span><select id="modelSelect" required></select></label>
             <label class="compact-field"><span>尺寸</span><input id="sizeInput" maxlength="20" placeholder="1024x1024" autocomplete="off" required></label>
             <label class="compact-field"><span>格式</span><select id="formatSelect"></select></label>
+            <label class="compact-field" id="qualityControl" title="默认由模型自动选择；GPT Image 2 支持 low、medium、high，GPT Image 2.5 额外支持 xhigh、max。"><span>质量</span><select id="qualitySelect"></select></label>
             <label class="compact-field" title="GPT Image 2 的内容审核强度。低强度不保证请求通过，仍受 OpenAI 内容政策约束。"><span>内容审核</span><select id="moderationSelect"><option value="auto">标准（auto）</option><option value="low">较低（low）</option></select></label>
             <label class="toggle-line generation-toggle transparent-background-control" id="transparentBackgroundControl" title="GPT Image 2 原生透明背景（Preview）。这是图像模型能力，不是后处理抠图；输出必须为 PNG 或 WebP，开启后会自动切换为 PNG。">
               <span class="transparent-background-swatch" aria-hidden="true"></span>
