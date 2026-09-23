@@ -191,6 +191,9 @@
       const max = this.generationReferenceLimit();
       const orderById = this.referenceOrderMap(this.activeWorkspace?.id, selected);
       this.el.referenceLimit.textContent = `${selected.size} / ${max}`;
+      this.el.referenceLimit.title = max === 16
+        ? "官方 GPT Image 编辑接口每次最多接受 16 张输入图"
+        : `当前渠道最多选择 ${max} 张垫图`;
       this.el.referenceAdd.disabled = assets.length + uploads.length >= this.limits.max_assets_per_workspace
         || this.referenceUploadPending;
       this.el.referenceList.replaceChildren(
@@ -398,7 +401,12 @@
       else {
         const max = this.generationReferenceLimit();
         if (selection.size >= max) {
-          UI.toast(`当前渠道最多选择 ${max} 张垫图`, "error");
+          UI.toast(
+            max === 16
+              ? "官方 GPT Image 编辑接口每次最多接受 16 张输入图"
+              : `当前渠道最多选择 ${max} 张垫图`,
+            "error",
+          );
           return;
         }
         selection.add(id);

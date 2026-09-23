@@ -48,6 +48,10 @@ class GenerationRequestValidator:
         normalized_size = normalize_image_size(request.size)
         if request.output_format not in channel.capabilities.formats:
             raise ServiceError(f"{channel.label} 不支持格式 {request.output_format}")
+        if request.transparent_background and request.output_format not in {"png", "webp"}:
+            raise ServiceError("透明背景仅支持 PNG 或 WebP 格式")
+        if request.moderation not in {"auto", "low"}:
+            raise ServiceError("内容审核级别无效")
         if request.quality not in GENERATION_QUALITIES:
             raise ServiceError("生成质量无效")
         if not 0 <= request.compression <= 100:
@@ -76,9 +80,9 @@ class GenerationRequestValidator:
             raise ServiceError(f"参考图合计不能超过 {runtime.max_attachment_total_mb} MiB")
         capabilities = channel.capabilities
         if len(references) > capabilities.max_reference_images:
-            raise ServiceError(
-                f"{channel.label} 最多支持 {capabilities.max_reference_images} 张垫图"
-            )
+            limit = capabilities.max_reference_images
+            reason = "（官方 GPT Image 编辑接口上限）" if limit == 16 else ""
+            raise ServiceError(f"{channel.label} 最多支持 {limit} 张垫图{reason}")
         if any(
             asset.byte_count > capabilities.max_reference_image_mb * 1024 * 1024
             for asset in references

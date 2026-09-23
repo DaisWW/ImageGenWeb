@@ -140,6 +140,7 @@ p {
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
+.transparent-background-control:has(input:focus-visible),
 .workspace-select:focus-visible,
 .workspace-action:focus-visible {
   outline: 2px solid rgb(125 183 216 / 65%);

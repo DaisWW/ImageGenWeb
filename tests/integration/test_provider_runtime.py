@@ -33,7 +33,6 @@ from tests.support.platform import (
     PlatformTestCase,
     RecordingChatSession,
     RecordingImageSession,
-    RejectingTransparencySession,
     png_bytes,
 )
 
@@ -168,24 +167,28 @@ models:
         self.assertEqual(session.request["json"]["n"], 1)
         self.assertEqual(session.request["json"]["prompt"], request.prompt)
         self.assertNotIn("background", session.request["json"])
+        self.assertNotIn("moderation", session.request["json"])
+        self.assertNotIn("user", session.request["json"])
         self.assertNotIn("data", session.request)
         self.assertEqual(session.request["headers"]["Content-Type"], "application/json")
         self.assertEqual(session.request["headers"]["Idempotency-Key"], "imagegen-test-key")
 
-        # The legacy flag is ignored; generation always asks for the original image.
         transparent_result = adapter.generate(
             channel,
-            replace(request, transparent_background=True),
+            replace(request, transparent_background=True, moderation="low", user="opaque-user"),
         )
-        self.assertNotIn("background", session.request["json"])
-        self.assertEqual(session.request["json"]["prompt"], request.prompt)
-        self.assertEqual(transparent_result.content, png_bytes())
+        self.assertEqual(session.request["json"]["background"], "transparent")
+        self.assertEqual(session.request["json"]["moderation"], "low")
+        self.assertEqual(session.request["json"]["user"], "opaque-user")
+        self.assertEqual(transparent_result.content, session.transparent_content)
 
         subject = png_bytes((220, 35, 45))
         layout = png_bytes((25, 80, 220))
         edit_request = replace(
             request,
             transparent_background=True,
+            moderation="low",
+            user="opaque-user",
             references=(
                 ReferencePayload("subject.png", subject, "image/png"),
                 ReferencePayload("layout.png", layout, "image/png"),
@@ -194,8 +197,9 @@ models:
         edit_result = adapter.generate(channel, edit_request)
         self.assertEqual(session.request["url"], "https://relay.example/v1/images/edits")
         self.assertEqual(session.request["data"]["n"], "1")
-        self.assertNotIn("background", session.request["data"])
-        self.assertEqual(session.request["data"]["prompt"], request.prompt)
+        self.assertEqual(session.request["data"]["background"], "transparent")
+        self.assertEqual(session.request["data"]["moderation"], "low")
+        self.assertEqual(session.request["data"]["user"], "opaque-user")
         self.assertEqual([part[0] for part in session.request["files"]], ["image[]", "image[]"])
         self.assertEqual(
             [part[1][0] for part in session.request["files"]],
@@ -206,7 +210,31 @@ models:
             [subject, layout],
         )
         self.assertNotIn("Content-Type", session.request["headers"])
-        self.assertEqual(edit_result.content, png_bytes())
+        self.assertEqual(edit_result.content, session.transparent_content)
+
+    def test_channel_can_omit_optional_user_identifier_for_strict_proxies(self):
+        channel = replace(
+            self.app.extensions["channel_registry"].get("test"),
+            send_user_identifier=False,
+        )
+        session = RecordingImageSession()
+        adapter = OpenAIImagesAdapter()
+        adapter._local.session = session
+
+        adapter.generate(
+            channel,
+            GenerationRequest(
+                prompt="匿名标识兼容性",
+                model="model-a",
+                size="1024x1024",
+                quality="high",
+                output_format="png",
+                compression=90,
+                user="opaque-user",
+            ),
+        )
+
+        self.assertNotIn("user", session.request["json"])
 
     def test_image_edit_compresses_and_deduplicates_reference_payloads(self):
         channel = self.app.extensions["channel_registry"].get("test")
@@ -242,10 +270,10 @@ models:
         self.assertEqual(files[0][1][0], "one.webp")
         self.assertLess(len(files[0][1][1]), len(original))
 
-    def test_legacy_transparent_flag_is_ignored_by_provider(self):
+    def test_transparent_background_is_sent_to_provider(self):
         channel = self.app.extensions["channel_registry"].get("test")
         adapter = OpenAIImagesAdapter()
-        session = RejectingTransparencySession()
+        session = RecordingImageSession()
         adapter._local.session = session
 
         result = adapter.generate(
@@ -262,33 +290,33 @@ models:
         )
 
         self.assertEqual(len(session.requests), 1)
-        self.assertNotIn("background", session.requests[0]["json"])
-        self.assertEqual(session.requests[0]["json"]["prompt"], "极简上传图标")
-        self.assertEqual(result.content, png_bytes())
+        self.assertEqual(session.requests[0]["json"]["background"], "transparent")
+        self.assertEqual(result.content, session.transparent_content)
 
-    def test_legacy_transparent_flag_preserves_opaque_provider_image(self):
+    def test_transparent_background_rejects_opaque_provider_image(self):
         content = png_bytes((35, 160, 110))
         channel = self.app.extensions["channel_registry"].get("test")
         adapter = OpenAIImagesAdapter()
         session = RecordingImageSession(transparent_content=content)
         adapter._local.session = session
 
-        result = adapter.generate(
-            channel,
-            GenerationRequest(
-                prompt="极简上传图标",
-                model="model-a",
-                size="1024x1024",
-                quality="high",
-                output_format="png",
-                compression=90,
-                transparent_background=True,
-            ),
-        )
+        with self.assertRaisesRegex(ProviderError, "上游未返回真实透明背景图片") as error:
+            adapter.generate(
+                channel,
+                GenerationRequest(
+                    prompt="极简上传图标",
+                    model="model-a",
+                    size="1024x1024",
+                    quality="high",
+                    output_format="png",
+                    compression=90,
+                    transparent_background=True,
+                ),
+            )
 
-        self.assertEqual(result.content, png_bytes())
+        self.assertEqual(error.exception.code, "transparent_background_missing")
         self.assertEqual(len(session.requests), 1)
-        self.assertNotIn("background", session.requests[0]["json"])
+        self.assertEqual(session.requests[0]["json"]["background"], "transparent")
 
     def test_image_upstream_errors_are_localized_without_losing_diagnostics(self):
         channel = self.app.extensions["channel_registry"].get("test")

@@ -460,6 +460,59 @@ test("direct generation bypasses AI conversation", { tag: "@responsive" }, async
   expect(aiRequests).toBe(0);
 });
 
+test("GPT Image 2 transparency and moderation settings reach generation request", {
+  tag: "@responsive",
+}, async ({ studioPage: page }) => {
+  const channel = {
+    id: "e2e-gpt-image-2",
+    label: "GPT Image 2 测试渠道",
+    enabled: true,
+    configured: true,
+    models: [{ id: "gpt-image-2", label: "GPT Image 2" }],
+    default_model: "gpt-image-2",
+    price_rmb: "0.0300",
+    capabilities: {
+      modes: ["text2img", "img2img"],
+      max_reference_images: 16,
+      max_reference_image_mb: 10,
+      max_reference_total_mb: 40,
+      formats: ["png", "jpeg", "webp"],
+    },
+    limits: { max_concurrency: 2 },
+  };
+  await page.route("**/api/channels", (route) => route.fulfill({
+    json: { version: "e2e-gpt-image-2", channels: [channel] },
+  }));
+  await page.route("**/api/generations", (route) => route.fulfill({
+    status: 409, json: { error: "E2E 已接收请求" },
+  }));
+  await page.reload();
+  const workspaceId = await page.locator("#workspaceList .workspace-item.active")
+    .getAttribute("data-workspace-id");
+  await page.locator("#directGenerationButton").click();
+  await expect(page.locator("#generationForm")).toBeVisible();
+  await page.locator("#formatSelect").selectOption("jpeg");
+  await page.locator("#transparentBackgroundControl").click();
+  await expect(page.locator("#transparentBackground")).toBeChecked();
+  await expect(page.locator("#formatSelect")).toHaveValue("png");
+  await expect(page.locator('#formatSelect option[value="jpeg"]')).toHaveAttribute("disabled", "");
+  await page.locator("#moderationSelect").selectOption("low");
+  await page.locator("#promptInput").fill("透明图标");
+  await expect.poll(async () => page.evaluate(async (id) => {
+    const data = await window.ImageGen.api("/api/workspaces");
+    return data.workspaces.find((workspace) => workspace.id === id)?.settings;
+  }, workspaceId)).toMatchObject({ transparent_background: true, moderation: "low" });
+
+  const generationRequest = page.waitForRequest((request) => (
+    request.method() === "POST" && new URL(request.url()).pathname === "/api/generations"
+  ));
+  await page.locator("#generateButton").click();
+  const body = (await generationRequest).postDataJSON();
+  expect(body.transparent_background).toBe(true);
+  expect(body.output_format).toBe("png");
+  expect(body.moderation).toBe("low");
+});
+
 test("workspace lifecycle remains usable", { tag: "@responsive" }, async ({
   studioPage: page,
 }, testInfo) => {

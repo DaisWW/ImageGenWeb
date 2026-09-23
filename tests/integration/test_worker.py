@@ -25,6 +25,7 @@ from imagegen.models import (
     utcnow,
 )
 from imagegen.storage import StorageError
+from imagegen.worker import _anonymous_image_user
 from tests.support.platform import (
     BlockingProviderFactory,
     FakeProviderFactory,
@@ -43,8 +44,13 @@ class TestWorker(PlatformTestCase):
         channel = self.app.extensions["channel_registry"].get("test")
         self.assertTrue(worker._claim(job.items[0].id, channel))
         worker._process_item(job.items[0].id)
-        self.assertFalse(worker.providers.adapter.request.transparent_background)
+        self.assertTrue(worker.providers.adapter.request.transparent_background)
         self.assertTrue(worker.providers.adapter.request.idempotency_key)
+        self.assertEqual(worker.providers.adapter.request.moderation, "auto")
+        self.assertEqual(
+            worker.providers.adapter.request.user,
+            _anonymous_image_user(self.app.config["SECRET_KEY"], self.user.id, "test"),
+        )
 
         db.session.expire_all()
         item = db.session.get(GenerationItem, job.items[0].id)
@@ -55,8 +61,8 @@ class TestWorker(PlatformTestCase):
         self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
         self.assertTrue(self.app.extensions["image_storage"].read(item.output_path).is_file())
         with Image.open(self.app.extensions["image_storage"].read(item.output_path)) as image:
-            self.assertEqual(image.convert("RGBA").getchannel("A").getextrema(), (255, 255))
-        self.assertFalse(item.job.transparent_background)
+            self.assertLess(image.convert("RGBA").getchannel("A").getextrema()[0], 255)
+        self.assertTrue(item.job.transparent_background)
 
         charge_count = db.session.scalar(
             select(func.count(WalletLedger.id)).where(
@@ -75,7 +81,15 @@ class TestWorker(PlatformTestCase):
         self.assertEqual(attempt.status, "succeeded")
         self.assertTrue(attempt.provider_completed)
 
-    def test_legacy_transparent_flag_does_not_reject_img2img_reference(self):
+    def test_anonymous_image_user_is_stable_and_channel_scoped(self):
+        secret = self.app.config["SECRET_KEY"]
+        token = _anonymous_image_user(secret, self.user.id, "test")
+        self.assertEqual(len(token), 64)
+        self.assertEqual(token, _anonymous_image_user(secret, self.user.id, "test"))
+        self.assertNotEqual(token, _anonymous_image_user(secret, self.user.id, "other"))
+        self.assertNotEqual(token, _anonymous_image_user(secret, self.admin.id, "test"))
+
+    def test_transparent_img2img_passes_flag_to_provider(self):
         workspace = self.create_workspace()
         reference = self.services.workspaces.add_assets(
             workspace,
@@ -102,7 +116,7 @@ class TestWorker(PlatformTestCase):
         self.assertEqual(user.balance_rmb, Decimal("18.7500"))
         self.assertEqual(user.reserved_rmb, Decimal("0.0000"))
         self.assertEqual(len(worker.providers.adapter.requests), 1)
-        self.assertFalse(worker.providers.adapter.request.transparent_background)
+        self.assertTrue(worker.providers.adapter.request.transparent_background)
 
     def test_worker_sends_each_item_effective_prompt(self):
         workspace = self.create_workspace("逐图提示词")
@@ -576,7 +590,7 @@ class TestWorker(PlatformTestCase):
         worker._schedule_available()
         db.session.expire_all()
         self.assertEqual(db.session.get(GenerationItem, job.items[0].id).status, "running")
-        self.assertFalse(db.session.get(GenerationJob, job.id).transparent_background)
+        self.assertTrue(db.session.get(GenerationJob, job.id).transparent_background)
 
     def test_worker_schedules_with_its_own_application_context(self):
         workspace = self.create_workspace()

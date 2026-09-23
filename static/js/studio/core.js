@@ -17,9 +17,13 @@
   const ACTIVE_POLL_INTERVAL = 2200;
   const IDLE_POLL_INTERVAL = 8000;
   const COMPOSER_CLOSE_TIMEOUT = 300;
-  const IMAGE_SIZE_PATTERN = /^([1-9]\d{1,4})x([1-9]\d{1,4})$/;
-  const IMAGE_DIMENSION_MIN = 64;
-  const IMAGE_DIMENSION_MAX = 8192;
+  const IMAGE_SIZE_PATTERN = /^([1-9]\d{1,3})x([1-9]\d{1,3})$/;
+  const IMAGE_SIZE_AUTO = "auto";
+  const IMAGE_DIMENSION_MIN = 16;
+  const IMAGE_DIMENSION_MAX = 3840;
+  const IMAGE_MIN_PIXELS = 655360;
+  const IMAGE_MAX_PIXELS = 8294400;
+  const IMAGE_MAX_ASPECT_RATIO = 3;
   const REFERENCE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
   const REFERENCE_IMAGE_EXTENSION = /\.(?:png|jpe?g|webp)$/i;
   const JOB_ELEMENT_SELECTOR = [
@@ -59,6 +63,25 @@
     const next = String(value);
     if (element.getAttribute(name) !== next) element.setAttribute(name, next);
   };
+
+  const isValidImageSize = (value) => {
+    const normalized = String(value || "").trim().toLowerCase().replaceAll("×", "x");
+    if (normalized === IMAGE_SIZE_AUTO) return true;
+    const match = IMAGE_SIZE_PATTERN.exec(normalized);
+    if (!match) return false;
+    const width = Number(match[1]);
+    const height = Number(match[2]);
+    return [width, height].every((dimension) => (
+      dimension >= IMAGE_DIMENSION_MIN
+      && dimension <= IMAGE_DIMENSION_MAX
+      && dimension % 16 === 0
+    ))
+      && width * height >= IMAGE_MIN_PIXELS
+      && width * height <= IMAGE_MAX_PIXELS
+      && Math.max(width, height) <= IMAGE_MAX_ASPECT_RATIO * Math.min(width, height);
+  };
+
+  const isGptImage2Model = (value) => /^gpt-image-2(?:$|[.-])/i.test(String(value || "").trim());
 
   class GenerationStrategyPolicy {
     constructor(maxBatchImages) {
@@ -306,6 +329,11 @@
         modelSelect: byId("modelSelect"),
         sizeInput: byId("sizeInput"),
         formatSelect: byId("formatSelect"),
+        moderationSelect: byId("moderationSelect"),
+        transparentBackground: byId("transparentBackground"),
+        transparentBackgroundControl: byId("transparentBackgroundControl"),
+        transparentBackgroundBadge: byId("transparentBackgroundBadge"),
+        transparentBackgroundHint: byId("transparentBackgroundHint"),
         batchCount: byId("batchCount"),
         generationStrategy: byId("generationStrategy"),
         generationPlan: byId("generationPlan"),
@@ -544,8 +572,20 @@
       this.el.channelSelect.addEventListener("change", () => {
         this.applyChannel(null, true);
       });
-      this.el.modelSelect.addEventListener("change", () => this.settingChanged());
+      this.el.modelSelect.addEventListener("change", () => {
+        this.updateModerationState();
+        this.updateTransparentBackgroundState();
+        this.settingChanged();
+      });
+      this.el.moderationSelect.addEventListener("change", () => this.settingChanged());
       this.el.formatSelect.addEventListener("change", () => {
+        this.updateTransparentBackgroundState();
+        this.settingChanged();
+      });
+      this.el.transparentBackground.addEventListener("change", () => {
+        this.updateTransparentBackgroundState();
+        this.updatePrice();
+        this.updateInteractionState();
         this.settingChanged();
       });
       this.el.sizeInput.addEventListener("input", () => this.el.sizeInput.setCustomValidity(""));
@@ -679,8 +719,14 @@
     IDLE_POLL_INTERVAL,
     COMPOSER_CLOSE_TIMEOUT,
     IMAGE_SIZE_PATTERN,
+    IMAGE_SIZE_AUTO,
     IMAGE_DIMENSION_MIN,
     IMAGE_DIMENSION_MAX,
+    IMAGE_MIN_PIXELS,
+    IMAGE_MAX_PIXELS,
+    IMAGE_MAX_ASPECT_RATIO,
+    isValidImageSize,
+    isGptImage2Model,
     REFERENCE_IMAGE_TYPES,
     REFERENCE_IMAGE_EXTENSION,
     JOB_ELEMENT_SELECTOR,

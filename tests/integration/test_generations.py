@@ -58,7 +58,38 @@ class TestGenerations(PlatformTestCase):
 
         self.assertEqual(response.status_code, 202, response.get_data(as_text=True))
         self.assertEqual(response.json["job"]["quality"], "high")
+        self.assertEqual(response.json["job"]["moderation"], "auto")
         self.assertEqual(response.json["job"]["workflow"]["generation_stage"], "final")
+        self.assertEqual(response.json["job"]["workflow"]["moderation"], "auto")
+
+    def test_low_moderation_is_persisted_only_for_gpt_image_2_series(self):
+        workspace = self.create_workspace("低强度审核")
+        with self.assertRaisesRegex(ServiceError, "仅支持 GPT Image 2"):
+            self.submit(workspace, moderation="low")
+        with self.assertRaisesRegex(ServiceError, "内容审核级别无效"):
+            self.submit(workspace, moderation="off")
+
+        for model_id in ("gpt-image-2", "gpt-image-2.5-flare"):
+            with self.subTest(model_id=model_id):
+                self.channel_path.write_text(
+                    CHANNEL_CONFIG.replace("id: model-b", f"id: {model_id}"), encoding="utf-8"
+                )
+                self.assertTrue(self.app.extensions["channel_registry"].reload(force=True))
+                response = self.user_client().post(
+                    "/api/generations",
+                    json={
+                        "workspace_id": workspace.id,
+                        "channel_id": "test",
+                        "model": model_id,
+                        "prompt": "插画风景",
+                        "moderation": "low",
+                    },
+                )
+                self.assertEqual(response.status_code, 202, response.get_data(as_text=True))
+                self.assertEqual(response.json["job"]["moderation"], "low")
+                self.assertEqual(response.json["job"]["workflow"]["moderation"], "low")
+                db.session.refresh(workspace)
+                self.assertEqual(workspace.settings["moderation"], "low")
 
     def test_generation_api_infers_mode_from_reference_selection(self):
         client = self.user_client()
@@ -348,13 +379,13 @@ class TestGenerations(PlatformTestCase):
 
     def test_generation_api_requires_explicit_canvas_conflict_resolution(self):
         client = self.user_client()
-        prompt = "1920×1080 横屏画面"
+        prompt = "2048×1152 横屏画面"
 
         unresolved_workspace = self.create_workspace("未处理画幅冲突")
         unresolved_draft = self.create_ready_prompt_draft(
             unresolved_workspace,
             prompt=prompt,
-            canvas_request={"width": 1920, "height": 1080, "aspect_ratio": "16:9"},
+            canvas_request={"width": 2048, "height": 1152, "aspect_ratio": "16:9"},
         )
         base_payload = {
             "workspace_id": unresolved_workspace.id,
@@ -379,7 +410,7 @@ class TestGenerations(PlatformTestCase):
         panel_draft = self.create_ready_prompt_draft(
             panel_workspace,
             prompt=prompt,
-            canvas_request={"width": 1920, "height": 1080, "aspect_ratio": "16:9"},
+            canvas_request={"width": 2048, "height": 1152, "aspect_ratio": "16:9"},
         )
         panel = client.post(
             "/api/generations",
@@ -394,14 +425,14 @@ class TestGenerations(PlatformTestCase):
         self.assertEqual(panel.json["job"]["workflow"]["canvas_resolution"], "panel")
         self.assertEqual(
             panel.json["job"]["workflow"]["canvas_request"],
-            {"width": 1920, "height": 1080, "aspect_ratio": "16:9"},
+            {"width": 2048, "height": 1152, "aspect_ratio": "16:9"},
         )
 
         conversation_workspace = self.create_workspace("应用对话画幅")
         conversation_draft = self.create_ready_prompt_draft(
             conversation_workspace,
             prompt=prompt,
-            canvas_request={"width": 1920, "height": 1080, "aspect_ratio": "16:9"},
+            canvas_request={"width": 2048, "height": 1152, "aspect_ratio": "16:9"},
         )
         conversation = client.post(
             "/api/generations",
@@ -409,12 +440,45 @@ class TestGenerations(PlatformTestCase):
                 **base_payload,
                 "workspace_id": conversation_workspace.id,
                 "prompt_draft_id": conversation_draft.id,
-                "size": "1920x1080",
+                "size": "2048x1152",
                 "canvas_resolution": "conversation",
             },
         )
         self.assertEqual(conversation.status_code, 202, conversation.get_data(as_text=True))
         self.assertEqual(conversation.json["job"]["workflow"]["canvas_resolution"], "conversation")
+
+    def test_legacy_canvas_request_accepts_the_nearest_valid_ratio(self):
+        workspace = self.create_workspace("旧画幅建议")
+        prompt = "1920×1080 横屏画面"
+        draft = self.create_ready_prompt_draft(
+            workspace,
+            prompt=prompt,
+            canvas_request={"width": 1920, "height": 1080, "aspect_ratio": "16:9"},
+        )
+        response = self.user_client().post(
+            "/api/generations",
+            json={
+                "workspace_id": workspace.id,
+                "channel_id": "test",
+                "model": "model-b",
+                "prompt": prompt,
+                "prompt_draft_id": draft.id,
+                "size": "2048x1152",
+                "canvas_resolution": "conversation",
+            },
+        )
+        self.assertEqual(response.status_code, 202, response.get_data(as_text=True))
+        self.assertEqual(response.json["job"]["size"], "2048x1152")
+
+    def test_legacy_workspace_size_does_not_block_other_settings(self):
+        workspace = self.create_workspace("旧工作站尺寸")
+        workspace.settings = {**workspace.settings, "size": "1920x1080"}
+        db.session.commit()
+
+        updated = self.services.workspaces.update(workspace, {"settings": {"prompt": "新的描述"}})
+        self.assertEqual(updated.settings["size"], "auto")
+        with self.assertRaisesRegex(ServiceError, "尺寸格式"):
+            self.services.workspaces.update(workspace, {"settings": {"size": "1920x1080"}})
 
     def test_generation_api_rejects_an_invalid_stage(self):
         workspace = self.create_workspace("无效生成阶段")
@@ -504,24 +568,24 @@ class TestGenerations(PlatformTestCase):
         self.assertEqual(stale.json["code"], "prompt_review_stale")
         self.assertIn("参考图或顺序已改变", stale.json["error"])
 
-    def test_bundled_channels_support_twenty_references(self):
+    def test_bundled_channels_support_sixteen_references(self):
         config_path = Path(__file__).resolve().parents[2] / "config" / "channels.yaml"
         registry = ChannelRegistry(config_path)
 
         for channel_id in ("current", "lucen"):
             channel = registry.get(channel_id, require_available=False)
-            self.assertEqual(channel.capabilities.max_reference_images, 20)
+            self.assertEqual(channel.capabilities.max_reference_images, 16)
 
-    def test_generation_accepts_twenty_ordered_references(self):
+    def test_generation_accepts_sixteen_ordered_references(self):
         self.channel_path.write_text(
-            CHANNEL_CONFIG.replace("max_reference_images: 8", "max_reference_images: 20"),
+            CHANNEL_CONFIG.replace("max_reference_images: 8", "max_reference_images: 16"),
             encoding="utf-8",
         )
         self.assertTrue(self.app.extensions["channel_registry"].reload(force=True))
-        workspace = self.create_workspace("二十张垫图")
+        workspace = self.create_workspace("十六张垫图")
         assets = self.services.workspaces.add_assets(
             workspace,
-            [(f"reference-{index}.png", png_bytes((index * 10, 80, 160))) for index in range(20)],
+            [(f"reference-{index}.png", png_bytes((index * 10, 80, 160))) for index in range(16)],
         )
 
         job = self.submit(
@@ -535,14 +599,29 @@ class TestGenerations(PlatformTestCase):
             [asset.id for asset in reversed(assets)],
         )
 
-    def test_legacy_transparent_background_input_is_ignored(self):
-        workspace = self.create_workspace()
-        legacy_job = self.submit(
-            workspace,
-            output_format="jpeg",
-            transparent_background=True,
+    def test_generation_rejects_seventeen_references(self):
+        self.channel_path.write_text(
+            CHANNEL_CONFIG.replace("max_reference_images: 8", "max_reference_images: 16"),
+            encoding="utf-8",
         )
-        self.assertFalse(legacy_job.transparent_background)
+        self.assertTrue(self.app.extensions["channel_registry"].reload(force=True))
+        workspace = self.create_workspace("十七张垫图")
+        assets = self.services.workspaces.add_assets(
+            workspace,
+            [(f"reference-{index}.png", png_bytes((index * 10, 80, 160))) for index in range(17)],
+        )
+
+        with self.assertRaisesRegex(ServiceError, "最多支持 16 张垫图"):
+            self.submit(
+                workspace,
+                mode="img2img",
+                reference_ids=tuple(asset.id for asset in assets),
+            )
+
+    def test_transparent_background_is_validated_persisted_and_serialized(self):
+        workspace = self.create_workspace()
+        with self.assertRaisesRegex(ServiceError, "透明背景仅支持 PNG 或 WebP"):
+            self.submit(workspace, output_format="jpeg", transparent_background=True)
 
         webp_workspace = self.create_workspace("透明 WebP")
         client = self.user_client()
@@ -567,11 +646,11 @@ class TestGenerations(PlatformTestCase):
         )
 
         self.assertEqual(response.status_code, 202)
-        self.assertFalse(response.json["job"]["transparent_background"])
+        self.assertTrue(response.json["job"]["transparent_background"])
         db.session.refresh(webp_workspace)
-        self.assertNotIn("transparent_background", webp_workspace.settings)
+        self.assertTrue(webp_workspace.settings["transparent_background"])
         saved_job = db.session.get(GenerationJob, response.json["job"]["id"])
-        self.assertFalse(saved_job.transparent_background)
+        self.assertTrue(saved_job.transparent_background)
 
     def test_custom_size_is_accepted_and_normalized(self):
         workspace = self.create_workspace()
@@ -580,6 +659,12 @@ class TestGenerations(PlatformTestCase):
 
         self.assertEqual(job.size, "1280x720")
         self.assertEqual(workspace.settings["size"], "1280x720")
+
+    def test_auto_and_official_size_boundaries(self):
+        for size in ("auto", "1024x640", "1536x512", "3840x2160"):
+            with self.subTest(size=size):
+                workspace = self.create_workspace(f"合法尺寸 {size}")
+                self.assertEqual(self.submit(workspace, size=size).size, size)
 
     def test_channel_accepts_valid_custom_size_without_size_list(self):
         workspace = self.create_workspace()
@@ -603,7 +688,17 @@ class TestGenerations(PlatformTestCase):
 
     def test_invalid_custom_size_is_rejected(self):
         workspace = self.create_workspace()
-        for size in ("1024", "0x1024", "63x1024", "9000x1024"):
+        for size in (
+            "1024",
+            "0x1024",
+            "63x1024",
+            "9000x1024",
+            "1920x1080",
+            "1024x624",
+            "3840x2176",
+            "3840x1024",
+            "3856x2048",
+        ):
             with self.subTest(size=size), self.assertRaisesRegex(ServiceError, "尺寸格式"):
                 self.submit(workspace, size=size)
 

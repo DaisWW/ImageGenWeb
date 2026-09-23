@@ -58,7 +58,26 @@ class RuntimeConfigRepository:
         self._cipher = cipher
 
     def load_channels(self) -> ConfigOverride | None:
-        return self._load(CHANNEL_CONFIG_KEY, "channels")
+        override = self._load(CHANNEL_CONFIG_KEY, "channels")
+        if override is None:
+            return None
+
+        # Channel configs written before the GPT Image limit was tightened may
+        # still contain 17–20 references. Keep those deployments loadable and
+        # expose the new hard cap; the next admin save persists the normalized value.
+        for channel in override.document.get("channels", []):
+            if not isinstance(channel, dict):
+                continue
+            capabilities = channel.get("capabilities")
+            if not isinstance(capabilities, dict):
+                continue
+            try:
+                reference_limit = int(capabilities.get("max_reference_images"))
+            except (TypeError, ValueError):
+                continue
+            if 16 < reference_limit <= 20:
+                capabilities["max_reference_images"] = 16
+        return override
 
     def load_chat_models(self) -> ConfigOverride | None:
         return self._load(CHAT_CONFIG_KEY, "models")

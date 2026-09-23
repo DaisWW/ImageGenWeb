@@ -249,6 +249,8 @@
         const { target, limit } = this.librarySelectionContext();
         UI.toast(target === "chat"
           ? `每条消息最多发送 ${limit} 张图片`
+          : limit === 16
+          ? "官方 GPT Image 编辑接口每次最多接受 16 张输入图"
           : `当前渠道最多选择 ${limit} 张垫图`, "error");
         this.renderLibrary();
         return false;
@@ -468,7 +470,14 @@
       const selectedImageIds = [...this.librarySelection];
       const plannedReferenceIds = this.libraryReferenceIds(workspace, assetMap);
       if (!limit || desiredSelectionSize > limit) {
-        UI.toast(target === "chat" ? `每条消息最多发送 ${limit} 张图片` : `当前渠道最多选择 ${limit} 张垫图`, "error");
+        UI.toast(
+          target === "chat"
+            ? `每条消息最多发送 ${limit} 张图片`
+            : limit === 16
+            ? "官方 GPT Image 编辑接口每次最多接受 16 张输入图"
+            : `当前渠道最多选择 ${limit} 张垫图`,
+          "error",
+        );
         return;
       }
 

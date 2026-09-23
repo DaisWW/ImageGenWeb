@@ -25,6 +25,7 @@ class SubmitGeneration:
     quality: str = "high"
     workflow: dict[str, object] = field(default_factory=dict)
     transparent_background: bool = False
+    moderation: str = "auto"
     # Empty values keep the compatibility auto-routing path.  A concrete ID
     # pins the request to that user-selected channel.
     channel_id: str = ""

@@ -16,6 +16,7 @@ from requests.adapters import HTTPAdapter
 from ..config.channels import Channel
 from ..image_payloads import prepare_image_bytes, prepared_filename
 from .diagnostics import response_summary
+from .matting import image_has_real_alpha
 
 MAX_OUTPUT_BYTES = 50 * 1024 * 1024
 
@@ -70,6 +71,8 @@ class GenerationRequest:
     output_format: str
     compression: int
     transparent_background: bool = False
+    moderation: str = "auto"
+    user: str = ""
     references: tuple[ReferencePayload, ...] = ()
     idempotency_key: str = ""
 
@@ -97,6 +100,12 @@ class OpenAIImagesAdapter:
         }
         if request.output_format in {"jpeg", "webp"}:
             payload["output_compression"] = request.compression
+        if request.transparent_background:
+            payload["background"] = "transparent"
+        if request.moderation == "low":
+            payload["moderation"] = "low"
+        if request.user and channel.send_user_identifier:
+            payload["user"] = request.user
         headers = {"Authorization": f"Bearer {channel.api_key}"}
         if request.idempotency_key:
             headers["Idempotency-Key"] = request.idempotency_key
@@ -190,6 +199,13 @@ class OpenAIImagesAdapter:
             raise ProviderError(
                 "生成图片超过 50 MiB 限制",
                 code="output_too_large",
+                request_id=request_id,
+                provider_completed=True,
+            )
+        if request.transparent_background and not image_has_real_alpha(content):
+            raise ProviderError(
+                "上游未返回真实透明背景图片",
+                code="transparent_background_missing",
                 request_id=request_id,
                 provider_completed=True,
             )

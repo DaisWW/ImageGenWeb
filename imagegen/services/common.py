@@ -9,9 +9,19 @@ from ..errors import ServiceError
 
 MONEY_QUANTUM = Decimal("0.0001")
 IMAGE_SIZE_PATTERN = re.compile(r"^([1-9]\d{1,4})x([1-9]\d{1,4})$")
-IMAGE_DIMENSION_MIN = 64
-IMAGE_DIMENSION_MAX = 8192
+IMAGE_SIZE_AUTO = "auto"
+IMAGE_DIMENSION_MIN = 16
+IMAGE_DIMENSION_MAX = 3840
+IMAGE_MIN_PIXELS = 655_360
+IMAGE_MAX_PIXELS = 8_294_400
+IMAGE_MAX_ASPECT_RATIO = 3
 CANVAS_RATIO_PATTERN = re.compile(r"^([1-9]\d{0,3}):([1-9]\d{0,3})$")
+GPT_IMAGE_2_MODEL_PATTERN = re.compile(r"^gpt-image-2(?:$|[.-])", re.IGNORECASE)
+
+
+def is_gpt_image_2_model(value: Any) -> bool:
+    """Return whether a model identifier belongs to the GPT Image 2 family."""
+    return bool(GPT_IMAGE_2_MODEL_PATTERN.match(str(value or "").strip()))
 
 
 def money(value: Decimal | str | int | float) -> Decimal:
@@ -26,13 +36,39 @@ def money(value: Decimal | str | int | float) -> Decimal:
 
 def normalize_image_size(value: Any) -> str:
     size = str(value).strip().lower().replace("×", "x")
+    if size == IMAGE_SIZE_AUTO:
+        return size
     match = IMAGE_SIZE_PATTERN.fullmatch(size)
-    if not match or any(
-        not IMAGE_DIMENSION_MIN <= int(dimension) <= IMAGE_DIMENSION_MAX
-        for dimension in match.groups()
-    ):
-        raise ServiceError("尺寸格式应为宽x高，单边范围 64–8192 像素")
+    if not match or not _valid_image_dimensions(*(int(dimension) for dimension in match.groups())):
+        raise ServiceError(
+            "尺寸格式必须为 auto 或宽x高；宽高须为 16 的倍数，比例不超过 3:1，"
+            "像素数需在 655,360 到 8,294,400，单边不超过 3840"
+        )
     return size
+
+
+def _valid_image_dimensions(width: int, height: int) -> bool:
+    if not (
+        IMAGE_DIMENSION_MIN <= width <= IMAGE_DIMENSION_MAX
+        and IMAGE_DIMENSION_MIN <= height <= IMAGE_DIMENSION_MAX
+    ):
+        return False
+    if width % 16 or height % 16:
+        return False
+    if width * height < IMAGE_MIN_PIXELS or width * height > IMAGE_MAX_PIXELS:
+        return False
+    return max(width, height) <= IMAGE_MAX_ASPECT_RATIO * min(width, height)
+
+
+def valid_image_size(value: Any) -> bool:
+    size = str(value).strip().lower().replace("×", "x")
+    if size == IMAGE_SIZE_AUTO:
+        return True
+    match = IMAGE_SIZE_PATTERN.fullmatch(size)
+    return bool(match) and _valid_image_dimensions(
+        int(match.group(1)),
+        int(match.group(2)),
+    )
 
 
 def normalize_canvas_request(value: Any) -> dict[str, Any]:
@@ -62,8 +98,12 @@ def canvas_request_conflicts(value: Any, size: Any) -> bool:
         normalized_size = normalize_image_size(size)
     except ServiceError:
         return False
+    if normalized_size == IMAGE_SIZE_AUTO:
+        return False
     width, height = (int(part) for part in normalized_size.split("x", 1))
     if "width" in request and "height" in request:
+        if not valid_image_size(f"{request['width']}x{request['height']}"):
+            return request["aspect_ratio"] != _ratio_for_dimensions(width, height)
         return (request["width"], request["height"]) != (width, height)
     return request.get("aspect_ratio") != _ratio_for_dimensions(width, height)
 

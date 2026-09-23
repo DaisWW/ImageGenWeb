@@ -782,6 +782,7 @@
       form.elements.label.value = channel?.label || "";
       form.elements.priority.value = channel?.priority ?? 100;
       form.elements.enabled.checked = channel ? channel.enabled : true;
+      form.elements.send_user_identifier.checked = channel?.send_user_identifier !== false;
       form.elements.base_url.value = channel?.base_url || "";
       form.elements.api_key.value = "";
       const keyHint = channel?.api_key_hint || (channel?.has_api_key ? "已配置" : "");
@@ -879,6 +880,7 @@
         label: form.elements.label.value.trim(),
         priority: Number(form.elements.priority.value),
         enabled: form.elements.enabled.checked,
+        send_user_identifier: form.elements.send_user_identifier.checked,
         base_url: form.elements.base_url.value.trim(),
         api_key: form.elements.api_key.value.trim(),
         clear_api_key: form.elements.clear_api_key.checked,

@@ -3,9 +3,7 @@
 
   const {
     StudioApp,
-    IMAGE_SIZE_PATTERN,
-    IMAGE_DIMENSION_MIN,
-    IMAGE_DIMENSION_MAX,
+    isValidImageSize,
   } = window.ImageGenStudio;
 
   Object.assign(StudioApp.prototype, {
@@ -44,12 +42,7 @@
         && referenceBytes.every((bytes) => Number.isFinite(bytes) && bytes <= maxAttachmentBytes)
         && referenceBytes.reduce((total, bytes) => total + bytes, 0) <= maxAttachmentTotalBytes
       );
-      const sizeIsValid = !size || (() => {
-        const match = IMAGE_SIZE_PATTERN.exec(size);
-        return Boolean(match)
-          && [Number(match[1]), Number(match[2])]
-            .every((dimension) => dimension >= IMAGE_DIMENSION_MIN && dimension <= IMAGE_DIMENSION_MAX);
-      })();
+      const sizeIsValid = !size || isValidImageSize(size);
       if (!referencesResolved || !referencesWithinRuntimeLimits || !sizeIsValid) return [];
       if ((mode === "img2img" && referenceCount === 0)
         || (mode === "text2img" && referenceCount > 0)) return [];

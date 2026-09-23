@@ -123,6 +123,9 @@ class RuntimeConfigService:
                     "priority": raw.get("priority", old.priority if old else 100),
                     "enabled": as_bool(raw.get("enabled", True)),
                     "adapter": "openai_images",
+                    "send_user_identifier": as_bool(
+                        raw.get("send_user_identifier", old.send_user_identifier if old else True)
+                    ),
                     "base_url": str(raw.get("base_url", "")).strip(),
                     "api_key": _resolved_key(raw, old.api_key if old else ""),
                     "models": _models(raw.get("models")),

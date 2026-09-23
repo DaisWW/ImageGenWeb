@@ -194,6 +194,7 @@
       <label class="field"><span>API Key</span><input type="password" name="api_key" autocomplete="new-password"></label>
       <label class="field"><span>单价（RMB/张）</span><input type="number" name="price_rmb" min="0" step="0.0001" required></label>
     </div>
+    <label class="check-line" title="user 是官方可选参数；关闭后本渠道不会发送匿名 user 标识，适用于拒绝未知字段的兼容代理"><input type="checkbox" name="send_user_identifier" checked><span>发送匿名 user 标识</span><small class="subline">代理拒绝未知字段时关闭</small></label>
     <label class="check-line" data-clear-key-row hidden><input type="checkbox" name="clear_api_key"><span>清除已保存的 API Key</span></label>
     <section class="config-fieldset" aria-label="模型">
       <div class="config-fieldset-heading"><strong>模型</strong><button class="icon-button accent" type="button" id="addChannelModelButton" title="添加模型" aria-label="添加模型"><i data-lucide="plus"></i></button></div>
@@ -209,7 +210,7 @@
         <label class="check-line"><input type="checkbox" name="format_webp"><span>WebP</span></label>
       </div>
       <div class="form-grid three-columns">
-        <label class="field"><span>最多垫图</span><input type="number" name="max_reference_images" min="0" max="20" required></label>
+        <label class="field"><span>最多垫图</span><input type="number" name="max_reference_images" min="0" max="16" required><small class="subline">官方 GPT Image 编辑接口最多支持 16 张输入图</small></label>
         <label class="field"><span>单张上限 MiB</span><input type="number" name="max_reference_image_mb" min="1" max="50" required></label>
         <label class="field"><span>合计上限 MiB</span><input type="number" name="max_reference_total_mb" min="1" max="100" required></label>
       </div>

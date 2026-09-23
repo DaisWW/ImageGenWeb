@@ -26,7 +26,7 @@ from ...models import (
     utcnow,
 )
 from ..billing import BillingService
-from ..common import money
+from ..common import is_gpt_image_2_model, money
 from ..settings import SystemSettingsService
 from ..workspace_settings import sanitize_workspace_settings
 from .contracts import SubmitGeneration, sanitize_workflow
@@ -59,6 +59,8 @@ class GenerationService:
             workspace.kind,
             references,
         )
+        if request.moderation == "low" and not is_gpt_image_2_model(selected_model.identifier):
+            raise ServiceError("低强度内容审核仅支持 GPT Image 2 系列")
         requested_count = request.batch_count
         item_prompts = tuple(
             str(item).strip()
@@ -87,6 +89,7 @@ class GenerationService:
         reserved = money(reservation_unit_price * requested_count)
         self.billing.reserve(user, reserved)
         workflow = sanitize_workflow(request.workflow)
+        workflow["moderation"] = request.moderation
         workflow["channel_routing"] = {
             "mode": "selected" if user_selected_channel else "priority",
             "candidate_ids": [channel.identifier for channel in routing_channels],
@@ -109,7 +112,7 @@ class GenerationService:
             workflow=workflow,
             output_format=request.output_format,
             compression=request.compression,
-            transparent_background=False,
+            transparent_background=request.transparent_background,
             requested_count=requested_count,
             price_per_image_rmb=money(reservation_unit_price),
             reserved_rmb=reserved,
@@ -156,6 +159,8 @@ class GenerationService:
                 "size": normalized_size,
                 "output_format": request.output_format,
                 "compression": request.compression,
+                "transparent_background": request.transparent_background,
+                "moderation": request.moderation,
                 "batch_count": request.batch_count,
                 "generation_stage": workflow["generation_stage"],
                 "prompt_draft_id": workflow["prompt_draft_id"],

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import os
 import socket
@@ -32,6 +34,7 @@ from .integrations.images import (
 )
 from .integrations.matting import (
     image_has_baked_checkerboard,
+    image_has_real_alpha,
     validate_matting_output,
 )
 from .models import (
@@ -54,6 +57,11 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_TIMEOUT_RETRY_LIMIT = 5
 TIMEOUT_RETRY_DELAYS = (3, 5, 10, 20, 30)
 SCHEDULING_PAGE_SIZE = 200
+
+
+def _anonymous_image_user(secret: str, user_id: int, channel_id: str) -> str:
+    identity = f"image-user:v1:{channel_id}:{user_id}".encode("utf-8")
+    return hmac.new(secret.encode("utf-8"), identity, hashlib.sha256).hexdigest()
 
 
 class GenerationWorker:
@@ -1215,12 +1223,23 @@ class GenerationWorker:
                         quality=item.job.quality,
                         output_format=item.job.output_format,
                         compression=item.job.compression,
-                        transparent_background=False,
+                        transparent_background=item.job.transparent_background,
+                        moderation=(item.job.workflow or {}).get("moderation", "auto"),
+                        user=_anonymous_image_user(
+                            self.app.config["SECRET_KEY"], item.job.user_id, channel.identifier
+                        ),
                         references=references,
                         idempotency_key=attempt.idempotency_key,
                     ),
                 )
                 content = result.content
+                if item.job.transparent_background and not image_has_real_alpha(content):
+                    raise ProviderError(
+                        "上游未返回真实透明背景图片",
+                        code="transparent_background_missing",
+                        request_id=result.request_id,
+                        provider_completed=True,
+                    )
                 try:
                     self.storage.inspect(content)
                 except InvalidImageError as exc:

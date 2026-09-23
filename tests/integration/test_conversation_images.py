@@ -305,7 +305,7 @@ class TestConversationImages(PlatformTestCase):
             content="基于这张图修改背景",
             attachment_ids=(asset.id,),
         )
-        self.assertEqual(assistant.payload["generation_mode"], "auto")
+        self.assertEqual(assistant.payload["generation_mode"], "img2img")
         self.assertEqual(assistant.payload["reference_ids"], [asset.id])
 
     def test_historical_chat_images_are_sent_again_on_a_later_turn(self):

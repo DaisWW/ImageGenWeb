@@ -152,7 +152,13 @@ class FakeAdapter:
             raise ProviderError("测试失败", code="test_failure", status_code=502)
         index = len(self.requests)
         return ProviderResult(
-            content=png_bytes((35, min(250, 130 + index * 20), 110)) if self.vary else png_bytes(),
+            content=(
+                transparent_icon_png_bytes()
+                if request.transparent_background
+                else png_bytes((35, min(250, 130 + index * 20), 110))
+                if self.vary
+                else png_bytes()
+            ),
             request_id=f"request-test-{index}",
         )
 

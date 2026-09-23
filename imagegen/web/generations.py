@@ -19,6 +19,7 @@ from .shared import (
     channels,
     image_extension,
     json_body,
+    json_bool,
     owned_workspace,
     query_limit,
     services,
@@ -131,6 +132,8 @@ def submit_generation():
         item_prompts=plan.prompts,
         quality=workflow.quality,
         workflow=workflow.metadata,
+        transparent_background=json_bool(data.get("transparent_background", False)),
+        moderation=str(data.get("moderation", "auto")).strip().lower(),
     )
     generation_service = application_services.generations
     operation_id = str(data.get("operation_id", "")).strip().lower()

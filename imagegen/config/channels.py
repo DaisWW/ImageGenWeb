@@ -75,6 +75,7 @@ class Channel:
     limits: ChannelLimits
     api_key: str = field(repr=False)
     priority: int = 100
+    send_user_identifier: bool = True
 
     @property
     def configured(self) -> bool:
@@ -128,6 +129,7 @@ class Channel:
                 for model in self.models
             ],
             "price_rmb": format(self.price_rmb, ".4f"),
+            "send_user_identifier": self.send_user_identifier,
             "capabilities": self.capabilities.public_dict(),
             "limits": {
                 "max_concurrency": self.limits.max_concurrency,
@@ -284,7 +286,7 @@ class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
 
         capabilities = ChannelCapabilities(
             modes=modes,
-            max_reference_images=bounded_int(capabilities_raw, "max_reference_images", 1, 0, 20),
+            max_reference_images=bounded_int(capabilities_raw, "max_reference_images", 1, 0, 16),
             max_reference_image_mb=bounded_int(
                 capabilities_raw, "max_reference_image_mb", 10, 1, 50
             ),
@@ -324,6 +326,7 @@ class ChannelRegistry(ReloadableConfigRegistry[ChannelSnapshot]):
             capabilities=capabilities,
             limits=limits,
             api_key=self._resolve_secret(raw),
+            send_user_identifier=as_bool(raw.get("send_user_identifier", True)),
         )
 
     @staticmethod

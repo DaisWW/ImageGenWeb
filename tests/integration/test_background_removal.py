@@ -190,7 +190,7 @@ class TestBackgroundRemoval(PlatformTestCase):
         self.assertEqual(by_model["alternate"].error_code, "matting_test_failure")
         self.assertEqual(refreshed_item.status, "succeeded")
         self.assertEqual(refreshed_item.job.status, "succeeded")
-        self.assertFalse(job.transparent_background)
+        self.assertTrue(job.transparent_background)
         self.assertEqual(refreshed_item.output_path, original_path)
         self.assertEqual(
             self.app.extensions["image_storage"].read_bytes(original_path),

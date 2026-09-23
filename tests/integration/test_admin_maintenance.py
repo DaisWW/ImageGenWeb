@@ -304,12 +304,14 @@ class TestAdminAndMaintenance(PlatformTestCase):
         self.assertEqual(initial["channels"][0]["limits"]["failure_threshold"], 3)
         self.assertEqual(initial["channels"][0]["limits"]["circuit_breaker_seconds"], 300)
         self.assertEqual(initial["channels"][0]["limits"]["half_open_max_probes"], 1)
+        self.assertTrue(initial["channels"][0]["send_user_identifier"])
         self.assertEqual(initial["channels"][0]["api_key_hint"], "test****cret")
         self.assertNotIn("test-key-not-secret", json.dumps(initial))
 
         initial["channels"][0]["price_rmb"] = "2.5000"
         initial["queue"]["max_channel_attempts"] = 3
         initial["channels"][0]["limits"]["failure_threshold"] = 4
+        initial["channels"][0]["send_user_identifier"] = False
         response = client.put("/api/admin/channels", json=initial)
         self.assertEqual(response.status_code, 200)
         saved = response.json["config"]
@@ -318,10 +320,12 @@ class TestAdminAndMaintenance(PlatformTestCase):
         self.assertEqual(saved["channels"][0]["price_rmb"], "2.5000")
         self.assertEqual(saved["queue"]["max_channel_attempts"], 3)
         self.assertEqual(saved["channels"][0]["limits"]["failure_threshold"], 4)
+        self.assertFalse(saved["channels"][0]["send_user_identifier"])
 
         channel = self.app.extensions["channel_registry"].get("test")
         self.assertEqual(channel.price_rmb, Decimal("2.5000"))
         self.assertEqual(channel.limits.failure_threshold, 4)
+        self.assertFalse(channel.send_user_identifier)
         self.assertEqual(channel.api_key, "test-key-not-secret")
         stored = db.session.get(SystemState, CHANNEL_CONFIG_KEY)
         self.assertIn("api_key_encrypted", stored.value)
@@ -340,6 +344,34 @@ class TestAdminAndMaintenance(PlatformTestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("max_concurrency", response.json["error"])
+
+    def test_admin_channel_reference_limit_cannot_exceed_official_cap(self):
+        client = self.admin_client()
+        config = client.get("/api/admin/channels").json["config"]
+        config["channels"][0]["capabilities"]["max_reference_images"] = 17
+
+        response = client.put("/api/admin/channels", json=config)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("16", response.json["error"])
+
+    def test_legacy_channel_reference_limit_is_normalized_on_load(self):
+        client = self.admin_client()
+        config = client.get("/api/admin/channels").json["config"]
+        saved = client.put("/api/admin/channels", json=config)
+        self.assertEqual(saved.status_code, 200)
+
+        state = db.session.get(SystemState, CHANNEL_CONFIG_KEY)
+        document = json.loads(state.value)
+        document["document"]["channels"][0]["capabilities"]["max_reference_images"] = 20
+        state.value = json.dumps(
+            document, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        db.session.commit()
+
+        self.assertTrue(self.app.extensions["channel_registry"].reload(force=True))
+        channel = self.app.extensions["channel_registry"].get("test")
+        self.assertEqual(channel.capabilities.max_reference_images, 16)
 
     def test_admin_chat_config_replaces_key_without_exposing_it(self):
         client = self.admin_client()

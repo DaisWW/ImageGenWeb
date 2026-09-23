@@ -6,8 +6,14 @@
     UI,
     COMPOSER_CLOSE_TIMEOUT,
     IMAGE_SIZE_PATTERN,
+    IMAGE_SIZE_AUTO,
     IMAGE_DIMENSION_MIN,
     IMAGE_DIMENSION_MAX,
+    IMAGE_MIN_PIXELS,
+    IMAGE_MAX_PIXELS,
+    IMAGE_MAX_ASPECT_RATIO,
+    isValidImageSize,
+    isGptImage2Model,
     GenerationStrategyPolicy,
     setHidden,
     setAttribute,
@@ -66,6 +72,7 @@
     applyWorkspaceSettings() {
       this.canvasConflict = null;
       const settings = this.activeWorkspace?.settings || {};
+      const legacySize = !isValidImageSize(settings.size || "1024x1024");
       const activeAssetIds = new Set(this.activeWorkspace?.assets.map((asset) => asset.id) || []);
       const savedReferenceIds = Array.isArray(settings.reference_ids)
         ? settings.reference_ids
@@ -78,6 +85,8 @@
       this.renderCreativeDirectionOptions(settings.creative_direction_id || "auto");
       this.renderGalleryCategoryOptions(settings.gallery_category_id || "auto");
       this.el.translatePrompt.checked = settings.translate_prompt === true;
+      this.el.transparentBackground.checked = settings.transparent_background === true;
+      this.el.moderationSelect.value = settings.moderation === "low" ? "low" : "auto";
       this.el.promptInput.value = settings.prompt || "";
       this.updatePromptCounter();
       this.el.batchCount.value = this.generationStrategyPolicy()
@@ -92,6 +101,10 @@
         ? "正在保存..."
         : "参数已保存";
       this.updatePromptReviewState();
+      if (legacySize) {
+        UI.toast("旧尺寸不符合 GPT Image 2 当前规则，已改为 auto", "info");
+        this.settingChanged();
+      }
     },
 
     renderChatModelOptions(selectedId = this.el.chatModelSelect.value) {
@@ -143,6 +156,8 @@
         this.el.sizeInput.value = "";
         this.el.sizeInput.disabled = true;
         this.el.sizeInput.setCustomValidity("");
+        this.updateModerationState();
+        this.updateTransparentBackgroundState();
         this.el.generateButton.disabled = true;
         this.updatePrice();
         return;
@@ -155,14 +170,17 @@
         "id",
         "label",
       );
-      this.el.sizeInput.value = this.normalizeSize(settings.size)
-        || this.normalizeSize(this.el.sizeInput.value)
-        || "1024x1024";
+      this.updateModerationState();
+      const savedSize = this.normalizeSize(settings.size);
+      this.el.sizeInput.value = savedSize && isValidImageSize(savedSize)
+        ? savedSize
+        : "auto";
       this.el.sizeInput.disabled = false;
       this.el.sizeInput.setCustomValidity("");
       this.fillSelect(this.el.formatSelect, channel.capabilities.formats, settings.output_format, null, null, {
         png: "PNG", jpeg: "JPEG", webp: "WebP",
       });
+      this.updateTransparentBackgroundState();
       if (
         this.el.generationStrategy?.value === "series"
         && !channel.capabilities.modes.includes("img2img")
@@ -243,7 +261,10 @@
 
     canvasRequestTargetSize(request) {
       if (!request) return "";
-      if (request.width && request.height) return `${request.width}x${request.height}`;
+      if (request.width && request.height
+        && isValidImageSize(`${request.width}x${request.height}`)) {
+        return `${request.width}x${request.height}`;
+      }
       const match = String(request.aspect_ratio || "").match(/^([1-9]\d{0,3}):([1-9]\d{0,3})$/);
       if (!match) return "";
       const ratioWidth = Number(match[1]);
@@ -251,31 +272,45 @@
       const minimumScale = Math.ceil(Math.max(
         IMAGE_DIMENSION_MIN / ratioWidth,
         IMAGE_DIMENSION_MIN / ratioHeight,
+        Math.sqrt(IMAGE_MIN_PIXELS / (ratioWidth * ratioHeight)),
       ));
       const maximumScale = Math.floor(Math.min(
         IMAGE_DIMENSION_MAX / ratioWidth,
         IMAGE_DIMENSION_MAX / ratioHeight,
+        Math.sqrt(IMAGE_MAX_PIXELS / (ratioWidth * ratioHeight)),
       ));
-      if (minimumScale > maximumScale) return "";
+      if (minimumScale > maximumScale || ratioWidth / ratioHeight > IMAGE_MAX_ASPECT_RATIO
+        || ratioHeight / ratioWidth > IMAGE_MAX_ASPECT_RATIO) return "";
       const current = IMAGE_SIZE_PATTERN.exec(this.normalizeSize(this.el?.sizeInput?.value));
-      const currentLongSide = current
+      const currentLongSide = request.width && request.height
+        ? Math.max(request.width, request.height)
+        : current
         ? Math.max(Number(current[1]), Number(current[2]))
         : 1024;
       const preferredScale = Math.round(currentLongSide / Math.max(ratioWidth, ratioHeight));
-      const scale = Math.min(
+      const preferred = Math.min(
         maximumScale,
         Math.max(minimumScale, preferredScale || minimumScale),
       );
-      return `${ratioWidth * scale}x${ratioHeight * scale}`;
+      const candidates = [];
+      for (let scale = minimumScale; scale <= maximumScale; scale += 1) {
+        const candidate = `${ratioWidth * scale}x${ratioHeight * scale}`;
+        if (isValidImageSize(candidate)) candidates.push({ scale, distance: Math.abs(scale - preferred) });
+      }
+      candidates.sort((left, right) => left.distance - right.distance || right.scale - left.scale);
+      const scale = candidates[0]?.scale;
+      return scale ? `${ratioWidth * scale}x${ratioHeight * scale}` : "";
     },
 
     canvasRequestConflicts(request, size) {
       if (!request) return false;
       const match = IMAGE_SIZE_PATTERN.exec(this.normalizeSize(size));
+      if (this.normalizeSize(size) === IMAGE_SIZE_AUTO) return false;
       if (!match) return false;
       const width = Number(match[1]);
       const height = Number(match[2]);
       return request.width && request.height
+        && isValidImageSize(`${request.width}x${request.height}`)
         ? request.width !== width || request.height !== height
         : request.aspect_ratio !== this.canvasRatio(width, height);
     },
@@ -349,14 +384,62 @@
     validateSizeInput(report = false) {
       if (this.el.sizeInput.disabled) return true;
       const value = this.normalizeSize(this.el.sizeInput.value);
-      const match = IMAGE_SIZE_PATTERN.exec(value);
-      const valid = Boolean(match)
-        && [Number(match[1]), Number(match[2])]
-          .every((dimension) => dimension >= IMAGE_DIMENSION_MIN && dimension <= IMAGE_DIMENSION_MAX);
-      this.el.sizeInput.setCustomValidity(valid ? "" : "尺寸格式应为宽x高，单边范围 64–8192 像素");
+      const valid = isValidImageSize(value);
+      this.el.sizeInput.setCustomValidity(
+        valid
+          ? ""
+          : "尺寸应为 auto 或符合 GPT Image 2 规则的宽x高（16 倍数、比例 ≤ 3:1、655,360–8,294,400 像素）",
+      );
       if (valid) this.el.sizeInput.value = value;
       else if (report) this.el.sizeInput.reportValidity();
       return valid;
+    },
+
+    updateTransparentBackgroundState() {
+      const compatibleFormats = new Set(["png", "webp"]);
+      const options = [...this.el.formatSelect.options];
+      const available = options.some((option) => compatibleFormats.has(option.value));
+      const modelId = this.el.modelSelect.value;
+      const supportsModel = isGptImage2Model(modelId);
+      const previewModel = /^gpt-image-2(?:$|-2026)/i.test(modelId);
+      const modelLabel = this.el.modelSelect.selectedOptions[0]?.textContent || "GPT Image 2";
+      if (!available || !supportsModel || this.el.formatSelect.disabled) {
+        this.el.transparentBackground.checked = false;
+      }
+      if (
+        this.el.transparentBackground.checked
+        && !compatibleFormats.has(this.el.formatSelect.value)
+      ) {
+        this.el.formatSelect.value = options.find((option) => option.value === "png")?.value
+          || options.find((option) => option.value === "webp")?.value
+          || "";
+      }
+      options.forEach((option) => {
+        option.disabled = this.el.transparentBackground.checked
+          && !compatibleFormats.has(option.value);
+      });
+      const enabled = available && !this.el.formatSelect.disabled && supportsModel;
+      this.el.transparentBackground.disabled = !enabled;
+      this.el.transparentBackgroundControl.classList.toggle("is-disabled", !enabled);
+      this.el.transparentBackgroundControl.classList.toggle(
+        "is-active",
+        enabled && this.el.transparentBackground.checked,
+      );
+      this.el.transparentBackgroundBadge.hidden = !previewModel;
+      this.el.transparentBackgroundHint.textContent = `${modelLabel} 直接生成 Alpha，不是后处理抠图 · PNG / WebP`;
+      this.el.transparentBackgroundControl.title = enabled
+        ? `${modelLabel} 原生透明背景${previewModel ? "（Preview）" : ""}。这是图像模型能力，不是后处理抠图；输出必须为 PNG 或 WebP，开启后会自动切换为 PNG。`
+        : "原生透明背景仅适用于 GPT Image 2 系列的 PNG 或 WebP 输出";
+    },
+
+    updateModerationState() {
+      const lowOption = this.el.moderationSelect.querySelector('option[value="low"]');
+      const supportsLow = isGptImage2Model(this.el.modelSelect.value);
+      lowOption.disabled = !supportsLow;
+      if (!supportsLow) this.el.moderationSelect.value = "auto";
+      this.el.moderationSelect.title = supportsLow
+        ? "较低审核仅适用于 GPT Image 2 系列；仍需遵守 OpenAI 内容政策"
+        : "当前模型未确认支持较低审核，仅使用标准审核";
     },
 
     generationStrategyPolicy() {
@@ -550,6 +633,8 @@
           || "1024x1024",
         output_format: this.el.formatSelect.value,
         compression: 90,
+        transparent_background: this.el.transparentBackground.checked,
+        moderation: this.el.moderationSelect.value,
         batch_count: this.generationCount(),
         generation_strategy: this.el.generationStrategy.value || "sample",
         series_anchor: this.activeWorkspace?.settings?.series_anchor || {},

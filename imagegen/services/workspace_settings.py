@@ -24,6 +24,8 @@ ALLOWED_WORKSPACE_SETTING_KEYS = {
     "size",
     "output_format",
     "compression",
+    "transparent_background",
+    "moderation",
     "batch_count",
     "generation_strategy",
     "series_anchor",
@@ -45,13 +47,17 @@ def default_workspace_settings() -> dict[str, Any]:
         "size": "1024x1024",
         "output_format": "png",
         "compression": 90,
+        "transparent_background": False,
+        "moderation": "auto",
         "batch_count": 1,
         "generation_strategy": "sample",
         "series_anchor": {},
     }
 
 
-def sanitize_workspace_settings(raw: Any, runtime: RuntimeSettings | None = None) -> dict[str, Any]:
+def sanitize_workspace_settings(
+    raw: Any, runtime: RuntimeSettings | None = None, *, legacy_size: Any = None
+) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ServiceError("工作站参数格式无效")
     runtime = runtime or RuntimeSettings()
@@ -92,8 +98,19 @@ def sanitize_workspace_settings(raw: Any, runtime: RuntimeSettings | None = None
     settings["mode"] = str(settings["mode"])
     settings["channel_id"] = str(settings["channel_id"])[:64]
     settings["model"] = str(settings["model"])[:100]
-    settings["size"] = normalize_image_size(settings["size"])
+    try:
+        settings["size"] = normalize_image_size(settings["size"])
+    except ServiceError:
+        if legacy_size is None or settings["size"] != legacy_size:
+            raise
+        settings["size"] = "auto"
     settings["output_format"] = str(settings["output_format"])[:20]
+    settings["transparent_background"] = as_bool(settings["transparent_background"])
+    if settings["output_format"] not in {"png", "webp"}:
+        settings["transparent_background"] = False
+    settings["moderation"] = str(settings["moderation"]).strip().lower()
+    if settings["moderation"] not in {"auto", "low"}:
+        settings["moderation"] = "auto"
     try:
         settings["compression"] = min(100, max(0, int(settings["compression"])))
         settings["batch_count"] = min(

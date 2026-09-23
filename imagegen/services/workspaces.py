@@ -188,6 +188,9 @@ class WorkspaceService:
             workspace.settings = sanitize_workspace_settings(
                 {**(workspace.settings or {}), **payload["settings"]},
                 self.settings.runtime(),
+                legacy_size=(workspace.settings or {}).get("size")
+                if "size" not in payload["settings"]
+                else None,
             )
         if "name" in payload:
             self._commit_name_change()
@@ -319,7 +322,9 @@ class WorkspaceService:
             settings["series_anchor"] = {}
             if settings.get("mode") == "img2img" and not settings.get("reference_ids"):
                 settings["mode"] = "text2img"
-        workspace.settings = sanitize_workspace_settings(settings, self.settings.runtime())
+        workspace.settings = sanitize_workspace_settings(
+            settings, self.settings.runtime(), legacy_size=settings.get("size")
+        )
         workspace.updated_at = utcnow()
         db.session.commit()
 
@@ -360,6 +365,7 @@ class WorkspaceService:
                 "reference_ids": [asset.id],
             },
             self.settings.runtime(),
+            legacy_size=(workspace.settings or {}).get("size"),
         )
         workspace.settings = sanitized
         workspace.updated_at = utcnow()
@@ -421,7 +427,9 @@ class WorkspaceService:
         settings["mode"] = "text2img"
         settings["generation_strategy"] = "sample"
         settings["series_anchor"] = {}
-        locked_workspace.settings = sanitize_workspace_settings(settings, self.settings.runtime())
+        locked_workspace.settings = sanitize_workspace_settings(
+            settings, self.settings.runtime(), legacy_size=settings.get("size")
+        )
         locked_workspace.updated_at = utcnow()
         db.session.commit()
         return locked_workspace

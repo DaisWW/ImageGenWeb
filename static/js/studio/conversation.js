@@ -356,7 +356,9 @@
       this.renderGenerationPlan?.();
       if (omitted > 0) {
         const max = this.generationReferenceLimit();
-        UI.toast(`当前渠道最多使用 ${max} 张垫图，已忽略 ${omitted} 张超限或已删除的参考图`);
+        UI.toast(
+          `${max === 16 ? "官方 GPT Image 编辑接口每次最多接受 16 张输入图" : `当前渠道最多使用 ${max} 张垫图`}，已忽略 ${omitted} 张超限或已删除的参考图`,
+        );
       }
     },
 

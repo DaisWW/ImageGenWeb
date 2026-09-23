@@ -86,7 +86,7 @@ options:
 
 ## 行为边界
 
-- 生成 API 中遗留的 `transparent_background` 字段会被忽略，新任务始终持久化为 `false`
+- 生图阶段的 `transparent_background` 是 GPT Image 2 系列的原生透明背景开关，直接请求上游并要求返回真实 Alpha；`gpt-image-2` 仍标为官方 Preview，详情页的背景透明化候选仍是独立的后处理流程，不会覆盖原图
 - PNG、WebP 或 JPEG 原图都可提交透明化；成功候选统一保存为带真实 Alpha 的 PNG
 - 本地 Chroma 为控制 Worker 峰值内存，单张最多处理 1,600 万像素；更大图片请使用 HTTP/GPU 模型
 - Worker 会拒绝没有真实 Alpha 或仍是烘焙棋盘格的候选，但只把该候选标记为失败

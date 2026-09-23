@@ -13,6 +13,8 @@ channels:
     priority: 1
     enabled: true
     adapter: openai_images
+    # 发送服务端生成的匿名 HMAC user 标识；兼容代理拒绝未知字段时可关闭。
+    send_user_identifier: true
     base_url: https://fuck.codexapis.com
     base_url_env: IMAGE_API_BASE_URL
     api_key_env: IMAGE_API_KEY
@@ -26,8 +28,8 @@ channels:
       # 2026-07-17 使用 gpt-image-2、low、PNG 实测垫图合并：
       # 2～8、17、32 张请求均成功；32 张结果完整保留 01～32，未漏图或重复。
       # 32 张仍未触及刀哥的上游硬上限，但返回尺寸有偏离请求值的情况。
-      # 为与 Lucen 的实测可用上限保持一致，生产统一限制为 20 张。
-      max_reference_images: 20
+      # 官方 GPT Image 编辑接口最多接受 16 张输入图，生产配置按官方上限执行。
+      max_reference_images: 16
       max_reference_image_mb: 10
       max_reference_total_mb: 40
       formats: [png, jpeg, webp]
@@ -46,6 +48,8 @@ channels:
     priority: 10
     enabled: true
     adapter: openai_images
+    # 发送服务端生成的匿名 HMAC user 标识；兼容代理拒绝未知字段时可关闭。
+    send_user_identifier: true
     base_url: https://lucen.plus
     base_url_env: LUCEN_API_BASE_URL
     api_key_env: LUCEN_API_KEY
@@ -62,8 +66,8 @@ channels:
       # 2026-07-17 使用 gpt-image-2、low、PNG 实测垫图合并：
       # 1～8、17、20 张请求均成功；20 张结果完整保留 01～20，未漏图或重复。
       # 21、22、24、31、32 张均返回 HTTP 502，32 张重试仍失败。
-      # 上游未返回明确的数量超限错误，因此 20 张是当前接口行为的实测可用上限。
-      max_reference_images: 20
+      # 官方 GPT Image 编辑接口最多接受 16 张输入图，生产配置按官方上限执行。
+      max_reference_images: 16
       max_reference_image_mb: 10
       max_reference_total_mb: 40
       formats: [png, jpeg, webp]

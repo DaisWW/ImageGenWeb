@@ -243,6 +243,9 @@ def job_dict(
     workflow = {
         key: value for key, value in (job.workflow or {}).items() if not str(key).startswith("_")
     }
+    moderation = str(workflow.get("moderation", "auto")).strip().lower()
+    if moderation not in {"auto", "low"}:
+        moderation = "auto"
     result = {
         **status,
         "kind": job.kind,
@@ -258,6 +261,7 @@ def job_dict(
         "output_format": job.output_format,
         "compression": job.compression,
         "transparent_background": job.transparent_background,
+        "moderation": moderation,
         "requested_count": job.requested_count,
         "price_per_image_rmb": _amount(job.price_per_image_rmb),
         "charged_rmb": _amount(job.charged_rmb),

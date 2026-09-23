@@ -120,6 +120,95 @@
   gap: 12px 10px;
 }
 
+.transparent-background-control {
+  display: grid;
+  height: auto;
+  min-height: 62px;
+  grid-column: 1 / -1;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  color: var(--text-soft);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+  cursor: pointer;
+  white-space: normal;
+  transition: border-color 160ms ease, background-color 160ms ease, opacity 160ms ease;
+}
+
+.transparent-background-control:hover:not(.is-disabled),
+.transparent-background-control.is-active {
+  border-color: #755236;
+  background: var(--accent-muted);
+}
+
+.transparent-background-control.is-disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+
+.transparent-background-swatch {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background:
+    conic-gradient(#d4d8d6 25%, #f2f4f3 0 50%, #d4d8d6 0 75%, #f2f4f3 0)
+    0 0 / 12px 12px;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 18%);
+}
+
+.transparent-background-swatch::after {
+  position: absolute;
+  inset: 8px;
+  border-radius: 50%;
+  background: rgb(216 146 79 / 82%);
+  box-shadow: 0 0 0 2px rgb(23 25 27 / 72%);
+  content: "";
+}
+
+.transparent-background-copy {
+  min-width: 0;
+}
+
+.transparent-background-copy strong,
+.transparent-background-copy small {
+  display: flex;
+  align-items: center;
+}
+
+.transparent-background-copy strong {
+  gap: 7px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.transparent-background-copy small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.capability-preview-badge {
+  padding: 2px 5px;
+  color: var(--accent);
+  border: 1px solid #755236;
+  border-radius: 999px;
+  font-size: 8px;
+  font-weight: 750;
+  letter-spacing: .04em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.transparent-background-control .toggle-track {
+  justify-self: end;
+}
+
 .generation-plan {
   max-width: 1380px;
   margin: 0 auto 10px;
