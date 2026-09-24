@@ -353,7 +353,7 @@ test("multiple chat operations keep independent previews and cancellation", asyn
   await expect(secondRow).toBeVisible();
 });
 
-test("chat displays each server preview immediately before the final response", {
+test("chat streams a smooth visible preview before the final response", {
   tag: "@responsive",
 }, async ({ page }) => {
   const preview = [
@@ -435,26 +435,16 @@ test("chat displays each server preview immediately before the final response", 
   await page.locator("#chatForm").evaluate((form) => form.requestSubmit());
   await expect.poll(() => Boolean(submitted)).toBe(true);
   await expect.poll(() => eventsRequested).toBe(true);
-  const firstVisiblePreview = page.evaluate(() => new Promise((resolve) => {
-    const list = document.querySelector("#messageList");
-    let observer;
-    const read = () => {
-      const text = list?.querySelector(".message-row.assistant.pending .message-stream-text")
-        ?.textContent || "";
-      if (!text) return;
-      observer?.disconnect();
-      resolve(text);
-    };
-    observer = new MutationObserver(read);
-    observer.observe(list, { childList: true, characterData: true, subtree: true });
-    read();
-  }));
   releaseEvents();
-  expect(await firstVisiblePreview).toBe(preview);
+  await page.waitForFunction((length) => {
+    const text = document.querySelector(".message-stream-text")?.textContent || "";
+    return text.length > 0 && text.length < length;
+  }, preview.length);
 
   const stream = page.locator(".message-row.assistant.pending .message-stream-text");
   await expect(stream).toBeVisible();
   await expect(page.locator(".message-stream-cursor")).toBeVisible();
+  await expect(stream).toHaveText(preview);
   const finalHandoff = page.evaluate((id) => new Promise((resolve) => {
     const list = document.querySelector("#messageList");
     const selector = `[data-message-id="${id}"]`;
@@ -481,7 +471,6 @@ test("chat displays each server preview immediately before the final response", 
   await page.waitForTimeout(100);
   await expect(page.locator(".message-row.assistant.pending")).toHaveCount(1);
   await expect(page.locator(`[data-message-id="${assistantId}"]`)).toHaveCount(0);
-  await expect(stream).toHaveText(preview);
   await expect(page.locator(`[data-message-id="${assistantId}"]`)).toContainText("AIR ZERO");
   expect(await finalHandoff).toEqual({
     hadEmptyHandoff: false,

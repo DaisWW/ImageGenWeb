@@ -512,7 +512,11 @@
         operationId: operationId.toLowerCase(),
         source: null,
         targetText: "",
+        targetCharacters: [],
         displayedText: "",
+        displayedCount: 0,
+        frame: null,
+        drainTimer: null,
         handoffTimer: null,
         drainResolve: null,
         finalText: "",
@@ -565,15 +569,31 @@
         return;
       }
       if (state.finalText && text !== state.finalText) return;
+      const characters = Array.from(text);
+      if (!text.startsWith(state.displayedText)) {
+        const displayed = Array.from(state.displayedText);
+        let common = 0;
+        while (common < displayed.length
+          && common < characters.length
+          && displayed[common] === characters[common]) common += 1;
+        state.displayedCount = common;
+        state.displayedText = characters.slice(0, common).join("");
+      }
       state.targetText = text;
-      state.displayedText = text;
+      state.targetCharacters = characters;
       const operation = this.chatOperationForId(state.workspaceId, state.operationId);
       const outgoing = operation?.message_id
         ? this.outgoingMessages.get(operation.message_id)
         : null;
       if (outgoing?.delivery_state === "sending") outgoing.delivery_state = "accepted";
       if (this.activeWorkspace?.id === state.workspaceId) this.renderMessages();
-      this.updateChatPreviewText(state);
+      if (this.reducedMotion.matches) {
+        state.displayedCount = characters.length;
+        state.displayedText = text;
+        this.updateChatPreviewText(state);
+        return;
+      }
+      this.scheduleChatPreviewFrame(state);
     },
 
     completeChatPreview(workspaceId, operation, data, messageId) {
@@ -597,16 +617,70 @@
         return Promise.resolve();
       }
       if (this.reducedMotion.matches || document.hidden) {
+        state.displayedCount = state.targetCharacters.length;
+        state.displayedText = state.targetText;
+        this.updateChatPreviewText(state);
         return Promise.resolve();
       }
       return new Promise((resolve) => {
         state.drainResolve = resolve;
-        state.handoffTimer = window.setTimeout(() => {
-          state.handoffTimer = null;
+        const resolveImmediately = () => {
           if (state.drainResolve !== resolve) return;
           state.drainResolve = null;
           resolve();
-        }, CHAT_PREVIEW_HANDOFF_MS);
+        };
+        const resolveAfterHandoff = () => {
+          if (state.handoffTimer !== null) return;
+          state.handoffTimer = window.setTimeout(() => {
+            state.handoffTimer = null;
+            resolveImmediately();
+          }, CHAT_PREVIEW_HANDOFF_MS);
+        };
+        const waitForPreview = () => {
+          state.drainTimer = null;
+          if (this.chatPreviewMap(workspaceId)?.get(state.operationId) !== state
+            || operation.canceled
+          ) {
+            resolveImmediately();
+            return;
+          }
+          if (state.displayedCount >= state.targetCharacters.length) {
+            resolveAfterHandoff();
+            return;
+          }
+          if (document.hidden) {
+            state.displayedCount = state.targetCharacters.length;
+            state.displayedText = state.targetText;
+            this.updateChatPreviewText(state);
+            resolveImmediately();
+            return;
+          }
+          state.drainTimer = window.setTimeout(waitForPreview, 16);
+        };
+        waitForPreview();
+      });
+    },
+
+    scheduleChatPreviewFrame(state) {
+      if (state.frame !== null || state.displayedCount >= state.targetCharacters.length) return;
+      state.frame = window.requestAnimationFrame(() => {
+        state.frame = null;
+        if (this.chatPreviewMap(state.workspaceId)?.get(state.operationId) !== state) return;
+        const remaining = state.targetCharacters.length - state.displayedCount;
+        const batch = remaining > 800 ? 32
+          : remaining > 320 ? 16
+            : remaining > 120 ? 8
+              : remaining > 48 ? 4
+                : remaining > 18 ? 2 : 1;
+        state.displayedCount = Math.min(
+          state.targetCharacters.length,
+          state.displayedCount + batch,
+        );
+        state.displayedText = state.targetCharacters.slice(0, state.displayedCount).join("");
+        this.updateChatPreviewText(state);
+        if (state.displayedCount < state.targetCharacters.length) {
+          this.scheduleChatPreviewFrame(state);
+        }
       });
     },
 
@@ -632,6 +706,8 @@
         : [...previews.values()];
       targets.forEach((state) => {
         state.source?.close();
+        if (state.frame !== null) window.cancelAnimationFrame(state.frame);
+        if (state.drainTimer !== null) window.clearTimeout(state.drainTimer);
         if (state.handoffTimer !== null) window.clearTimeout(state.handoffTimer);
         const finish = state.drainResolve;
         state.handoffTimer = null;
