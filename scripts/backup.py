@@ -8,6 +8,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tarfile
 import tempfile
 import uuid
@@ -30,6 +31,39 @@ def docker_output(*args: str) -> bytes:
 
 def docker_run(*args: str) -> None:
     subprocess.run(["docker", "compose", *args], check=True, cwd=PROJECT_DIR)
+
+
+def docker_start(container: str) -> None:
+    subprocess.run(["docker", "start", container], check=True, cwd=PROJECT_DIR)
+
+
+def compose_container_id(service: str) -> str | None:
+    result = subprocess.run(
+        ["docker", "compose", "ps", "-aq", service],
+        check=True,
+        cwd=PROJECT_DIR,
+        stdout=subprocess.PIPE,
+    )
+    for line in result.stdout.decode("utf-8", errors="replace").splitlines():
+        if line.strip():
+            return line.strip()
+    return None
+
+
+def archive_container_files(container: str, destination: Path) -> None:
+    """Archive a stopped container's mounted files without creating a new one."""
+    source = destination.with_name("files")
+    subprocess.run(
+        ["docker", "cp", f"{container}:/data/files", str(destination.parent)],
+        check=True,
+        cwd=PROJECT_DIR,
+    )
+    try:
+        with tarfile.open(destination, "w:gz") as archive:
+            archive.add(source, arcname="files")
+    finally:
+        if source.exists():
+            shutil.rmtree(source)
 
 
 def docker_input(content: bytes, *args: str) -> None:
@@ -90,9 +124,11 @@ def create_backup(output: Path, env_file: Path) -> Path:
     target = output / base_name
     while target.exists():
         target = output / f"{base_name}-{uuid.uuid4().hex[:8]}"
+    application_services = [name for name in ("web", "worker") if name in active_services]
+    containers = {service: compose_container_id(service) for service in ("web", "worker")}
+    archive_container = containers.get("web") or containers.get("worker")
     staging = Path(tempfile.mkdtemp(prefix=f".{target.name}.", suffix=".tmp", dir=output))
     restrict_private_path(staging)
-    application_services = [name for name in ("web", "worker") if name in active_services]
     try:
         if "web" in application_services:
             docker_run("stop", "--timeout", "30", "web")
@@ -106,21 +142,24 @@ def create_backup(output: Path, env_file: Path) -> Path:
             "-c",
             'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom',
         )
-        files = docker_output(
-            "run",
-            "--rm",
-            "--no-deps",
-            "-T",
-            "web",
-            "tar",
-            "-C",
-            "/data",
-            "-czf",
-            "-",
-            "files",
-        )
         (staging / "database.dump").write_bytes(database)
-        (staging / "files.tar.gz").write_bytes(files)
+        if archive_container:
+            archive_container_files(archive_container, staging / "files.tar.gz")
+        else:
+            files = docker_output(
+                "run",
+                "--rm",
+                "--no-deps",
+                "-T",
+                "web",
+                "tar",
+                "-C",
+                "/data",
+                "-czf",
+                "-",
+                "files",
+            )
+            (staging / "files.tar.gz").write_bytes(files)
         copy_private_file(env_file, staging / "deployment.env")
         _write_manifest(staging)
         verify_backup(staging)
@@ -135,12 +174,28 @@ def create_backup(output: Path, env_file: Path) -> Path:
                     raise
                 target = output / f"{base_name}-{uuid.uuid4().hex[:8]}"
     finally:
-        if "web" in application_services:
-            docker_run("start", "web")
-        if "worker" in application_services:
-            docker_run("start", "worker")
-        if staging.exists():
-            shutil.rmtree(staging)
+        failure_active = sys.exc_info()[0] is not None
+        restart_errors = []
+        for service in application_services:
+            container = containers.get(service)
+            try:
+                if container:
+                    docker_start(container)
+                else:
+                    docker_run("start", service)
+            except Exception as exc:  # pragma: no cover - requires Docker failure
+                restart_errors.append(f"{service}: {exc}")
+        try:
+            if staging.exists():
+                shutil.rmtree(staging)
+        except Exception as exc:  # pragma: no cover - requires filesystem failure
+            restart_errors.append(f"清理临时备份目录: {exc}")
+        if restart_errors:
+            message = "备份后恢复服务失败：" + "; ".join(restart_errors)
+            if failure_active:
+                print(message, file=sys.stderr)
+            else:
+                raise RuntimeError(message)
     return target.resolve()
 
 

@@ -28,6 +28,7 @@ from imagegen.services.settings import SYSTEM_SETTINGS_KEY
 from imagegen.storage import StorageError
 from scripts.backup import (
     _write_manifest,
+    archive_container_files,
     copy_private_file,
     create_backup,
     prune_backups,
@@ -698,12 +699,21 @@ models:
             patch("scripts.backup._write_manifest"),
             patch("scripts.backup.verify_backup"),
             patch(
+                "scripts.backup.compose_container_id",
+                side_effect=lambda service: f"{service}-container",
+            ),
+            patch("scripts.backup.archive_container_files") as archive_files,
+            patch(
                 "scripts.backup.running_services",
                 return_value={"db", "web", "worker"},
             ),
-            patch("scripts.backup.docker_output", side_effect=[b"database", b"files"]) as output,
+            patch("scripts.backup.docker_output", return_value=b"database") as output,
             patch("scripts.backup.docker_run") as run,
+            patch("scripts.backup.docker_start") as start,
         ):
+            archive_files.side_effect = lambda _container, destination: destination.write_bytes(
+                b"files"
+            )
             target = create_backup(root, env_file)
 
         self.assertEqual((target / "database.dump").read_bytes(), b"database")
@@ -713,11 +723,10 @@ models:
             [
                 call("stop", "--timeout", "30", "web"),
                 call("stop", "--timeout", "720", "worker"),
-                call("start", "web"),
-                call("start", "worker"),
             ],
         )
-        self.assertEqual(output.call_count, 2)
+        self.assertEqual(start.call_args_list, [call("web-container"), call("worker-container")])
+        self.assertEqual(output.call_count, 1)
 
     def test_backup_checks_database_before_creating_output_directory(self):
         root = Path(self.temp.name) / "database-offline-backup-test"
@@ -739,12 +748,14 @@ models:
 
         with (
             patch("scripts.backup.restrict_private_path"),
+            patch("scripts.backup.compose_container_id", return_value="web-container"),
             patch(
                 "scripts.backup.running_services",
                 return_value={"db", "web"},
             ),
             patch("scripts.backup.docker_output", side_effect=RuntimeError("pg_dump failed")),
             patch("scripts.backup.docker_run") as run,
+            patch("scripts.backup.docker_start") as start,
             self.assertRaisesRegex(RuntimeError, "pg_dump failed"),
         ):
             create_backup(root, env_file)
@@ -753,10 +764,34 @@ models:
             run.call_args_list,
             [
                 call("stop", "--timeout", "30", "web"),
-                call("start", "web"),
             ],
         )
+        start.assert_called_once_with("web-container")
         self.assertEqual(list(root.iterdir()), [])
+
+    def test_backup_archives_files_from_an_existing_container(self):
+        root = Path(self.temp.name) / "archive-probe"
+        root.mkdir()
+        destination = root / "files.tar.gz"
+
+        def fake_docker_cp(command, *, check, cwd):
+            self.assertEqual(
+                command,
+                ["docker", "cp", "web-container:/data/files", str(root)],
+            )
+            source = destination.with_name("files")
+            source.mkdir()
+            (source / "image.png").write_bytes(b"image")
+
+        with patch("scripts.backup.subprocess.run", side_effect=fake_docker_cp):
+            archive_container_files("web-container", destination)
+
+        with tarfile.open(destination, "r:gz") as archive:
+            self.assertEqual(
+                [member.name for member in archive.getmembers()],
+                ["files", "files/image.png"],
+            )
+        self.assertFalse(destination.with_name("files").exists())
 
     def test_backup_uses_a_unique_name_when_timestamp_already_exists(self):
         root = Path(self.temp.name) / "same-second-backup-test"
@@ -773,10 +808,15 @@ models:
             patch("scripts.backup.copy_private_file"),
             patch("scripts.backup._write_manifest"),
             patch("scripts.backup.verify_backup"),
+            patch("scripts.backup.compose_container_id", return_value="web-container"),
+            patch("scripts.backup.archive_container_files") as archive_files,
             patch("scripts.backup.running_services", return_value={"db"}),
-            patch("scripts.backup.docker_output", side_effect=[b"database", b"files"]),
+            patch("scripts.backup.docker_output", return_value=b"database"),
             patch("scripts.backup.docker_run"),
         ):
+            archive_files.side_effect = lambda _container, destination: destination.write_bytes(
+                b"files"
+            )
             clock.now.return_value = fixed_now
             target = create_backup(root, env_file)
 
