@@ -69,6 +69,12 @@ tests/integration/ 业务与 HTTP 合同测试
 .\deploy-docker.ps1 -Port 18082
 ```
 
+部署脚本默认会先创建并演练完整备份；只做不涉及数据库迁移、配置或数据结构的代码部署时，可用 `-SkipPreDeployBackup` 跳过这一步以缩短停机时间：
+
+```powershell
+.\deploy-docker.ps1 -SkipPreDeployBackup
+```
+
 本地开发仍使用 `7860`，Docker 对外端口为 `18081`，二者不会冲突。如通过单个 HTTPS 反向代理部署，将 `.env` 中的 `COOKIE_SECURE` 和 `TRUST_PROXY_HEADERS` 都改为 `true`。
 
 项目也提供可选的 Caddy HTTPS profile。内网访问可按 [`docs/https-proxy.md`](docs/https-proxy.md) 设置 `IMAGEGEN_HTTPS_ENABLED=true` 并安装内网根证书；公网域名可留空 `IMAGEGEN_CADDY_TLS`，由 Caddy 自动申请 ACME 证书。启用该 profile 后请使用 HTTPS 地址下载 ZIP，避免 Chrome 的不安全下载拦截。
@@ -102,7 +108,7 @@ py scripts/backup.py
 
 命令会先停止 Web 阻断新写入，再等待 Worker 完成在途任务，生成一致的数据库和文件快照。每份备份包含 `database.dump`、`files.tar.gz`、权限收紧的 `deployment.env` 和 SHA-256 `manifest.json`，随后会在临时数据库自动执行一次恢复演练。`deployment.env` 包含解密已保存 API Key 所需的密钥，必须与数据库备份一起离线加密保管；整个备份目录都不要提交到版本库。
 
-可在 `.env` 设置 `IMAGEGEN_BACKUP_MIRROR=E:\\SnowAI-Offsite`，把校验后的副本同步到另一块磁盘或已挂载的异机目录。部署脚本默认安装每天 `03:00` 的 Windows 计划任务；时间和本机保留天数分别由 `IMAGEGEN_BACKUP_TIME`、`IMAGEGEN_BACKUP_RETENTION_DAYS` 控制。计划任务使用 S4U 在无人登录时运行，但不能访问需要交互凭据的网络共享；镜像路径应使用本机磁盘或已挂载且任务账户可访问的目录。手工安装或更新任务可运行：
+可在 `.env` 设置 `IMAGEGEN_BACKUP_MIRROR=E:\\SnowAI-Offsite`，把校验后的副本同步到另一块磁盘或已挂载的异机目录。部署脚本默认安装每天 `03:00` 的 Windows 计划任务；时间、本机保留天数和本机份数分别由 `IMAGEGEN_BACKUP_TIME`、`IMAGEGEN_BACKUP_RETENTION_DAYS`、`IMAGEGEN_BACKUP_MAX_COUNT` 控制，默认保留最近 3 份且按 3 天清理。备份任务还会清理超过 24 小时且没有清单的中断临时目录。计划任务安装需要管理员 PowerShell；部署脚本无权限时会提示但不会阻止服务启动。计划任务使用 S4U 在无人登录时运行，但不能访问需要交互凭据的网络共享；镜像路径应使用本机磁盘或已挂载且任务账户可访问的目录。手工安装或更新任务可运行：
 
 ```powershell
 .\scripts\install-backup-task.ps1 -At 03:00

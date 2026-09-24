@@ -11,7 +11,8 @@ param(
     [switch]$Lan,
     [switch]$LocalOnly,
     [switch]$SkipFirewall,
-    [switch]$NoBuild
+    [switch]$NoBuild,
+    [switch]$SkipPreDeployBackup
 )
 
 Set-StrictMode -Version Latest
@@ -184,7 +185,8 @@ function Initialize-EnvironmentFile {
     Set-EnvValue $lines "IMAGEGEN_HTTPS_PORT" "18443" -ReplaceBlank | Out-Null
     Set-EnvValue $lines "IMAGEGEN_CADDY_TLS" "tls internal" | Out-Null
     Set-EnvValue $lines "CADDY_IMAGE" "caddy:2-alpine" -ReplaceBlank | Out-Null
-    Set-EnvValue $lines "IMAGEGEN_BACKUP_RETENTION_DAYS" "30" -ReplaceBlank | Out-Null
+    Set-EnvValue $lines "IMAGEGEN_BACKUP_RETENTION_DAYS" "3" -ReplaceBlank | Out-Null
+    Set-EnvValue $lines "IMAGEGEN_BACKUP_MAX_COUNT" "3" -ReplaceBlank | Out-Null
     Set-EnvValue $lines "IMAGEGEN_BACKUP_TIME" "03:00" -ReplaceBlank | Out-Null
     Set-EnvValue $lines "IMAGEGEN_BACKUP_MIRROR" "" | Out-Null
 
@@ -330,6 +332,12 @@ try {
     if ([int]::TryParse($configuredRetention, [ref]$parsedRetention) -and $parsedRetention -ge 1) {
         $backupRetentionDays = $parsedRetention
     }
+    [int]$backupMaxCount = 3
+    $configuredMaxCount = Get-EnvValue -Lines $envLines -Name "IMAGEGEN_BACKUP_MAX_COUNT"
+    [int]$parsedMaxCount = 0
+    if ([int]::TryParse($configuredMaxCount, [ref]$parsedMaxCount) -and $parsedMaxCount -ge 1) {
+        $backupMaxCount = $parsedMaxCount
+    }
     [int]$httpsPort = 18443
     $httpsHost = "localhost"
     foreach ($line in $envLines) {
@@ -345,7 +353,9 @@ try {
 
     $preDeployBackup = $null
     $runningServices = docker compose --project-directory $projectDir ps --services --status running
-    if ($LASTEXITCODE -eq 0 -and $runningServices -contains "db") {
+    if ($SkipPreDeployBackup) {
+        Write-Warning "已跳过部署前备份；仅适用于不涉及数据库迁移、配置或数据结构的代码部署。"
+    } elseif ($LASTEXITCODE -eq 0 -and $runningServices -contains "db") {
         $python = Get-Command py.exe -ErrorAction SilentlyContinue
         $pythonArguments = @("-3")
         if ($null -eq $python) {
@@ -356,7 +366,8 @@ try {
         $backupOutput = & $python.Source @pythonArguments scripts/backup.py `
             --output backups `
             --env-file .env `
-            --retention-days $backupRetentionDays
+            --retention-days $backupRetentionDays `
+            --max-count $backupMaxCount
         if ($LASTEXITCODE -ne 0) {
             throw "部署前备份或恢复演练失败，已停止部署。"
         }

@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -14,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
+STAGING_PATTERN = re.compile(r"^\.\d{8}-\d{6}\.[A-Za-z0-9_-]+\.tmp$")
 
 
 def docker_output(*args: str) -> bytes:
@@ -223,19 +225,49 @@ def mirror_backup(backup_dir: Path, mirror_root: Path) -> Path:
     return destination
 
 
-def prune_backups(output: Path, retention_days: int) -> int:
-    if retention_days < 1 or not output.exists():
+def prune_backups(
+    output: Path,
+    retention_days: int,
+    max_count: int = 3,
+    stale_tmp_hours: int = 24,
+) -> int:
+    if not output.exists() or stale_tmp_hours < 0:
         return 0
-    cutoff = datetime.now().timestamp() - retention_days * 86400
     root = output.resolve()
+    now = datetime.now().timestamp()
+    staging_cutoff = now - stale_tmp_hours * 3600
     removed = 0
+    complete = []
     for candidate in root.iterdir():
         try:
-            created = datetime.strptime(candidate.name[:15], "%Y%m%d-%H%M%S").timestamp()
             candidate.resolve().relative_to(root)
         except (ValueError, OSError):
             continue
-        if candidate.is_dir() and created < cutoff and (candidate / "manifest.json").is_file():
+        if not candidate.is_dir() or candidate.is_symlink():
+            continue
+        if STAGING_PATTERN.fullmatch(candidate.name):
+            try:
+                has_manifest = (candidate / "manifest.json").is_file()
+                modified = candidate.stat().st_mtime
+            except OSError:
+                continue
+            if not has_manifest and modified < staging_cutoff:
+                shutil.rmtree(candidate)
+                removed += 1
+            continue
+        try:
+            created = datetime.strptime(candidate.name[:15], "%Y%m%d-%H%M%S").timestamp()
+        except (ValueError, OSError):
+            continue
+        if (candidate / "manifest.json").is_file():
+            complete.append((created, candidate))
+
+    if retention_days < 1 or max_count < 1:
+        return removed
+    cutoff = now - retention_days * 86400
+    complete.sort(key=lambda item: (item[0], item[1].name), reverse=True)
+    for index, (created, candidate) in enumerate(complete):
+        if index >= max_count or created < cutoff:
             shutil.rmtree(candidate)
             removed += 1
     return removed
@@ -286,6 +318,7 @@ def main() -> None:
     parser.add_argument("--env-file", type=Path, default=PROJECT_DIR / ".env")
     parser.add_argument("--mirror", type=Path)
     parser.add_argument("--retention-days", type=int, default=30)
+    parser.add_argument("--max-count", type=int, default=3)
     parser.add_argument("--skip-drill", action="store_true")
     args = parser.parse_args()
     target = create_backup(args.output, args.env_file)
@@ -293,7 +326,7 @@ def main() -> None:
         drill_backup(target)
     if args.mirror is not None:
         mirror_backup(target, args.mirror)
-    prune_backups(args.output, args.retention_days)
+    prune_backups(args.output, args.retention_days, max_count=args.max_count)
     print(target)
 
 

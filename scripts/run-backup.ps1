@@ -33,11 +33,17 @@ $retentionDays = 0
 if (-not [int]::TryParse($retentionValue, [ref]$retentionDays) -or $retentionDays -lt 1) {
     $retentionDays = 30
 }
+$maxCountValue = Get-EnvValue "IMAGEGEN_BACKUP_MAX_COUNT"
+$maxCount = 0
+if (-not [int]::TryParse($maxCountValue, [ref]$maxCount) -or $maxCount -lt 1) {
+    $maxCount = 3
+}
 $arguments = @(
     "scripts/backup.py",
     "--output", "backups",
     "--env-file", ".env",
-    "--retention-days", [string]$retentionDays
+    "--retention-days", [string]$retentionDays,
+    "--max-count", [string]$maxCount
 )
 $mirror = Get-EnvValue "IMAGEGEN_BACKUP_MIRROR"
 if (-not [string]::IsNullOrWhiteSpace($mirror)) {

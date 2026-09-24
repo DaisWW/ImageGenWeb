@@ -26,7 +26,13 @@ from imagegen.models import (
 from imagegen.services import ServiceError, SubmitGeneration, SystemSettingsService
 from imagegen.services.settings import SYSTEM_SETTINGS_KEY
 from imagegen.storage import StorageError
-from scripts.backup import _write_manifest, copy_private_file, create_backup, verify_backup
+from scripts.backup import (
+    _write_manifest,
+    copy_private_file,
+    create_backup,
+    prune_backups,
+    verify_backup,
+)
 from scripts.restore import restore_backup
 from tests.support.platform import (
     FakeProviderFactory,
@@ -795,6 +801,42 @@ models:
         (target / "database.dump").write_bytes(b"tampered")
         with self.assertRaisesRegex(RuntimeError, "校验失败"):
             verify_backup(target)
+
+    def test_backup_pruning_keeps_the_three_latest_complete_backups(self):
+        root = Path(self.temp.name) / "prune-backups"
+        root.mkdir()
+        current = datetime.now().replace(second=0, microsecond=0)
+        names = []
+        for hours in (4, 3, 2, 1, 0):
+            target = root / (current - timedelta(hours=hours)).strftime("%Y%m%d-%H%M%S")
+            target.mkdir()
+            (target / "manifest.json").write_text("{}", encoding="utf-8")
+            names.append(target.name)
+
+        removed = prune_backups(root, retention_days=365, max_count=3)
+
+        self.assertEqual(removed, 2)
+        self.assertEqual(sorted(path.name for path in root.iterdir()), sorted(names[-3:]))
+
+    def test_backup_pruning_removes_only_stale_incomplete_staging_directories(self):
+        root = Path(self.temp.name) / "prune-staging"
+        root.mkdir()
+        stale = root / ".20260923-010000.ab12cd.tmp"
+        stale.mkdir()
+        fresh = root / ".20260924-010000.ef34gh.tmp"
+        fresh.mkdir()
+        protected = root / ".20260923-000000.ij56kl.tmp"
+        protected.mkdir()
+        (protected / "manifest.json").write_text("{}", encoding="utf-8")
+        old_timestamp = (datetime.now() - timedelta(hours=25)).timestamp()
+        os.utime(stale, (old_timestamp, old_timestamp))
+
+        removed = prune_backups(root, retention_days=365, max_count=3)
+
+        self.assertEqual(removed, 1)
+        self.assertFalse(stale.exists())
+        self.assertTrue(fresh.exists())
+        self.assertTrue(protected.exists())
 
     def test_restore_stops_writers_and_only_restarts_after_success(self):
         target = Path(self.temp.name) / "restore-backup"
