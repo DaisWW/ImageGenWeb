@@ -24,13 +24,16 @@ Scope: Snow AI Studio repository root。
 
 ## 上下文加载
 
-- 先读本文件，再按任务读取 README/architecture 和最多两份相关 .codex 文档；跨领域才追加。
+- 先读本文件，再按任务读取 README/architecture 和相关 .codex 文档。首次通常读取不超过两份；
+  证据不足时继续定向读取必要文档，避免无边界扫描。
 - HTTPS、Lucida、CR、文档和语义流程分别读取对应 docs 或 workflow。
 - node_modules/、.venv/、backups/、data/、output/、.ui-test-data/、test-results/ 和生成图片默认不读不改。
 
 ## 工作流路由
 
-- Bug/生成失败/计费/部署走 Triage Issue；调用链审查走 Logic Bug Review；模糊方案走 Grill Me。
+- Bug/生成失败/计费/部署走 Triage Issue；调用链审查走 Logic Bug Review。
+- 方案存在会实质改变目标、范围或风险边界，且无法从代码和上下文确定的歧义时，走 Grill Me；
+  常规实现选择按项目惯例推进。
 - Flask、SQLAlchemy、Alembic、Worker、外部 API、前端或 Docker 的 CR/精简加载 code-review；
   写文档加载 doc-writing；普通语义流程加载 workflows。
 - 用户未明确要求时不主动提交 Git；提交时使用固定中文格式
@@ -79,5 +82,6 @@ Scope: Snow AI Studio repository root。
 
 ## 完成标准
 
-- 受影响检查通过，或明确说明无法运行的命令和残余风险。
+- 请求范围内的工作已经落实，可运行的受影响检查通过。检查因环境无法运行时，说明原因、
+  替代验证和剩余风险；仍有必需工作受阻时，明确列出未完成项，不宣称全部完成。
 - 完整 diff 不包含运行数据、密钥、备份、图片或无关格式化；文档路由与实际模块一致。
