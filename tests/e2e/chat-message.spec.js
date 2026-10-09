@@ -222,6 +222,61 @@ test("server chat operation does not show an assistant before its message is sto
   await expect(page.locator(".message-row.assistant")).toHaveCount(0);
 });
 
+for (const [timing, startedAt] of [
+  ["earlier", "2026-10-09T03:09:57.122000+00:00"],
+  ["same millisecond", "2026-10-09T03:09:57.123000+00:00"],
+]) {
+  test(`pending replies follow their messages with ${timing} operation timestamps`, {
+    tag: "@responsive",
+  }, async ({ page }) => {
+    const messageIds = ["a".repeat(32), "b".repeat(32)];
+    const operationIds = ["c".repeat(32), "d".repeat(32)];
+    let stageLabel = "正在连接上游模型";
+    const rowOrder = () => page.locator("#messageList > .message-row").evaluateAll((rows) => (
+      rows.map((row) => row.dataset.operationId || row.dataset.messageId)
+    ));
+    const expectedOrder = [messageIds[0], operationIds[0], messageIds[1], operationIds[1]];
+
+    await mockConfiguredChatModel(page);
+    await page.route("**/api/workspaces/*/messages*", (route) => route.fulfill({
+      json: {
+        messages: messageIds.map((id, index) => ({
+          id,
+          role: "user",
+          kind: "message",
+          content: `并发消息 ${index + 1}`,
+          payload: {},
+          created_at: `2026-10-09T03:09:57.123${index ? "800" : "400"}+00:00`,
+          attachments: [],
+        })),
+        conversation_operation: {
+          busy: true,
+          operations: operationIds.map((id, index) => ({
+            busy: true,
+            kind: "reply",
+            label: stageLabel,
+            stage_label: stageLabel,
+            operation_id: id,
+            message_id: messageIds[index],
+            started_at: startedAt,
+          })),
+        },
+      },
+    }));
+
+    await loginAsAdmin(page);
+    await expect.poll(rowOrder).toEqual(expectedOrder);
+
+    stageLabel = "正在等待首个输出";
+    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await expect(page.locator(".message-pending-label")).toHaveText([stageLabel, stageLabel]);
+    await expect.poll(rowOrder).toEqual(expectedOrder);
+
+    await page.reload();
+    await expect.poll(rowOrder).toEqual(expectedOrder);
+  });
+}
+
 test("multiple chat operations keep independent previews and cancellation", async ({ page }) => {
   const firstOperationId = "4".repeat(32);
   const secondOperationId = "5".repeat(32);

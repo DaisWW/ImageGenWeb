@@ -125,9 +125,13 @@
           if (this.chatOperationAwaitingMessageAcceptance(operation, workspaceId)
             || this.chatOperationHasReply(operation)) return;
           const operationId = this.operationKey(operation);
+          const userEntry = timeline.find((entry) => (
+            entry.type === "message" && entry.id === operation.message_id && entry.value.role === "user"
+          ));
           timeline.push({
             type: "message",
-            createdAt: operation.started_at || null,
+            createdAt: userEntry?.createdAt || operation.started_at || null,
+            afterMessageId: userEntry?.id,
             id: `pending-assistant-${workspaceId}-${operationId}`,
             value: {
               role: "assistant",
@@ -151,7 +155,10 @@
         });
       timeline.sort((left, right) => {
         const time = new Date(left.createdAt || 0).getTime() - new Date(right.createdAt || 0).getTime();
-        return time || String(left.id).localeCompare(String(right.id));
+        return time
+          || String(left.afterMessageId || left.id).localeCompare(String(right.afterMessageId || right.id))
+          || Number(Boolean(left.afterMessageId)) - Number(Boolean(right.afterMessageId))
+          || String(left.id).localeCompare(String(right.id));
       });
       const timelineChanged = this.reconcileTimeline(timeline);
       setHidden(this.el.conversationEmpty, timeline.length > 0);
