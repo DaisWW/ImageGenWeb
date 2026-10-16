@@ -429,9 +429,9 @@
         enabled && this.el.transparentBackground.checked,
       );
       this.el.transparentBackgroundBadge.hidden = !previewModel;
-      this.el.transparentBackgroundHint.textContent = `${modelLabel} 直接生成 Alpha，不是后处理抠图 · PNG / WebP`;
+      this.el.transparentBackgroundHint.textContent = `${modelLabel} · PNG / WebP · 未透明时可用“背景透明化”`;
       this.el.transparentBackgroundControl.title = enabled
-        ? `${modelLabel} 原生透明背景${previewModel ? "（Preview）" : ""}。这是图像模型能力，不是后处理抠图；输出必须为 PNG 或 WebP，开启后会自动切换为 PNG。`
+        ? `请求 ${modelLabel} 原生透明背景${previewModel ? "（Preview）" : ""}，输出须为 PNG 或 WebP，开启后会自动切换为 PNG。上游未返回透明背景时仍保留结果，可在图片详情中使用“背景透明化”继续抠图。`
         : "原生透明背景仅适用于 GPT Image 2 系列的 PNG 或 WebP 输出";
     },
 

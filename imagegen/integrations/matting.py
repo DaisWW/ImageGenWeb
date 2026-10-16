@@ -479,26 +479,6 @@ def _decode_response_field(content: bytes, field: str) -> bytes:
         ) from exc
 
 
-def image_has_real_alpha(content: bytes) -> bool:
-    """True when the image already has non-opaque alpha pixels."""
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(content)) as image:
-                width, height = image.size
-                if width * height > MAX_MATTING_PIXELS:
-                    return False
-                image.load()
-                if "A" not in image.getbands() and image.mode not in {"RGBA", "LA", "PA"}:
-                    return False
-                alpha_extrema = image.convert("RGBA").getchannel("A").getextrema()
-    except (Image.DecompressionBombError, Image.DecompressionBombWarning):
-        return False
-    except (UnidentifiedImageError, OSError, ValueError):
-        return False
-    return alpha_extrema[0] < 255
-
-
 def image_has_baked_checkerboard(content: bytes) -> bool:
     """True when visible pixels contain a high-confidence checkerboard pattern."""
     if not content:

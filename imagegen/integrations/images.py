@@ -20,7 +20,6 @@ from ..image_payloads import (
     prepared_filename,
 )
 from .diagnostics import response_summary
-from .matting import image_has_real_alpha
 
 MAX_OUTPUT_BYTES = 50 * 1024 * 1024
 
@@ -258,13 +257,6 @@ class OpenAIImagesAdapter:
             raise ProviderError(
                 "生成图片超过 50 MiB 限制",
                 code="output_too_large",
-                request_id=request_id,
-                provider_completed=True,
-            )
-        if request.transparent_background and not image_has_real_alpha(content):
-            raise ProviderError(
-                "上游未返回真实透明背景图片",
-                code="transparent_background_missing",
                 request_id=request_id,
                 provider_completed=True,
             )

@@ -35,7 +35,6 @@ from .integrations.images import (
 )
 from .integrations.matting import (
     image_has_baked_checkerboard,
-    image_has_real_alpha,
     validate_matting_output,
 )
 from .models import (
@@ -1242,13 +1241,6 @@ class GenerationWorker:
                     ),
                 )
                 content = result.content
-                if item.job.transparent_background and not image_has_real_alpha(content):
-                    raise ProviderError(
-                        "上游未返回真实透明背景图片",
-                        code="transparent_background_missing",
-                        request_id=result.request_id,
-                        provider_completed=True,
-                    )
                 try:
                     self.storage.inspect(content)
                 except InvalidImageError as exc:

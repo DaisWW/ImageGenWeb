@@ -113,11 +113,11 @@
             <label class="compact-field"><span>格式</span><select id="formatSelect"></select></label>
             <label class="compact-field" id="qualityControl" title="默认由模型自动选择；GPT Image 2 支持 low、medium、high，GPT Image 2.5 额外支持 xhigh、max。"><span>质量</span><select id="qualitySelect"></select></label>
             <label class="compact-field" title="GPT Image 2 的内容审核强度。低强度不保证请求通过，仍受 OpenAI 内容政策约束。"><span>内容审核</span><select id="moderationSelect"><option value="auto">标准（auto）</option><option value="low">较低（low）</option></select></label>
-            <label class="toggle-line generation-toggle transparent-background-control" id="transparentBackgroundControl" title="GPT Image 2 原生透明背景（Preview）。这是图像模型能力，不是后处理抠图；输出必须为 PNG 或 WebP，开启后会自动切换为 PNG。">
+            <label class="toggle-line generation-toggle transparent-background-control" id="transparentBackgroundControl" title="请求 GPT Image 2 原生透明背景（Preview），输出须为 PNG 或 WebP，开启后会自动切换为 PNG。上游未返回透明背景时仍保留结果，可在图片详情中使用“背景透明化”继续抠图。">
               <span class="transparent-background-swatch" aria-hidden="true"></span>
               <span class="transparent-background-copy">
                 <strong>原生透明背景 <span class="capability-preview-badge" id="transparentBackgroundBadge">Preview</span></strong>
-                <small id="transparentBackgroundHint">GPT Image 2 直接生成 Alpha，不是后处理抠图 · PNG / WebP</small>
+                <small id="transparentBackgroundHint">GPT Image 2 · PNG / WebP · 未透明时可用“背景透明化”</small>
               </span>
               <input type="checkbox" id="transparentBackground">
               <span class="toggle-track"><span></span></span>

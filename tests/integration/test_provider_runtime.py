@@ -263,28 +263,28 @@ class TestProviderAndRuntime(PlatformTestCase):
         self.assertEqual(session.requests[0]["json"]["background"], "transparent")
         self.assertEqual(result.content, session.transparent_content)
 
-    def test_transparent_background_rejects_opaque_provider_image(self):
+    def test_transparent_background_preserves_opaque_provider_image(self):
         content = png_bytes((35, 160, 110))
         channel = self.app.extensions["channel_registry"].get("test")
         adapter = OpenAIImagesAdapter()
         session = RecordingImageSession(transparent_content=content)
         adapter._local.session = session
 
-        with self.assertRaisesRegex(ProviderError, "上游未返回真实透明背景图片") as error:
-            adapter.generate(
-                channel,
-                GenerationRequest(
-                    prompt="极简上传图标",
-                    model="model-a",
-                    size="1024x1024",
-                    quality="high",
-                    output_format="png",
-                    compression=90,
-                    transparent_background=True,
-                ),
-            )
+        result = adapter.generate(
+            channel,
+            GenerationRequest(
+                prompt="极简上传图标",
+                model="model-a",
+                size="1024x1024",
+                quality="high",
+                output_format="png",
+                compression=90,
+                transparent_background=True,
+            ),
+        )
 
-        self.assertEqual(error.exception.code, "transparent_background_missing")
+        self.assertEqual(result.content, content)
+        self.assertEqual(result.request_id, "image-http-test")
         self.assertEqual(len(session.requests), 1)
         self.assertEqual(session.requests[0]["json"]["background"], "transparent")
 

@@ -6,7 +6,6 @@ from imagegen.errors import ServiceError
 from imagegen.integrations.matting import (
     LucidaMattingClient,
     image_has_baked_checkerboard,
-    image_has_real_alpha,
 )
 from tests.support.platform import (
     PlatformTestCase,
@@ -75,7 +74,7 @@ class TestLucidaMattingClient(PlatformTestCase):
             session=session,
         )
         result = client.remove_background(png_bytes(), filename="sample.png")
-        self.assertTrue(image_has_real_alpha(result))
+        self.assertEqual(result, transparent_icon_png_bytes())
         self.assertEqual(len(session.calls), 1)
         call = session.calls[0]
         self.assertEqual(call["url"], "http://lucida.local:8756/remove")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import zipfile
 from datetime import timedelta
+from decimal import Decimal
 from unittest.mock import patch
 
 from PIL import Image, ImageDraw
@@ -10,6 +11,7 @@ from sqlalchemy import func, select
 
 from imagegen.errors import ServiceError
 from imagegen.extensions import db
+from imagegen.integrations.images import OpenAIImagesAdapter
 from imagegen.models import (
     BackgroundRemovalResult,
     BackgroundRemovalRun,
@@ -18,7 +20,13 @@ from imagegen.models import (
     WalletLedger,
     utcnow,
 )
-from tests.support.platform import FakeProviderFactory, HoldingExecutor, PlatformTestCase
+from tests.support.platform import (
+    FakeProviderFactory,
+    HoldingExecutor,
+    PlatformTestCase,
+    RecordingImageSession,
+    png_bytes,
+)
 
 
 def transparent_candidate(color: tuple[int, int, int], size: tuple[int, int] = (64, 48)) -> bytes:
@@ -161,14 +169,39 @@ class TestBackgroundRemoval(PlatformTestCase):
         )
         self.assertEqual(len({result["id"] for result in run["results"]}), 2)
 
-    def test_candidates_finish_independently_without_touching_original_or_billing(self):
-        _workspace, job, item = self._completed_item()
+    def test_opaque_transparent_result_is_preserved_for_background_removal(self):
+        workspace = self.create_workspace("透明背景回退")
+        job = self.submit(workspace, transparent_background=True)
+        worker = self.create_worker()
+        adapter = OpenAIImagesAdapter()
+        session = RecordingImageSession(transparent_content=png_bytes())
+        adapter._local.session = session
+        channel = self.app.extensions["channel_registry"].get("test")
+        self.assertTrue(worker._claim(job.items[0].id, channel))
+        with patch.object(worker.providers, "for_channel", return_value=adapter):
+            worker._process_item(job.items[0].id)
+            worker._process_item(job.items[0].id)
+        self.assertEqual(len(session.requests), 1)
+        self.assertEqual(session.requests[0]["json"]["background"], "transparent")
+        db.session.expire_all()
+        item = db.session.get(GenerationItem, job.items[0].id)
+        self.assertEqual(item.status, "succeeded")
+        self.assertEqual(item.job.status, "succeeded")
+        self.assertIsNone(item.error_code)
         original_path = item.output_path
         original_bytes = self.app.extensions["image_storage"].read_bytes(original_path)
+        self.assertEqual(original_bytes, png_bytes())
+        self.assertEqual(item.charged_rmb, Decimal("1.2500"))
         user_before = db.session.get(User, self.user.id)
         balance_before = user_before.balance_rmb
         reserved_before = user_before.reserved_rmb
+        self.assertEqual(balance_before, Decimal("18.7500"))
+        self.assertEqual(reserved_before, Decimal("0.0000"))
         ledger_before = db.session.scalar(select(func.count(WalletLedger.id)))
+        generation = self.user_client().get(f"/api/generations/{job.id}").json["job"]
+        self.assertEqual(generation["status"], "succeeded")
+        self.assertTrue(generation["items"][0]["image_url"])
+        self.assertTrue(generation["items"][0]["thumbnail_url"])
         run = self._submit_models(item, "lucida", "alternate")
         results = {result["model_id"]: result for result in run["results"]}
         FakeMattingClient.failing_models = {"alternate-v1"}
@@ -240,6 +273,7 @@ class TestBackgroundRemoval(PlatformTestCase):
             [False, True],
         )
         self.assertEqual(result_file.status_code, 200)
+        self.assertEqual(original_response.status_code, 200)
         self.assertEqual(result_file.mimetype, "image/png")
         self.assertTrue(result_file_data)
         self.assertEqual(archive_response.status_code, 200)
