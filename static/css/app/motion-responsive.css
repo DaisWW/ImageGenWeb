@@ -230,9 +230,10 @@
   .mask-edit-notice > div:last-child { justify-content: flex-end; }
   .mask-tool-group { grid-template-columns: 1fr; }
   .image-dialog-preview { min-height: 260px; }
-  .image-viewer-toolbar { align-items: stretch; flex-direction: column; gap: 10px; padding: 10px 12px; }
-  .image-viewer-controls { width: 100%; gap: 5px; }
-  .image-viewer-controls input[type="range"] { flex: 1; width: auto; }
+  .image-viewer-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding: 10px 12px; }
+  .image-viewer-controls { grid-column: 1 / -1; grid-row: 2; width: 100%; gap: 5px; }
+  .image-viewer-actions { grid-column: 2; grid-row: 1; gap: 5px; }
+  .image-viewer-controls input[type="range"] { flex: 1; min-width: 48px; width: auto; }
   .image-viewer-mask-toggle { min-width: 0; padding-inline: 8px; }
   .image-viewer-mask-toggle span { overflow: hidden; text-overflow: ellipsis; }
   .admin-media-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

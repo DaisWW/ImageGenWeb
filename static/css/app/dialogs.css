@@ -185,6 +185,7 @@
   display: flex;
   min-width: 0;
   align-items: center;
+  flex-wrap: wrap;
   justify-content: space-between;
   gap: 16px;
   padding: 12px 18px;
@@ -195,6 +196,7 @@
 .image-viewer-title {
   display: grid;
   min-width: 0;
+  flex: 1;
   gap: 3px;
 }
 
@@ -206,11 +208,16 @@
   white-space: nowrap;
 }
 
-.image-viewer-controls {
+.image-viewer-controls,
+.image-viewer-actions {
   display: flex;
   flex: none;
   align-items: center;
   gap: 7px;
+}
+
+.image-viewer-controls {
+  flex-wrap: wrap;
 }
 
 .image-viewer-mask-toggle {

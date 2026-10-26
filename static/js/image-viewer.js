@@ -18,6 +18,8 @@
         zoomLabel: byId("imageViewerZoomLabel"),
         zoomIn: byId("imageViewerZoomIn"),
         fit: byId("imageViewerFit"),
+        copy: byId("imageViewerCopy"),
+        download: byId("imageViewerDownload"),
         maskToggle: byId("imageViewerMaskToggle"),
         maskOverlay: byId("imageViewerMaskOverlay"),
       };
@@ -39,6 +41,8 @@
       this.mask = null;
       this.maskVisible = false;
       this.maskLoadToken = 0;
+      this.copying = false;
+      this.downloadController = null;
       this.bindEvents();
     }
 
@@ -49,6 +53,10 @@
         this.setZoom(Number(event.target.value));
       });
       this.el.fit.addEventListener("click", () => this.fit());
+      this.el.copy.addEventListener("click", () => this.copyImage());
+      this.el.download.addEventListener("click", () => this.downloadImage());
+      this.el.image.addEventListener("load", () => this.updateExportActions());
+      this.el.image.addEventListener("error", () => this.updateExportActions());
       this.el.maskToggle.addEventListener("click", () => this.toggleMaskView());
       this.el.stage.addEventListener("wheel", (event) => this.handleWheel(event), { passive: false });
       this.el.stage.addEventListener("pointerdown", (event) => this.startPan(event));
@@ -73,6 +81,7 @@
       maskInitial = false,
     } = {}) {
       if (!src) return;
+      this.cancelDownload();
       this.state.scale = 1;
       this.state.fitScale = 1;
       this.state.offsetX = 0;
@@ -96,6 +105,7 @@
         if (this.source === src) this.el.title.textContent = "图片加载失败";
       };
       this.el.image.src = src;
+      this.updateExportActions();
       this.updateTransform();
       UI.openDialog(this.el.dialog);
       if (maskInitial && this.mask) this.showMaskView();
@@ -106,6 +116,7 @@
 
     close() {
       this.cancelPan();
+      this.cancelDownload();
       this.source = null;
       this.sourceAlt = "图片预览";
       this.sourceTitle = "图片预览";
@@ -115,8 +126,88 @@
       this.clearMaskOverlay();
       this.updateMaskToggle();
       this.el.image.removeAttribute("src");
+      this.updateExportActions();
       this.el.image.style.transform = "";
       this.el.stage.classList.remove("is-draggable");
+    }
+
+    updateExportActions() {
+      const ready = Boolean(this.source && this.el.image.complete && this.el.image.naturalWidth);
+      this.el.copy.disabled = !ready || this.copying;
+      this.el.copy.classList.toggle("loading", this.copying);
+      this.el.download.disabled = !ready || Boolean(this.downloadController);
+      this.el.download.classList.toggle("loading", Boolean(this.downloadController));
+    }
+
+    async copyImage() {
+      if (this.el.copy.disabled) return;
+      if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+        UI.toast("当前浏览器不支持复制图片，请使用下载原图", "info");
+        return;
+      }
+      this.copying = true;
+      this.updateExportActions();
+      try {
+        const image = this.el.image;
+        const canvas = document.createElement("canvas");
+        canvas.width = image.naturalWidth;
+        canvas.height = image.naturalHeight;
+        canvas.getContext("2d").drawImage(image, 0, 0);
+        const png = new Promise((resolve, reject) => {
+          canvas.toBlob((blob) => {
+            if (blob) resolve(blob);
+            else reject(new Error("图片转换失败"));
+          }, "image/png");
+        });
+        // Clipboard access can fail before the browser consumes the PNG promise.
+        png.catch(() => {});
+        // Pass the promise directly to preserve the clipboard user gesture in Safari.
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+        UI.toast("图片已复制到剪贴板", "success");
+      } catch (_error) {
+        UI.toast("复制图片失败，请允许剪贴板权限或下载原图", "error");
+      } finally {
+        this.copying = false;
+        this.updateExportActions();
+      }
+    }
+
+    async downloadImage() {
+      if (this.el.download.disabled) return;
+      const source = this.el.image.src;
+      const name = this.el.image.alt;
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 30_000);
+      this.downloadController = controller;
+      this.updateExportActions();
+      try {
+        const response = await fetch(source, { signal: controller.signal });
+        if (!response.ok) throw new Error("图片下载失败");
+        const blob = await response.blob();
+        if (this.downloadController !== controller) return;
+        if (!blob.type.startsWith("image/")) throw new Error("图片下载失败");
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = name;
+        document.body.append(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (_error) {
+        if (this.downloadController === controller) UI.toast("下载图片失败，请重试", "error");
+      } finally {
+        window.clearTimeout(timeout);
+        if (this.downloadController === controller) {
+          this.downloadController = null;
+          this.updateExportActions();
+        }
+      }
+    }
+
+    cancelDownload() {
+      this.downloadController?.abort();
+      this.downloadController = null;
     }
 
     zoomBounds() {
@@ -208,6 +299,7 @@
 
     showResultView() {
       if (!this.source) return;
+      this.cancelDownload();
       this.maskVisible = false;
       this.maskLoadToken += 1;
       this.clearMaskOverlay();
@@ -221,11 +313,13 @@
         if (this.source && !this.maskVisible) this.el.title.textContent = "图片加载失败";
       };
       this.el.image.src = this.source;
+      this.updateExportActions();
       if (this.el.image.complete && this.el.image.naturalWidth) this.fit();
     }
 
     showMaskView() {
       if (!this.mask) return;
+      this.cancelDownload();
       this.maskVisible = true;
       const token = ++this.maskLoadToken;
       this.updateMaskToggle();
@@ -246,6 +340,7 @@
       };
       this.clearMaskOverlay();
       this.el.image.src = this.mask.source;
+      this.updateExportActions();
       this.updateTransform();
       if (this.el.image.complete && this.el.image.naturalWidth) {
         showOverlay();

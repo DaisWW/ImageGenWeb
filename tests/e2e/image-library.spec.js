@@ -1,3 +1,4 @@
+const { readFile } = require("node:fs/promises");
 const path = require("node:path");
 const {
   expect,
@@ -429,7 +430,7 @@ test("many padding images stay inside the generation drawer", {
   });
 });
 
-test("reference thumbnails open a zoomable image preview", {
+test("reference thumbnails open a zoomable image preview with image exports", {
   tag: "@responsive",
 }, async ({ studioPage: page }) => {
   await mockConfiguredImageChannel(page);
@@ -440,6 +441,20 @@ test("reference thumbnails open a zoomable image preview", {
   )];
   await mockLibrarySelection(page, images);
   await page.reload();
+  await page.evaluate(() => {
+    window.copiedImages = [];
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        write: async (items) => {
+          const blob = await items[0].getType("image/png");
+          const bitmap = await createImageBitmap(blob);
+          window.copiedImages.push({ type: blob.type, width: bitmap.width, height: bitmap.height });
+          bitmap.close();
+        },
+      },
+    });
+  });
   await page.locator("#directGenerationButton").evaluate((button) => {
     button.hidden = false;
     button.click();
@@ -448,6 +463,18 @@ test("reference thumbnails open a zoomable image preview", {
   await page.locator("#referenceLibrary").click();
   await page.locator("#libraryGrid [data-image-preview]").click();
   await expect(page.locator("#imageViewerDialog")).toBeVisible();
+  const originalBytes = await readFile(path.resolve("static/assets/starter-ocean-sky-reference.png"));
+  const verifyDownload = async () => {
+    await expect(page.locator("#imageViewerDownload")).toBeEnabled();
+    const downloadEvent = page.waitForEvent("download");
+    await page.locator("#imageViewerDownload").click();
+    const download = await downloadEvent;
+    expect(download.suggestedFilename()).toBe(images[0].name);
+    expect(await readFile(await download.path())).toEqual(originalBytes);
+  };
+  await verifyDownload();
+  await page.locator("#imageViewerCopy").click();
+  await expect(page.locator("#toastRegion")).toContainText("图片已复制到剪贴板");
   await page.locator('#imageViewerDialog [data-close-dialog="imageViewerDialog"]').click();
   await page.locator("#libraryGrid [data-select-library-image]").check();
   await page.locator("#libraryConfirmButton").click();
@@ -460,6 +487,23 @@ test("reference thumbnails open a zoomable image preview", {
   const initialZoom = await page.locator("#imageViewerZoomLabel").textContent();
   await page.locator("#imageViewerZoomIn").click();
   await expect(page.locator("#imageViewerZoomLabel")).not.toHaveText(initialZoom);
+  await page.locator("#imageViewerCopy").click();
+  await expect.poll(() => page.evaluate(() => window.copiedImages.length)).toBe(2);
+  const originalSize = await page.locator("#imageViewerImage").evaluate((image) => ({
+    type: "image/png", width: image.naturalWidth, height: image.naturalHeight,
+  }));
+  expect(await page.evaluate(() => window.copiedImages)).toEqual([originalSize, originalSize]);
+  await verifyDownload();
+  const toolbarFits = await page.locator(".image-viewer-toolbar").evaluate((toolbar) => {
+    const bounds = toolbar.getBoundingClientRect();
+    return [...toolbar.querySelectorAll("button, input")].filter((control) => !control.hidden)
+      .every((control) => {
+        const box = control.getBoundingClientRect();
+        return box.left >= bounds.left && box.right <= bounds.right
+          && box.top >= bounds.top && box.bottom <= bounds.bottom;
+      });
+  });
+  expect(toolbarFits).toBe(true);
   const stage = page.locator("#imageViewerStage");
   await expect(stage).toHaveClass(/is-draggable/);
   const stageBox = await stage.boundingBox();
@@ -474,7 +518,105 @@ test("reference thumbnails open a zoomable image preview", {
   expect(transformAfterPan).not.toBe(transformBeforePan);
   await page.locator("#imageViewerFit").click();
   await expect(page.locator("#imageViewerDialog")).toBeVisible();
+  await page.evaluate(() => {
+    navigator.clipboard.write = async () => {
+      throw new DOMException("Permission denied", "NotAllowedError");
+    };
+  });
+  await page.locator("#imageViewerCopy").click();
+  await expect(page.locator("#toastRegion")).toContainText("复制图片失败");
+  await expect(page.locator("#imageViewerCopy")).toBeEnabled();
+  await expect(page.locator("#imageViewerDownload")).toBeEnabled();
+  await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { value: undefined }));
+  await page.locator("#imageViewerCopy").click();
+  await expect(page.locator("#toastRegion")).toContainText("当前浏览器不支持复制图片");
   await page.locator('#imageViewerDialog [data-close-dialog="imageViewerDialog"]').click();
   await expect(page.locator("#imageViewerDialog")).toBeHidden();
   await expect(page.locator("#referenceList .reference-card.selected")).toHaveCount(1);
+});
+
+test("image preview cancels downloads on close and mask changes", {
+  tag: "@responsive",
+}, async ({ studioPage: page }) => {
+  const imageUrl = "/static/assets/starter-ocean-sky-reference.png";
+  await mockLibrarySelection(page, [libraryImage("cancel-preview", "preview.png", imageUrl)]);
+  await page.locator("#libraryButton").click();
+  const preview = page.locator("#libraryGrid [data-image-preview]");
+  await preview.evaluate((button) => {
+    button.dataset.imagePreviewMaskUrl = "/static/assets/brand-mark-v2.png";
+    button.dataset.imagePreviewMaskSource = "/static/assets/brand-mark-v2.png";
+  });
+  await preview.click();
+  await expect(page.locator("#imageViewerDownload")).toBeEnabled();
+  await page.evaluate(async () => {
+    const originalFetch = window.fetch;
+    const blob = await (await originalFetch(document.getElementById("imageViewerImage").src)).blob();
+    window.pendingImageDownloads = [];
+    window.fetch = (input, options) => {
+      if (!options?.signal) return originalFetch(input, options);
+      return new Promise((resolve) => {
+        window.pendingImageDownloads.push({
+          signal: options.signal,
+          finish: () => resolve(new Response(blob)),
+        });
+      });
+    };
+  });
+  const downloads = [];
+  page.on("download", (download) => downloads.push(download));
+  for (const [completed, action] of ["close", "mask"].entries()) {
+    const index = await page.evaluate(() => window.pendingImageDownloads.length);
+    await page.locator("#imageViewerDownload").click();
+    await expect(page.locator("#imageViewerDownload")).toBeDisabled();
+    if (action === "close") {
+      await page.locator('#imageViewerDialog [data-close-dialog="imageViewerDialog"]').click();
+      await preview.click();
+    } else {
+      await page.locator("#imageViewerMaskToggle").click();
+    }
+    await expect.poll(() => page.evaluate((i) => (
+      window.pendingImageDownloads[i].signal.aborted
+    ), index)).toBe(true);
+    await expect(page.locator("#imageViewerDownload")).toBeEnabled();
+    await page.locator("#imageViewerDownload").click();
+    await page.evaluate(async (i) => {
+      window.pendingImageDownloads[i].finish();
+      await new Promise(window.requestAnimationFrame);
+    }, index);
+    await expect(page.locator("#imageViewerDownload")).toBeDisabled();
+    expect(downloads).toHaveLength(completed);
+    const downloadEvent = page.waitForEvent("download");
+    await page.evaluate((i) => window.pendingImageDownloads[i + 1].finish(), index);
+    await downloadEvent;
+    await expect(page.locator("#imageViewerDownload")).toBeEnabled();
+  }
+  expect(downloads).toHaveLength(2);
+  await expect(page.locator("#toastRegion")).not.toContainText("下载图片失败");
+});
+
+test("image preview handles encoding failure after clipboard denial", async ({ studioPage: page }) => {
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await mockLibrarySelection(page, [libraryImage(
+    "encoding-preview", "preview.png", "/static/assets/starter-ocean-sky-reference.png",
+  )]);
+  await page.locator("#libraryButton").click();
+  await page.locator("#libraryGrid [data-image-preview]").click();
+  await expect(page.locator("#imageViewerCopy")).toBeEnabled();
+  await page.evaluate(() => {
+    HTMLCanvasElement.prototype.toBlob = (callback) => {
+      window.setTimeout(() => {
+        callback(null);
+        window.pngEncodingFinished = true;
+      }, 0);
+    };
+    Object.defineProperty(navigator, "clipboard", { value: {
+      write: async () => { throw new DOMException("Permission denied", "NotAllowedError"); },
+    } });
+  });
+  await page.locator("#imageViewerCopy").click();
+  await expect(page.locator("#toastRegion")).toContainText("复制图片失败");
+  await expect.poll(() => page.evaluate(() => window.pngEncodingFinished)).toBe(true);
+  await expect(page.locator("#imageViewerCopy")).toBeEnabled();
+  expect(errors).toEqual([]);
 });
