@@ -68,6 +68,51 @@ test("image library exposes retry after its initial load fails", async ({ studio
   await expect(page.locator("#libraryUploadButton")).toBeEnabled();
   expect(attempts).toBe(2);
 });
+
+test("image library repeated paste reports an upload in progress without duplicating it", {
+  tag: "@responsive",
+}, async ({ studioPage: page }) => {
+  const image = libraryImage(
+    "library-clipboard", "clipboard.png", "/static/assets/brand-mark-v2.png",
+  );
+  let uploads = 0;
+  let releaseUpload;
+  const uploadReleased = new Promise((resolve) => { releaseUpload = resolve; });
+  await page.route("**/api/library-images?*", (route) => route.fulfill({
+    json: { images: [], total: 0, has_more: false },
+  }));
+  await page.route("**/api/library-images", async (route) => {
+    uploads += 1;
+    await uploadReleased;
+    await route.fulfill({ status: 201, json: { images: [image], added_count: 1 } });
+  });
+  const pasteImage = () => page.evaluate(() => {
+    const clipboardData = new DataTransfer();
+    clipboardData.items.add(new File(["image"], "clipboard.png", { type: "image/png" }));
+    document.getElementById("libraryDialog").dispatchEvent(new ClipboardEvent("paste", {
+      clipboardData, bubbles: true, cancelable: true,
+    }));
+  });
+
+  await page.locator("#libraryButton").click();
+  await expect(page.locator("#libraryUploadButton")).toBeEnabled();
+  try {
+    await pasteImage();
+    await expect.poll(() => uploads).toBe(1);
+    await expect(page.locator("#libraryUploadButton")).toBeDisabled();
+    await pasteImage();
+    await expect(page.locator("#toastRegion .toast.info")).toHaveText("图片正在导入，请稍候");
+    await expect(page.locator("#toastRegion .toast.error")).toHaveCount(0);
+    expect(uploads).toBe(1);
+  } finally {
+    releaseUpload();
+  }
+  await expect(page.locator("#libraryGrid .library-card")).toHaveCount(1);
+  await expect(page.locator("#toastRegion .toast.success")).toHaveText("已将 1 张图片存入图库");
+  await expect(page.locator("#libraryUploadButton")).toBeEnabled();
+  expect(uploads).toBe(1);
+});
+
 test("image library pagination keeps its server offset after merging a duplicate", async ({
   studioPage: page,
 }) => {

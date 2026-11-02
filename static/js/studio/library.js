@@ -403,6 +403,10 @@
       if (!files.length) return;
       event.preventDefault();
       event.stopPropagation();
+      if (this.libraryUploading) {
+        UI.toast("图片正在导入，请稍候", "info");
+        return;
+      }
       if (!this.libraryCanAcceptImages()) {
         UI.toast("图库当前无法导入图片", "error");
         return;
