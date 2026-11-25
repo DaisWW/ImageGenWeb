@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import re
 import secrets
+from decimal import Decimal
 
 from sqlalchemy import select
-from sqlalchemy.orm import joinedload, load_only
+from sqlalchemy.orm import load_only
 
 from ..errors import ServiceError
 from ..extensions import db
@@ -60,16 +61,27 @@ class GenerationApiKeyService:
         key = db.session.scalar(
             select(GenerationApiKey)
             .join(User)
-            .options(
-                joinedload(GenerationApiKey.workspace, innerjoin=True).load_only(
-                    Workspace.name, Workspace.kind
-                )
-            )
             .where(GenerationApiKey.token_digest == _token_digest(token), User.status == "active")
         )
         if key is None:
             raise _invalid_key()
         return key
+
+    def account_details(self, key: GenerationApiKey) -> tuple[str, Decimal]:
+        details = db.session.execute(
+            select(Workspace.name, User.balance_rmb, User.reserved_rmb)
+            .join(GenerationApiKey, GenerationApiKey.workspace_id == Workspace.id)
+            .join(User, User.id == GenerationApiKey.user_id)
+            .where(
+                GenerationApiKey.user_id == key.user_id,
+                GenerationApiKey.workspace_id == key.workspace_id,
+                GenerationApiKey.token_digest == key.token_digest,
+                User.status == "active",
+            )
+        ).one_or_none()
+        if details is None:
+            raise _invalid_key()
+        return details.name, max(Decimal("0"), details.balance_rmb - details.reserved_rmb)
 
     def lock_active_owner(self, key: GenerationApiKey) -> User:
         # Check the key again under the same account lock used for rotation.

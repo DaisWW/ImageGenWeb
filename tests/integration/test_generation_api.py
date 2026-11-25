@@ -12,6 +12,8 @@ from unittest.mock import Mock, patch
 from uuid import uuid4
 from zipfile import ZipFile
 
+from sqlalchemy import event
+
 from imagegen.extensions import db
 from imagegen.models import User
 from tests.support.platform import FakeProviderFactory, PlatformTestCase, png_bytes
@@ -55,8 +57,32 @@ class TestGenerationApi(PlatformTestCase):
         self.assertEqual(client.get(config_url).status_code, 401)
         with self.app.app_context():
             self.assertEqual(external.get("/api/channels", headers=headers).status_code, 302)
-        config = external.get(config_url, headers=headers)
+        db.session.remove()
+        config_queries = []
+
+        def capture_config_queries(_connection, _cursor, statement, _parameters, _context, _many):
+            if statement.lstrip().upper().startswith("SELECT"):
+                config_queries.append(statement)
+
+        event.listen(db.engine, "before_cursor_execute", capture_config_queries)
+        try:
+            config = external.get(config_url, headers=headers)
+        finally:
+            event.remove(db.engine, "before_cursor_execute", capture_config_queries)
         self.assertEqual(config.status_code, 200)
+        self.assertEqual(
+            sum("FROM users" in query.upper() for query in config_queries),
+            0,
+            config_queries,
+        )
+        self.assertEqual(len(config_queries), 2, config_queries)
+        self.assertFalse(
+            any(
+                "FROM generation_api_keys" in query.lower() and "JOIN workspaces" in query.lower()
+                for query in config_queries
+            ),
+            config_queries,
+        )
         self.assertEqual(config.json["workspace"]["id"], workspace.id)
         self.assertEqual(config.json["channels"][0]["price_rmb"], "1.2500")
         self.assertNotIn("test-key-not-secret", config.get_data(as_text=True))

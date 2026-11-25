@@ -102,11 +102,12 @@ def generation_api_headers(response):
 @api.get("/config")
 def config():
     key = g.generation_api_key
+    workspace_name, available_balance = services().generation_api_keys.account_details(key)
     runtime = services().settings.runtime()
     registry = channels()
     return jsonify(
-        workspace={"id": key.workspace_id, "name": key.workspace.name},
-        available_balance_rmb=format(key.user.available_balance_rmb, ".4f"),
+        workspace={"id": key.workspace_id, "name": workspace_name},
+        available_balance_rmb=format(available_balance, ".4f"),
         channels=[
             channel.public_dict()
             for channel in registry.list(include_disabled=False)
