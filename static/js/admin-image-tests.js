@@ -207,46 +207,19 @@
     }
   }
 
-  class AdminImageTests {
-    constructor() {
-      this.root = document.querySelector(".image-tests");
-      this.el = Object.fromEntries(
-        [...this.root.querySelectorAll("[id]")].map((el) => [el.id.replace("imageTest", ""), el]),
-      );
-      this.page = "workbench";
+  class AdminImageTestRuns {
+    constructor(app) {
+      this.app = app;
+      this.el = app.el;
       this.currentId = "";
       this.historyId = "";
       this.offset = 0;
       this.detailVersion = 0;
-      this.suites = new AdminImageTestSuites(this);
       this.bind();
     }
 
     bind() {
       const el = this.el;
-      this.root.querySelectorAll("[data-test-page]").forEach((button) => {
-        button.addEventListener("click", () => this.showPage(button.dataset.testPage));
-      });
-      el.Refresh.addEventListener("click", () => this.activate(true));
-      el.Targets.addEventListener("change", (event) => {
-        const group = event.target.closest("[data-test-channel]");
-        if (group) {
-          group.closest(".image-test-channel").querySelectorAll("[data-test-target]").forEach((box) => {
-            box.checked = group.checked;
-          });
-        }
-        this.updateEstimate();
-      });
-      el.SelectAll.addEventListener("click", () => this.selectTargets(true));
-      el.SelectNone.addEventListener("click", () => this.selectTargets(false));
-      el.Launch.addEventListener("submit", (event) => {
-        event.preventDefault();
-        const suite = this.suites.selectedSuite();
-        if (!suite || el.Start.disabled) return;
-        this.runAction(el.Start, "/runs", {
-          suite_id: suite.id, suite_revision: suite.revision, targets: this.selectedTargets(),
-        });
-      });
       el.HistoryRuns.addEventListener("click", (event) => {
         const batch = event.target.closest("[data-test-run]");
         if (batch) this.openHistoryRun(batch.dataset.testRun);
@@ -265,118 +238,26 @@
       });
     }
 
-    async activate(refresh = false) {
-      if (this.loadingCatalog) return;
-      this.loadingCatalog = true;
-      this.setError("");
-      try {
-        const selected = this.selectedTargets();
-        const hadAll = !this.catalog || selected.length === this.targetBoxes().length;
-        this.catalog = await UI.api(apiRoot);
-        this.suites.loadCatalog(this.catalog);
-        this.renderTargets(hadAll, selected);
-        this.updateEstimate();
-        this.el.HistoryRetention.textContent = `测评记录和图片随生成记录保留 ${this.catalog.history_retention_days} 天。`;
-        if (this.page === "history") {
-          await this.loadHistory(this.offset);
-        } else if (this.page === "workbench") {
-          if (!this.currentId) {
-            const { runs } = await UI.api(`${apiRoot}/runs`);
-            if (!this.currentId) this.currentId = runs[0]?.id || "";
-          }
-          if (this.page === "workbench" && (refresh || this.run?.id !== this.currentId)) {
-            await this.loadRun(this.currentId);
-          }
+    async activate(page, refresh) {
+      if (page === "history") {
+        await this.loadHistory(this.offset);
+      } else if (page === "workbench") {
+        if (!this.currentId) {
+          const { runs } = await UI.api(`${apiRoot}/runs`);
+          if (!this.currentId) this.currentId = runs[0]?.id || "";
         }
-      } catch (error) {
-        this.setError(error.message);
-      } finally {
-        this.loadingCatalog = false;
+        if (this.app.page === "workbench" && (refresh || this.run?.id !== this.currentId)) {
+          await this.loadRun(this.currentId);
+        }
       }
     }
 
-    showPage(page, suite) {
-      this.setError("");
-      this.page = page;
-      this.root.querySelectorAll("[data-test-page]").forEach((button) => {
-        const active = button.dataset.testPage === page;
-        button.classList.toggle("active", active);
-        button.setAttribute("aria-pressed", String(active));
-      });
-      this.root.querySelectorAll("[data-test-pane]").forEach((pane) => {
-        pane.hidden = pane.dataset.testPane !== page;
-      });
-      if (page === "suites") {
-        if (suite) this.suites.editSuite(suite);
-        return;
-      }
+    showPage(page) {
       const slot = page === "history" ? this.el.HistoryDetail : this.el.Current;
       slot.append(this.el.Run);
       if (page === "history") this.loadHistory(this.offset);
       else if (this.run?.id !== this.currentId) this.loadRun(this.currentId);
       else this.el.CurrentEmpty.hidden = !!this.run;
-    }
-
-    setError(message) {
-      this.el.Error.textContent = message;
-      this.el.Error.hidden = !message;
-    }
-
-    targetBoxes() {
-      return [...this.el.Targets.querySelectorAll("[data-test-target]")];
-    }
-
-    selectedTargets() {
-      return this.targetBoxes().filter((box) => box.checked).map((box) => ({
-        channel_id: box.dataset.channelId, model: box.value,
-      }));
-    }
-
-    renderTargets(all, selected) {
-      this.el.Targets.innerHTML = this.catalog.channels.map((channel) => {
-        const unavailable = !channel.configured ? "待配置 API Key"
-          : !channel.capabilities.modes.includes("text2img") ? "未启用文生图" : "";
-        const header = `<strong>${escape(channel.label)}</strong><small>${rmb(channel.price_rmb)} / 张</small>`;
-        const models = channel.models.map((model) => {
-          const checked = all || selected.some((target) => target.channel_id === channel.id && target.model === model.id);
-          return `<label class="check-line"><input type="checkbox" data-test-target
-            data-channel-id="${escape(channel.id)}" data-price="${escape(channel.price_rmb)}"
-            value="${escape(model.id)}" ${checked ? "checked" : ""}>
-            <span>${escape(model.label)}${model.label !== model.id ? `<small>${escape(model.id)}</small>` : ""}</span></label>`;
-        }).join("");
-        return `<div class="image-test-channel">
-          ${unavailable
-            ? `<div class="image-test-channel-heading">${header}<span class="subline">${unavailable}</span></div>`
-            : `<label class="image-test-channel-heading check-line"><input type="checkbox" data-test-channel>${header}</label>
-               <div class="image-test-models">${models}</div>`}
-          </div>`;
-      }).join("") || '<p class="image-test-empty">暂无启用的生图渠道。</p>';
-    }
-
-    selectTargets(checked) {
-      this.targetBoxes().forEach((box) => { box.checked = checked; });
-      this.updateEstimate();
-    }
-
-    updateEstimate() {
-      if (!this.catalog) return;
-      const boxes = this.targetBoxes();
-      const selected = boxes.filter((box) => box.checked);
-      this.el.Targets.querySelectorAll("[data-test-channel]").forEach((group) => {
-        const models = [...group.closest(".image-test-channel").querySelectorAll("[data-test-target]")];
-        group.checked = models.every((model) => model.checked);
-        group.indeterminate = !group.checked && models.some((model) => model.checked);
-      });
-      const questions = this.suites.selectedSuite()?.questions.length || 0;
-      const images = questions * selected.length;
-      const price = questions * selected.reduce((sum, box) => sum + Number(box.dataset.price), 0);
-      this.el.TargetCount.textContent = `已选 ${selected.length} / ${boxes.length} 个模型`;
-      this.el.SelectAll.disabled = selected.length === boxes.length;
-      this.el.SelectNone.disabled = !selected.length;
-      this.el.Start.disabled = !!this.runActionPending || !images || images > this.catalog.max_images;
-      this.el.Estimate.textContent = images > this.catalog.max_images
-        ? `已选 ${images} 张，单批最多 ${this.catalog.max_images} 张，请减少模型或题目。`
-        : `${questions} 道题 · ${images} 张图 · 预计渠道价 ${rmb(price)}`;
     }
 
     async loadHistory(offset) {
@@ -385,14 +266,14 @@
       this.el.Next.disabled = true;
       try {
         const history = await UI.api(`${apiRoot}/runs?offset=${offset}`);
-        if (this.page !== "history" || this.historyVersion !== version) return;
+        if (this.app.page !== "history" || this.historyVersion !== version) return;
         this.history = history;
         this.offset = offset;
         const id = history.runs.some((run) => run.id === this.historyId) ? this.historyId : history.runs[0]?.id || "";
         this.el.HistoryTotal.textContent = `共 ${history.total} 批`;
         this.openHistoryRun(id);
       } catch (error) {
-        this.setError(error.message);
+        this.app.setError(error.message);
       } finally {
         if (this.historyVersion === version && this.history) {
           this.el.Previous.disabled = !this.offset;
@@ -425,7 +306,7 @@
       if (!id) return;
       try {
         const { run } = await UI.api(`${apiRoot}/runs/${id}${questions ? "?progress=1" : ""}`);
-        if (version === this.detailVersion && this.page !== "suites") {
+        if (version === this.detailVersion && this.app.page !== "suites") {
           if (questions) run.questions = questions;
           this.showRun(run);
           this.updateHistoryProgress(run);
@@ -433,12 +314,12 @@
       } catch (error) {
         if (version !== this.detailVersion) return;
         if (error.status === 404) this.showRun(null);
-        if (!poll || error.status === 404) this.setError(error.message);
+        if (!poll || error.status === 404) this.app.setError(error.message);
       }
     }
 
     async poll() {
-      if (!this.run?.active || this.page === "suites" || this.polling || this.runActionPending || document.hidden) return;
+      if (!this.run?.active || this.app.page === "suites" || this.polling || this.actionPending || document.hidden) return;
       this.polling = true;
       try {
         await this.loadRun(this.run.id, true);
@@ -448,11 +329,11 @@
     }
 
     async runAction(button, path, body) {
-      if (this.runActionPending) return;
-      this.runActionPending = true;
+      if (this.actionPending) return;
+      this.actionPending = true;
       button.disabled = true;
       ++this.detailVersion;
-      this.setError("");
+      this.app.setError("");
       try {
         if (body) {
           const signature = JSON.stringify([path, body]);
@@ -469,7 +350,7 @@
           this.currentId = run.id;
           ++this.detailVersion;
           this.showRun(run);
-          this.showPage("workbench");
+          this.app.showPage("workbench");
           this.el.Run.scrollIntoView({ block: "start" });
         } else if (this.run?.id === run.id) {
           ++this.detailVersion;
@@ -477,16 +358,16 @@
         }
         this.updateHistoryProgress(run);
       } catch (error) {
-        this.setError(error.message);
+        this.app.setError(error.message);
       } finally {
-        this.runActionPending = false;
+        this.actionPending = false;
         button.disabled = false;
-        this.updateEstimate();
+        this.app.updateEstimate();
       }
     }
 
     updateHistoryProgress(run) {
-      if (this.page !== "history" || !this.history) return;
+      if (this.app.page !== "history" || !this.history) return;
       const entry = this.history.runs.find((item) => item.id === run.id);
       if (!entry || entry.finished === run.finished) return;
       entry.finished = run.finished;
@@ -499,7 +380,7 @@
       const same = this.run?.id === run?.id;
       this.run = run;
       el.Run.hidden = !run;
-      el.CurrentEmpty.hidden = this.page !== "workbench" || !!run;
+      el.CurrentEmpty.hidden = this.app.page !== "workbench" || !!run;
       if (!run) return;
       el.RunTitle.textContent = run.suite_name + (run.retry_of ? " · 重试" : "");
       el.RunDate.textContent = `${UI.dateTime(run.created_at)} · 预计渠道价 ${rmb(run.estimated_rmb)}`;
@@ -591,11 +472,158 @@
         if (this.run?.id === run.id) await this.loadRun(run.id);
       } catch (error) {
         select.value = result.verdict;
-        this.setError(error.message);
+        this.app.setError(error.message);
       } finally {
         select.disabled = false;
       }
     }
+  }
+
+  class AdminImageTests {
+    constructor() {
+      this.root = document.querySelector(".image-tests");
+      this.el = Object.fromEntries(
+        [...this.root.querySelectorAll("[id]")].map((el) => [el.id.replace("imageTest", ""), el]),
+      );
+      this.page = "workbench";
+      this.suites = new AdminImageTestSuites(this);
+      this.runs = new AdminImageTestRuns(this);
+      this.bind();
+    }
+
+    bind() {
+      const el = this.el;
+      this.root.querySelectorAll("[data-test-page]").forEach((button) => {
+        button.addEventListener("click", () => this.showPage(button.dataset.testPage));
+      });
+      el.Refresh.addEventListener("click", () => this.activate(true));
+      el.Targets.addEventListener("change", (event) => {
+        const group = event.target.closest("[data-test-channel]");
+        if (group) {
+          group.closest(".image-test-channel").querySelectorAll("[data-test-target]").forEach((box) => {
+            box.checked = group.checked;
+          });
+        }
+        this.updateEstimate();
+      });
+      el.SelectAll.addEventListener("click", () => this.selectTargets(true));
+      el.SelectNone.addEventListener("click", () => this.selectTargets(false));
+      el.Launch.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const suite = this.suites.selectedSuite();
+        if (!suite || el.Start.disabled) return;
+        this.runs.runAction(el.Start, "/runs", {
+          suite_id: suite.id, suite_revision: suite.revision, targets: this.selectedTargets(),
+        });
+      });
+
+    }
+
+    async activate(refresh = false) {
+      if (this.loadingCatalog) return;
+      this.loadingCatalog = true;
+      this.setError("");
+      try {
+        const selected = this.selectedTargets();
+        const hadAll = !this.catalog || selected.length === this.targetBoxes().length;
+        this.catalog = await UI.api(apiRoot);
+        this.suites.loadCatalog(this.catalog);
+        this.renderTargets(hadAll, selected);
+        this.updateEstimate();
+        this.el.HistoryRetention.textContent = `测评记录和图片随生成记录保留 ${this.catalog.history_retention_days} 天。`;
+        await this.runs.activate(this.page, refresh);
+      } catch (error) {
+        this.setError(error.message);
+      } finally {
+        this.loadingCatalog = false;
+      }
+    }
+
+    showPage(page, suite) {
+      this.setError("");
+      this.page = page;
+      this.root.querySelectorAll("[data-test-page]").forEach((button) => {
+        const active = button.dataset.testPage === page;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-pressed", String(active));
+      });
+      this.root.querySelectorAll("[data-test-pane]").forEach((pane) => {
+        pane.hidden = pane.dataset.testPane !== page;
+      });
+      if (page === "suites") {
+        if (suite) this.suites.editSuite(suite);
+        return;
+      }
+      this.runs.showPage(page);
+    }
+
+    setError(message) {
+      this.el.Error.textContent = message;
+      this.el.Error.hidden = !message;
+    }
+
+    poll() {
+      return this.runs.poll();
+    }
+
+    targetBoxes() {
+      return [...this.el.Targets.querySelectorAll("[data-test-target]")];
+    }
+
+    selectedTargets() {
+      return this.targetBoxes().filter((box) => box.checked).map((box) => ({
+        channel_id: box.dataset.channelId, model: box.value,
+      }));
+    }
+
+    renderTargets(all, selected) {
+      this.el.Targets.innerHTML = this.catalog.channels.map((channel) => {
+        const unavailable = !channel.configured ? "待配置 API Key"
+          : !channel.capabilities.modes.includes("text2img") ? "未启用文生图" : "";
+        const header = `<strong>${escape(channel.label)}</strong><small>${rmb(channel.price_rmb)} / 张</small>`;
+        const models = channel.models.map((model) => {
+          const checked = all || selected.some((target) => target.channel_id === channel.id && target.model === model.id);
+          return `<label class="check-line"><input type="checkbox" data-test-target
+            data-channel-id="${escape(channel.id)}" data-price="${escape(channel.price_rmb)}"
+            value="${escape(model.id)}" ${checked ? "checked" : ""}>
+            <span>${escape(model.label)}${model.label !== model.id ? `<small>${escape(model.id)}</small>` : ""}</span></label>`;
+        }).join("");
+        return `<div class="image-test-channel">
+          ${unavailable
+            ? `<div class="image-test-channel-heading">${header}<span class="subline">${unavailable}</span></div>`
+            : `<label class="image-test-channel-heading check-line"><input type="checkbox" data-test-channel>${header}</label>
+               <div class="image-test-models">${models}</div>`}
+          </div>`;
+      }).join("") || '<p class="image-test-empty">暂无启用的生图渠道。</p>';
+    }
+
+    selectTargets(checked) {
+      this.targetBoxes().forEach((box) => { box.checked = checked; });
+      this.updateEstimate();
+    }
+
+    updateEstimate() {
+      if (!this.catalog) return;
+      const boxes = this.targetBoxes();
+      const selected = boxes.filter((box) => box.checked);
+      this.el.Targets.querySelectorAll("[data-test-channel]").forEach((group) => {
+        const models = [...group.closest(".image-test-channel").querySelectorAll("[data-test-target]")];
+        group.checked = models.every((model) => model.checked);
+        group.indeterminate = !group.checked && models.some((model) => model.checked);
+      });
+      const questions = this.suites.selectedSuite()?.questions.length || 0;
+      const images = questions * selected.length;
+      const price = questions * selected.reduce((sum, box) => sum + Number(box.dataset.price), 0);
+      this.el.TargetCount.textContent = `已选 ${selected.length} / ${boxes.length} 个模型`;
+      this.el.SelectAll.disabled = selected.length === boxes.length;
+      this.el.SelectNone.disabled = !selected.length;
+      this.el.Start.disabled = this.runs.actionPending || !images || images > this.catalog.max_images;
+      this.el.Estimate.textContent = images > this.catalog.max_images
+        ? `已选 ${images} 张，单批最多 ${this.catalog.max_images} 张，请减少模型或题目。`
+        : `${questions} 道题 · ${images} 张图 · 预计渠道价 ${rmb(price)}`;
+    }
+
+
   }
 
   window.AdminImageTests = AdminImageTests;
