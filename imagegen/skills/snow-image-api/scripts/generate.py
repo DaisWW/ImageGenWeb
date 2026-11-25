@@ -25,6 +25,71 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
+class GenerationApiClient:
+    def __init__(self, base_url: str, api_key: str):
+        self.base_url = base_url
+        self._api_key = api_key
+        self._opener = build_opener(NoRedirect())
+
+    def open_response(
+        self, path: str, *, body: bytes | None = None, request_id: UUID | None = None
+    ) -> HTTPResponse:
+        headers = {"Authorization": f"Bearer {self._api_key}"}
+        if request_id is not None:
+            headers.update({"Content-Type": "application/json", "Idempotency-Key": str(request_id)})
+        request = Request(f"{self.base_url}/api/v1/{path}", data=body, headers=headers)
+        try:
+            return self._opener.open(request, timeout=30)
+        except HTTPError as error:
+            with error:
+                try:
+                    details = json.loads(error.read(4096))
+                except ValueError:
+                    details = {}
+            message = f"HTTP {error.code} for {request.get_method()} {path}"
+            if isinstance(details, dict) and isinstance(details.get("error"), str):
+                message += " " + details["error"].replace(self._api_key, "[redacted]")
+            raise RuntimeError(message) from None
+
+    def request_json(
+        self, path: str, *, body: bytes | None = None, request_id: UUID | None = None
+    ) -> dict:
+        with self.open_response(path, body=body, request_id=request_id) as response:
+            return json.load(response)
+
+    def get_job(self, job_id: str) -> dict:
+        return self.request_json(f"generations/{job_id}")["job"]
+
+
+def wait_for_job(client: GenerationApiClient, job_id: str, job: dict) -> dict:
+    deadline = time.monotonic() + 600
+    while job["status"] not in TERMINAL_STATES:
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"Job still active. Resume with wait {job_id}.")
+        time.sleep(3)
+        job = client.get_job(job_id)
+    return job
+
+
+def download_images(
+    client: GenerationApiClient, job_id: str, items: list[dict], output_dir: Path
+) -> list[str]:
+    files = []
+    output_dir = output_dir.resolve()
+    for item in items:
+        if item["status"] != "succeeded":
+            continue
+        item_id = UUID(item["id"]).hex
+        mime_type = item["mime_type"]
+        extension = IMAGE_EXTENSIONS[mime_type]
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / f"image_{item_id}.{extension}"
+        with client.open_response(f"generations/{job_id}/images/{item_id}") as response:
+            save_image(response, path, mime_type)
+        files.append(str(path))
+    return files
+
+
 def save_image(response: HTTPResponse, path: Path, mime_type: str) -> None:
     if response.headers.get_content_type() != mime_type:
         raise ValueError("Unexpected image Content-Type.")
@@ -39,7 +104,7 @@ def save_image(response: HTTPResponse, path: Path, mime_type: str) -> None:
         partial.replace(path)
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=Path("snow-images"))
     commands = parser.add_subparsers(dest="command", required=True)
@@ -49,6 +114,11 @@ def main() -> int:
     generate.add_argument("--request-id", type=UUID, help="Reuse the UUID of the same submission")
     wait = commands.add_parser("wait", help="Resume waiting for an existing job")
     wait.add_argument("job_id", type=UUID)
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
     args = parser.parse_args()
 
     base_url = os.environ.get("SNOW_IMAGE_API_URL", "").strip().rstrip("/")
@@ -64,35 +134,11 @@ def main() -> int:
         or address.fragment
     ):
         parser.error("SNOW_IMAGE_API_URL must be an HTTP(S) site URL.")
-    opener = build_opener(NoRedirect())
-
-    def open_response(
-        path: str, *, body: bytes | None = None, request_id: UUID | None = None
-    ) -> HTTPResponse:
-        headers = {"Authorization": f"Bearer {api_key}"}
-        if request_id is not None:
-            headers.update({"Content-Type": "application/json", "Idempotency-Key": str(request_id)})
-        request = Request(f"{base_url}/api/v1/{path}", data=body, headers=headers)
-        try:
-            return opener.open(request, timeout=30)
-        except HTTPError as error:
-            with error:
-                try:
-                    details = json.loads(error.read(4096))
-                except (UnicodeError, ValueError):
-                    details = {}
-            message = f"HTTP {error.code} for {request.get_method()} {path}"
-            if isinstance(details, dict) and isinstance(details.get("error"), str):
-                message += " " + details["error"].replace(api_key, "[redacted]")
-            raise RuntimeError(message) from None
-
-    def get_json(path: str, *, body: bytes | None = None, request_id: UUID | None = None) -> dict:
-        with open_response(path, body=body, request_id=request_id) as response:
-            return json.load(response)
+    client = GenerationApiClient(base_url, api_key)
 
     try:
         if args.command == "config":
-            print(json.dumps(get_json("config"), indent=2))
+            print(json.dumps(client.request_json("config"), indent=2))
             return 0
 
         if args.command == "generate":
@@ -100,33 +146,17 @@ def main() -> int:
             payload = json.loads(args.request_file.read_text(encoding="utf-8-sig"))
             print(f"Request ID: {request_id}", file=sys.stderr, flush=True)
             request_body = json.dumps(payload).encode()
-            job = get_json("generations", body=request_body, request_id=request_id)["job"]
+            job = client.request_json("generations", body=request_body, request_id=request_id)[
+                "job"
+            ]
             job_id = UUID(job["id"]).hex
         else:
             job_id = args.job_id.hex
-            job = get_json(f"generations/{job_id}")["job"]
+            job = client.get_job(job_id)
 
         print(f"Job ID: {job_id}", file=sys.stderr, flush=True)
-        deadline = time.monotonic() + 600
-        while job["status"] not in TERMINAL_STATES:
-            if time.monotonic() >= deadline:
-                raise TimeoutError(f"Job still active. Resume with wait {job_id}.")
-            time.sleep(3)
-            job = get_json(f"generations/{job_id}")["job"]
-
-        files = []
-        output_dir = args.output_dir.resolve()
-        for item in job["items"]:
-            if item["status"] != "succeeded":
-                continue
-            item_id = UUID(item["id"]).hex
-            mime_type = item["mime_type"]
-            extension = IMAGE_EXTENSIONS[mime_type]
-            output_dir.mkdir(parents=True, exist_ok=True)
-            path = output_dir / f"image_{item_id}.{extension}"
-            with open_response(f"generations/{job_id}/images/{item_id}") as response:
-                save_image(response, path, mime_type)
-            files.append(str(path))
+        job = wait_for_job(client, job_id, job)
+        files = download_images(client, job_id, job["items"], args.output_dir)
 
         print(
             json.dumps(

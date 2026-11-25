@@ -5,6 +5,7 @@ from .billing import BillingService, SpendingSummary
 from .common import money
 from .conversations import ConversationService
 from .generation_api import GenerationApiService
+from .generation_api_keys import GenerationApiKeyService
 from .generations import (
     GenerationMaskInput,
     GenerationService,
@@ -27,6 +28,7 @@ __all__ = [
     "BackgroundRemovalService",
     "BillingService",
     "ConversationService",
+    "GenerationApiKeyService",
     "GenerationApiService",
     "GenerationService",
     "GenerationMaskInput",

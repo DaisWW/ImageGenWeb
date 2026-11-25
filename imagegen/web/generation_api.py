@@ -37,7 +37,7 @@ MAX_GENERATION_REQUEST_BYTES = 192 * 1024
 @login_required
 def generation_api_page():
     application_services = services()
-    key = application_services.generation_api.get_key(current_user.id)
+    key = application_services.generation_api_keys.get_key(current_user.id)
     return render_template(
         "pages/generation-api.html",
         key_enabled=key is not None,
@@ -51,17 +51,13 @@ def generation_api_page():
 def generation_api_key():
     if not current_user.is_authenticated:
         raise ServiceError("请先登录", code="login_required", status_code=401)
-    generation_api = services().generation_api
+    keys = services().generation_api_keys
     if request.method == "DELETE":
-        generation_api.revoke_key(current_user.id)
+        keys.revoke_key(current_user.id)
         return "", 204
 
-    workspace_id = json_body().get("workspace_id")
-    try:
-        selected_id = UUID(workspace_id if isinstance(workspace_id, str) else "").hex
-    except ValueError as exc:
-        raise ServiceError("请选择工作站") from exc
-    token = generation_api.issue_key(current_user.id, selected_id)
+    workspace_id = _uuid_hex(json_body().get("workspace_id"), "请选择工作站")
+    token = keys.issue_key(current_user.id, workspace_id)
     response = jsonify(api_key=token)
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -92,7 +88,7 @@ def generation_api_skill():
 def authenticate_generation_api():
     authorization = request.authorization
     token = authorization.token if authorization and authorization.type == "bearer" else None
-    key = services().generation_api.authenticate(token or "")
+    key = services().generation_api_keys.authenticate(token or "")
     g.generation_api_key = key
     g.generation_api_user_id = key.user_id
 
@@ -129,12 +125,51 @@ def config():
 @api.post("/generations")
 @csrf.exempt
 def submit():
-    try:
-        request_id = UUID(request.headers.get("Idempotency-Key", "")).hex
-    except ValueError as exc:
-        raise ServiceError("Idempotency-Key 必须是 UUID", code="invalid_request_id") from exc
+    request_id = _uuid_hex(
+        request.headers.get("Idempotency-Key"),
+        "Idempotency-Key 必须是 UUID",
+        code="invalid_request_id",
+    )
+    generation = _parse_generation(_submission_body())
+    job, created = services().generation_api.submit(g.generation_api_key, request_id, generation)
+    response = make_response(jsonify(job=_job_payload(job)), 202 if created else 200)
+    response.headers["Location"] = url_for("generation_api.status", job_id=job.id)
+    return response
 
-    data = _submission_body()
+
+@api.get("/generations/<job_id>")
+def status(job_id: str):
+    job = services().generation_api.get_job(g.generation_api_key, job_id)
+    return jsonify(job=_job_payload(job))
+
+
+@api.get("/generations/<job_id>/images/<item_id>")
+def download(job_id: str, item_id: str):
+    output_path, mime_type = services().generation_api.get_image(
+        g.generation_api_key, job_id, item_id
+    )
+    try:
+        return send_file(
+            storage().read(output_path),
+            mimetype=mime_type,
+            as_attachment=True,
+            download_name=f"image_{item_id}.{image_extension(mime_type)}",
+            conditional=True,
+        )
+    except FileNotFoundError as exc:
+        raise ServiceError("图片不存在", code="image_not_found", status_code=404) from exc
+
+
+def _uuid_hex(value: object, message: str, *, code: str = "invalid_request") -> str:
+    if not isinstance(value, str):
+        raise ServiceError(message, code=code)
+    try:
+        return UUID(value).hex
+    except ValueError as exc:
+        raise ServiceError(message, code=code) from exc
+
+
+def _parse_generation(data: dict) -> SubmitGeneration:
     defaults = {
         "channel_id": "",
         "model": "",
@@ -164,43 +199,13 @@ def submit():
     if type(batch_count) is not int or type(compression) is not int:
         raise ServiceError("生成数量和压缩质量必须是整数")
 
-    job, created = services().generation_api.submit(
-        g.generation_api_key,
-        request_id,
-        SubmitGeneration(
-            **values,
-            mode="text2img",
-            batch_count=batch_count,
-            compression=compression,
-            reference_ids=(),
-        ),
+    return SubmitGeneration(
+        **values,
+        mode="text2img",
+        batch_count=batch_count,
+        compression=compression,
+        reference_ids=(),
     )
-    response = make_response(jsonify(job=_job_payload(job)), 202 if created else 200)
-    response.headers["Location"] = url_for("generation_api.status", job_id=job.id)
-    return response
-
-
-@api.get("/generations/<job_id>")
-def status(job_id: str):
-    job = services().generation_api.get_job(g.generation_api_key, job_id)
-    return jsonify(job=_job_payload(job))
-
-
-@api.get("/generations/<job_id>/images/<item_id>")
-def download(job_id: str, item_id: str):
-    output_path, mime_type = services().generation_api.get_image(
-        g.generation_api_key, job_id, item_id
-    )
-    try:
-        return send_file(
-            storage().read(output_path),
-            mimetype=mime_type,
-            as_attachment=True,
-            download_name=f"image_{item_id}.{image_extension(mime_type)}",
-            conditional=True,
-        )
-    except FileNotFoundError as exc:
-        raise ServiceError("图片不存在", code="image_not_found", status_code=404) from exc
 
 
 def _submission_body() -> dict:

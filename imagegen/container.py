@@ -8,6 +8,7 @@ from .services import (
     BackgroundRemovalService,
     BillingService,
     ConversationService,
+    GenerationApiKeyService,
     GenerationApiService,
     GenerationService,
     ImageLibraryService,
@@ -28,6 +29,7 @@ class ApplicationServices:
     image_library: ImageLibraryService
     generations: GenerationService
     generation_api: GenerationApiService
+    generation_api_keys: GenerationApiKeyService
     conversations: ConversationService
     runtime_logs: RuntimeLogService
     settings: SystemSettingsService

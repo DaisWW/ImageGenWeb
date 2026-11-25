@@ -29,6 +29,7 @@ from .services import (
     BackgroundRemovalService,
     BillingService,
     ConversationService,
+    GenerationApiKeyService,
     GenerationApiService,
     GenerationService,
     ImageLibraryService,
@@ -146,6 +147,7 @@ def create_app(config: dict | None = None) -> Flask:
     configuration = RuntimeConfigService(repository, channels, chat_models, matting_models)
     matting_adapters = MattingAdapterFactory()
     generations = GenerationService(channels, billing, settings, storage)
+    generation_api_keys = GenerationApiKeyService(billing)
     services = ApplicationServices(
         auth=auth,
         background_removal=BackgroundRemovalService(matting_models, storage, matting_adapters),
@@ -154,7 +156,8 @@ def create_app(config: dict | None = None) -> Flask:
         workspaces=workspaces,
         image_library=ImageLibraryService(storage),
         generations=generations,
-        generation_api=GenerationApiService(billing, generations),
+        generation_api=GenerationApiService(generation_api_keys, generations),
+        generation_api_keys=generation_api_keys,
         conversations=ConversationService(
             chat_models,
             storage,

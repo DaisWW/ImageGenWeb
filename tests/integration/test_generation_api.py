@@ -46,7 +46,9 @@ class TestGenerationApi(PlatformTestCase):
         self.assertEqual(issued.headers["Cache-Control"], "no-store")
         token = issued.json["api_key"]
         self.assertNotIn(token, client.get("/account/generation-api").get_data(as_text=True))
-        self.assertNotEqual(self.services.generation_api.get_key(self.user.id).token_digest, token)
+        self.assertNotEqual(
+            self.services.generation_api_keys.get_key(self.user.id).token_digest, token
+        )
 
         config_url = "/api/v1/config"
         headers = {"Authorization": f"Bearer {token}"}
@@ -148,7 +150,7 @@ class TestGenerationApi(PlatformTestCase):
         ordinary_job = self.submit(workspace)
         self.assertEqual(external.get(f"{url}/{ordinary_job.id}", headers=headers).status_code, 404)
         other_workspace = self.services.workspaces.create(self.admin.id, "另一账号的工作站")
-        other_token = self.services.generation_api.issue_key(self.admin.id, other_workspace.id)
+        other_token = self.services.generation_api_keys.issue_key(self.admin.id, other_workspace.id)
         other_headers = {"Authorization": f"Bearer {other_token}"}
         self.assertEqual(external.get(status_url, headers=other_headers).status_code, 404)
         self.assertEqual(external.get(image_url, headers=other_headers).status_code, 404)
@@ -180,7 +182,7 @@ class TestGenerationApi(PlatformTestCase):
 
     def test_invalid_submission_does_not_echo_text_and_rejects_oversized_json(self):
         workspace = self.create_workspace()
-        token = self.services.generation_api.issue_key(self.user.id, workspace.id)
+        token = self.services.generation_api_keys.issue_key(self.user.id, workspace.id)
         client = self.app.test_client()
         headers = {"Authorization": f"Bearer {token}", "Idempotency-Key": str(uuid4())}
         submit_url = "/api/v1/generations"
