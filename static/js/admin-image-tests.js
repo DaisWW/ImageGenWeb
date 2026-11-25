@@ -25,8 +25,12 @@
 
     bind() {
       const el = this.el;
-      el.EditSuite.addEventListener("click", () => this.app.showPage("suites", this.app.selectedSuite()));
-      el.EditSelect.addEventListener("change", () => this.editSuite(this.app.selectedSuite(el.EditSelect)));
+      el.Suite.addEventListener("change", () => {
+        this.previewSuite();
+        this.app.updateEstimate();
+      });
+      el.EditSuite.addEventListener("click", () => this.app.showPage("suites", this.selectedSuite()));
+      el.EditSelect.addEventListener("change", () => this.editSuite(this.selectedSuite(el.EditSelect)));
       el.NewSuite.addEventListener("click", () => {
         this.editSuite();
         el.SuiteForm.elements.name.focus();
@@ -54,7 +58,7 @@
     loadCatalog(catalog) {
       this.catalog = catalog;
       this.renderSuites();
-      if (!this.editor) this.editSuite(this.app.selectedSuite());
+      if (!this.editor) this.editSuite(this.selectedSuite());
     }
 
     renderSuites(selected = this.el.Suite.value) {
@@ -65,7 +69,20 @@
       this.el.Suite.disabled = false;
       this.el.EditSelect.innerHTML = option("", "新题组") + options;
       this.el.EditSelect.value = this.editor?.id || "";
-      this.app.previewSuite();
+      this.previewSuite();
+    }
+
+    selectedSuite(select = this.el.Suite) {
+      return this.catalog?.suites.find((suite) => suite.id === select.value);
+    }
+
+    previewSuite() {
+      const suite = this.selectedSuite();
+      this.el.SuitePreview.innerHTML = suite ? `
+        <ul>${suite.questions.map((question) => `<li><span>${escape(question.title)}</span>
+          <small>${escape(question.size === "auto" ? "自动尺寸" : question.size)} · ${qualities[question.quality]}</small></li>`).join("")}</ul>
+      ` : "";
+      this.el.EditSuite.disabled = !suite;
     }
 
     editSuite(suite, copy = false) {
@@ -211,10 +228,6 @@
         button.addEventListener("click", () => this.showPage(button.dataset.testPage));
       });
       el.Refresh.addEventListener("click", () => this.activate(true));
-      el.Suite.addEventListener("change", () => {
-        this.previewSuite();
-        this.updateEstimate();
-      });
       el.Targets.addEventListener("change", (event) => {
         const group = event.target.closest("[data-test-channel]");
         if (group) {
@@ -228,7 +241,7 @@
       el.SelectNone.addEventListener("click", () => this.selectTargets(false));
       el.Launch.addEventListener("submit", (event) => {
         event.preventDefault();
-        const suite = this.selectedSuite();
+        const suite = this.suites.selectedSuite();
         if (!suite || el.Start.disabled) return;
         this.runAction(el.Start, "/runs", {
           suite_id: suite.id, suite_revision: suite.revision, targets: this.selectedTargets(),
@@ -309,19 +322,6 @@
       this.el.Error.hidden = !message;
     }
 
-    selectedSuite(select = this.el.Suite) {
-      return this.catalog?.suites.find((suite) => suite.id === select.value);
-    }
-
-    previewSuite() {
-      const suite = this.selectedSuite();
-      this.el.SuitePreview.innerHTML = suite ? `
-        <ul>${suite.questions.map((question) => `<li><span>${escape(question.title)}</span>
-          <small>${escape(question.size === "auto" ? "自动尺寸" : question.size)} · ${qualities[question.quality]}</small></li>`).join("")}</ul>
-      ` : "";
-      this.el.EditSuite.disabled = !suite;
-    }
-
     targetBoxes() {
       return [...this.el.Targets.querySelectorAll("[data-test-target]")];
     }
@@ -367,7 +367,7 @@
         group.checked = models.every((model) => model.checked);
         group.indeterminate = !group.checked && models.some((model) => model.checked);
       });
-      const questions = this.selectedSuite()?.questions.length || 0;
+      const questions = this.suites.selectedSuite()?.questions.length || 0;
       const images = questions * selected.length;
       const price = questions * selected.reduce((sum, box) => sum + Number(box.dataset.price), 0);
       this.el.TargetCount.textContent = `已选 ${selected.length} / ${boxes.length} 个模型`;
