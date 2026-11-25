@@ -1,0 +1,8 @@
+{
+  "channel_id": "REPLACE_WITH_CHANNEL_ID",
+  "prompt": "方形插画，初雪落在松林中的木屋上，室内透出暖黄灯光，细腻的水粉质感，画面中无文字。",
+  "size": "1024x1024",
+  "quality": "auto",
+  "output_format": "png",
+  "batch_count": 1
+}

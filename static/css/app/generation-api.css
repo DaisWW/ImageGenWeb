@@ -1,0 +1,80 @@
+.generation-api-shell {
+  width: min(1040px, 100%);
+  margin: 0 auto;
+  padding: 28px clamp(14px, 3vw, 24px) 52px;
+}
+
+.generation-api-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 16px;
+  margin-top: 22px;
+}
+
+.generation-api-card {
+  display: grid;
+  justify-items: start;
+  gap: 14px;
+  min-width: 0;
+  padding: clamp(14px, 3vw, 22px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-1);
+}
+
+.generation-api-heading,
+.generation-api-card > .field,
+.generation-api-card form,
+.generation-api-secret {
+  width: 100%;
+}
+
+.generation-api-heading,
+.generation-api-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.generation-api-heading {
+  justify-content: space-between;
+}
+
+.generation-api-heading h2 {
+  font-size: 16px;
+}
+
+.generation-api-card p,
+#generationApiStatus {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+#generationApiStatus[data-enabled="true"] {
+  color: var(--accent-strong);
+}
+
+.generation-api-actions {
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.generation-api-secret {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.generation-api-secret .field {
+  width: 100%;
+}
+
+@media (max-width: 760px) {
+  .generation-api-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

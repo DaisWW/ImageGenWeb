@@ -53,7 +53,7 @@ class GenerationRequestValidator:
             raise ServiceError(f"提示词长度必须在 1 到 {runtime.max_prompt_characters} 个字符之间")
         normalized_size = normalize_image_size(request.size)
         if request.output_format not in channel.capabilities.formats:
-            raise ServiceError(f"{channel.label} 不支持格式 {request.output_format}")
+            raise ServiceError(f"{channel.label} 不支持所选输出格式")
         if request.transparent_background and request.output_format not in {"png", "webp"}:
             raise ServiceError("透明背景仅支持 PNG 或 WebP 格式")
         if request.moderation not in {"auto", "low"}:

@@ -102,6 +102,22 @@ class Workspace(TimestampMixin, db.Model):
     )
 
 
+class GenerationApiKey(db.Model):
+    __tablename__ = "generation_api_keys"
+    __table_args__ = (UniqueConstraint("token_digest", name="uq_generation_api_keys_digest"),)
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    token_digest: Mapped[str] = mapped_column(db.String(64))
+
+    user: Mapped[User] = relationship()
+    workspace: Mapped[Workspace] = relationship()
+
+
 class ConversationMessage(db.Model):
     __tablename__ = "conversation_messages"
     __table_args__ = (
@@ -210,6 +226,14 @@ class GenerationJob(TimestampMixin, db.Model):
     __table_args__ = (
         Index("ix_generation_jobs_workspace_created", "workspace_id", "created_at"),
         Index("ix_generation_jobs_user_status", "user_id", "status"),
+        Index(
+            "uq_generation_jobs_user_api_request",
+            "user_id",
+            "api_request_id",
+            unique=True,
+            postgresql_where=text("api_request_id IS NOT NULL"),
+            sqlite_where=text("api_request_id IS NOT NULL"),
+        ),
         UniqueConstraint("mask_storage_path", name="uq_generation_jobs_mask_storage_path"),
         CheckConstraint(
             "(mask_storage_path IS NULL AND mask_target_asset_id IS NULL "
@@ -228,6 +252,8 @@ class GenerationJob(TimestampMixin, db.Model):
     workspace_id: Mapped[str] = mapped_column(
         ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
     )
+    api_request_id: Mapped[str | None] = mapped_column(db.String(32))
+    api_request_digest: Mapped[str | None] = mapped_column(db.String(64))
     channel_id: Mapped[str] = mapped_column(db.String(64), index=True)
     channel_label: Mapped[str] = mapped_column(db.String(100))
     channel_config_version: Mapped[str] = mapped_column(db.String(64))

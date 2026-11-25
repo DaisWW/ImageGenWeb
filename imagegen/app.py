@@ -4,7 +4,7 @@ import os
 import secrets
 from pathlib import Path
 
-from flask import Flask, jsonify, request
+from flask import Flask, g, jsonify, request
 from flask_login import current_user
 from flask_wtf.csrf import CSRFError
 from werkzeug.exceptions import HTTPException
@@ -29,6 +29,7 @@ from .services import (
     BackgroundRemovalService,
     BillingService,
     ConversationService,
+    GenerationApiService,
     GenerationService,
     ImageLibraryService,
     RuntimeLogService,
@@ -39,6 +40,7 @@ from .services import (
 from .storage import ImageStorage, InvalidImageError
 from .version import __version__
 from .web import web
+from .web.generation_api import api as generation_api
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -143,6 +145,7 @@ def create_app(config: dict | None = None) -> Flask:
 
     configuration = RuntimeConfigService(repository, channels, chat_models, matting_models)
     matting_adapters = MattingAdapterFactory()
+    generations = GenerationService(channels, billing, settings, storage)
     services = ApplicationServices(
         auth=auth,
         background_removal=BackgroundRemovalService(matting_models, storage, matting_adapters),
@@ -150,7 +153,8 @@ def create_app(config: dict | None = None) -> Flask:
         users=users,
         workspaces=workspaces,
         image_library=ImageLibraryService(storage),
-        generations=GenerationService(channels, billing, settings, storage),
+        generations=generations,
+        generation_api=GenerationApiService(billing, generations),
         conversations=ConversationService(
             chat_models,
             storage,
@@ -168,6 +172,7 @@ def create_app(config: dict | None = None) -> Flask:
     app.extensions["image_storage"] = storage
     app.extensions["imagegen_services"] = services
     app.register_blueprint(web)
+    app.register_blueprint(generation_api)
     _register_handlers(app)
 
     @app.after_request
@@ -242,12 +247,21 @@ def _register_handlers(app: Flask) -> None:
         if isinstance(error, HTTPException):
             return error
         db.session.rollback()
-        user_id = current_user.id if current_user.is_authenticated else None
-        user_label = (
-            current_user.display_name or current_user.username
-            if current_user.is_authenticated
-            else ""
-        )
+        is_generation_api = request.blueprint == "generation_api"
+        if is_generation_api:
+            user_id = g.get("generation_api_user_id")
+            user_label = ""
+            path = request.url_rule.rule
+            app.logger.error("未处理的生图 API 异常 %s (%s)", path, type(error).__name__)
+        else:
+            user_id = current_user.id if current_user.is_authenticated else None
+            user_label = (
+                current_user.display_name or current_user.username
+                if current_user.is_authenticated
+                else ""
+            )
+            path = request.path
+            app.logger.exception("未处理的 Web 异常：%s", path)
         entry = app.extensions["imagegen_services"].runtime_logs.commit_best_effort(
             category="web",
             event="web.unhandled_exception",
@@ -260,11 +274,10 @@ def _register_handlers(app: Flask) -> None:
             details={
                 "exception_type": error.__class__.__name__,
                 "method": request.method,
-                "path": request.path,
+                "path": path,
                 "endpoint": request.endpoint or "",
             },
         )
-        app.logger.exception("未处理的 Web 异常：%s", request.path)
         error_id = entry.id if entry is not None else ""
         message = "服务器内部错误"
         if request.path.startswith("/api/") or request.path.startswith("/account/"):

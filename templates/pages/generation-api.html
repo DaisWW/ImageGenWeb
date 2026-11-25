@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}生图 API · {{ site_title }}{% endblock %}
+{% block body_class %}app-page{% endblock %}
+{% block head %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app/generation-api.css') }}">
+{% endblock %}
+{% block body %}
+{% include "partials/header.html" %}
+<main class="generation-api-shell">
+  <header class="admin-heading">
+    <h1>生图 API</h1>
+    <a class="button secondary" href="{{ url_for('web.studio') }}">返回工作站</a>
+  </header>
+
+  <div class="generation-api-grid">
+    <section class="generation-api-card">
+      <div class="generation-api-heading">
+        <h2>访问密钥</h2>
+        <span id="generationApiStatus" role="status" data-enabled="{{ 'true' if key_enabled else 'false' }}">{{ '已开通' if key_enabled else '未开通' }}</span>
+      </div>
+      <p>API 任务使用当前账号的余额，生成结果保存在选定的工作站。</p>
+      {% if workspaces %}
+      <form id="generationApiForm" action="{{ url_for('web.generation_api_key') }}" method="post" autocomplete="off">
+        <label class="field">
+          <span>结果工作站</span>
+          <select name="workspace_id" required>
+            {% for workspace in workspaces %}
+            <option value="{{ workspace.id }}"{% if workspace.id == key_workspace_id %} selected{% endif %}>{{ workspace.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <div class="generation-api-actions">
+          <button class="button primary" type="submit">{{ '更换密钥' if key_enabled else '开通并生成密钥' }}</button>
+          <button class="button secondary" type="button" id="revokeGenerationApi"{% if not key_enabled %} hidden{% endif %}>关闭 API</button>
+        </div>
+      </form>
+      <p id="generationApiRotationNote"{% if not key_enabled %} hidden{% endif %}>更换或关闭后，旧密钥立即失效。更换时可重新选择结果工作站。</p>
+      {% else %}
+      <p>请先在工作台创建一个工作站。</p>
+      {% endif %}
+      <div class="generation-api-secret" id="generationApiSecret" hidden>
+        <label class="field">
+          <span>新密钥仅显示一次，请妥善保存</span>
+          <input id="generationApiToken" type="text" readonly spellcheck="false" autocomplete="off">
+        </label>
+        <button class="button secondary" type="button" id="copyGenerationApiKey">复制密钥</button>
+      </div>
+    </section>
+
+    <section class="generation-api-card">
+      <div class="generation-api-heading"><h2>连接 AI</h2></div>
+      <p>下载并解压 Skill，让 AI 读取 SKILL.md，并在 AI 的运行环境中配置站点地址和密钥。</p>
+      <label class="field">
+        <span>站点地址 · SNOW_IMAGE_API_URL</span>
+        <input type="url" value="{{ base_url }}" readonly>
+      </label>
+      <p>将密钥设为 <code>SNOW_IMAGE_API_KEY</code>。Skill 包含调用脚本、接口说明和 JSON 请求模板。</p>
+      <a class="button primary" href="{{ url_for('web.generation_api_skill') }}"><i data-lucide="download"></i>下载 AI Skill</a>
+    </section>
+  </div>
+</main>
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', filename='js/generation-api.js') }}" defer></script>
+{% endblock %}

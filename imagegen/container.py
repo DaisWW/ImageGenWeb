@@ -8,6 +8,7 @@ from .services import (
     BackgroundRemovalService,
     BillingService,
     ConversationService,
+    GenerationApiService,
     GenerationService,
     ImageLibraryService,
     RuntimeLogService,
@@ -26,6 +27,7 @@ class ApplicationServices:
     workspaces: WorkspaceService
     image_library: ImageLibraryService
     generations: GenerationService
+    generation_api: GenerationApiService
     conversations: ConversationService
     runtime_logs: RuntimeLogService
     settings: SystemSettingsService

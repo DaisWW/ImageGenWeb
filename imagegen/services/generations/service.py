@@ -58,6 +58,9 @@ class GenerationService:
         user_id: int,
         workspace: Workspace,
         request: SubmitGeneration,
+        *,
+        api_request_id: str | None = None,
+        api_request_digest: str | None = None,
     ) -> GenerationJob:
         references = self.validator.load_references(workspace, request.reference_ids)
         generation_mask = self.masks.validate(request.mask, references)
@@ -110,6 +113,8 @@ class GenerationService:
             id=new_public_id(),
             user_id=user.id,
             workspace_id=workspace.id,
+            api_request_id=api_request_id,
+            api_request_digest=api_request_digest,
             # Keep a useful summary for legacy consumers.  The item-level
             # channel is authoritative once the Worker has routed it.
             channel_id=primary_channel.identifier,
@@ -174,35 +179,38 @@ class GenerationService:
                         provider_price_rmb=money(0),
                     )
                 )
-            workspace.settings = sanitize_workspace_settings(
-                {
-                    **(workspace.settings or {}),
-                    "mode": request.mode,
-                    "prompt": request.prompt,
-                    "channel_id": (
-                        primary_channel.identifier if user_selected_channel else AUTO_CHANNEL_ID
-                    ),
-                    "model": selected_model.identifier,
-                    "size": normalized_size,
-                    "quality": request.quality,
-                    "output_format": request.output_format,
-                    "compression": request.compression,
-                    "transparent_background": request.transparent_background,
-                    "moderation": request.moderation,
-                    "batch_count": request.batch_count,
-                    "generation_stage": workflow["generation_stage"],
-                    "prompt_draft_id": workflow["prompt_draft_id"],
-                    "creative_direction_id": workflow["creative_direction_id"],
-                    "generation_strategy": workflow.get("generation_strategy", "sample"),
-                },
-                self.settings.runtime(),
-            )
+            if api_request_id is None:
+                workspace.settings = sanitize_workspace_settings(
+                    {
+                        **(workspace.settings or {}),
+                        "mode": request.mode,
+                        "prompt": request.prompt,
+                        "channel_id": (
+                            primary_channel.identifier if user_selected_channel else AUTO_CHANNEL_ID
+                        ),
+                        "model": selected_model.identifier,
+                        "size": normalized_size,
+                        "quality": request.quality,
+                        "output_format": request.output_format,
+                        "compression": request.compression,
+                        "transparent_background": request.transparent_background,
+                        "moderation": request.moderation,
+                        "batch_count": request.batch_count,
+                        "generation_stage": workflow["generation_stage"],
+                        "prompt_draft_id": workflow["prompt_draft_id"],
+                        "creative_direction_id": workflow["creative_direction_id"],
+                        "generation_strategy": workflow.get("generation_strategy", "sample"),
+                    },
+                    self.settings.runtime(),
+                )
             db.session.commit()
         except Exception:
             db.session.rollback()
             if stored_mask_path:
                 self.storage.delete(stored_mask_path)
             raise
+        if api_request_id is not None:
+            return job
         return self.get_job(job.id, user_id=user.id)
 
     def _resolve_routing(
@@ -224,7 +232,7 @@ class GenerationService:
             try:
                 configured = [self.channels.get(requested_channel_id)]
             except ValueError as exc:
-                raise ServiceError(str(exc)) from exc
+                raise ServiceError("生图渠道不存在或未启用") from exc
         else:
             configured = [
                 channel
@@ -266,9 +274,9 @@ class GenerationService:
                         workspace_kind,
                     )
                     self.validator.validate_references(channel, request.mode, references)
-                except ValueError as exc:
+                except ValueError:
                     if first_error is None:
-                        first_error = ServiceError(str(exc))
+                        first_error = ServiceError(f"{channel.label} 不支持模型")
                     continue
                 except ServiceError as exc:
                     if first_error is None:
