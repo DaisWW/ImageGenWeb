@@ -1,0 +1,100 @@
+<section class="admin-view image-tests" data-view="image-tests">
+  <header class="view-toolbar">
+    <div><h2>生图测评</h2><p>用同一套题对比各渠道模型的出图表现</p></div>
+    <button class="button secondary" type="button" id="imageTestRefresh"><i data-lucide="refresh-cw"></i>刷新</button>
+  </header>
+  <nav class="log-mode-switch" aria-label="生图测评视图">
+    <button type="button" class="active" data-test-page="workbench" aria-pressed="true"><i data-lucide="flask-conical"></i>测试工作台</button>
+    <button type="button" data-test-page="suites" aria-pressed="false"><i data-lucide="book-open"></i>题库</button>
+    <button type="button" data-test-page="history" aria-pressed="false"><i data-lucide="history"></i>历史记录</button>
+  </nav>
+  <p class="inline-alert" id="imageTestError" role="alert" hidden></p>
+
+  <div data-test-pane="workbench">
+    <form class="image-test-panel image-test-launch" id="imageTestLaunch">
+      <div class="image-test-launch-columns">
+        <div class="image-test-setup">
+          <label class="field"><span>测试题组</span><select id="imageTestSuite" required disabled></select></label>
+          <div id="imageTestSuitePreview" class="image-test-questions"></div>
+          <button class="button secondary small" type="button" id="imageTestEditSuite"><i data-lucide="pencil"></i>编辑题组</button>
+        </div>
+        <fieldset class="image-test-targets">
+          <legend>渠道模型</legend>
+          <div class="image-test-actions image-test-target-actions">
+            <p id="imageTestTargetCount" class="subline">正在读取渠道</p>
+            <button class="button secondary small" type="button" id="imageTestSelectAll">全选</button>
+            <button class="button secondary small" type="button" id="imageTestSelectNone">清空</button>
+          </div>
+          <div class="image-test-target-list" id="imageTestTargets"></div>
+        </fieldset>
+      </div>
+      <div class="image-test-launch-footer">
+        <div><strong id="imageTestEstimate" aria-live="polite">正在读取测评配置</strong>
+          <p>测评可能产生上游费用，站内钱包免扣费。</p></div>
+        <button class="button primary" type="submit" id="imageTestStart" disabled><i data-lucide="play"></i>开始测试</button>
+      </div>
+    </form>
+    <p class="image-test-empty" id="imageTestCurrentEmpty">提交后可在这里追踪进度和对比结果。</p>
+    <div id="imageTestCurrent"></div>
+  </div>
+
+  <div data-test-pane="suites" hidden>
+    <div class="image-test-panel image-test-suite-toolbar">
+      <label class="field"><span>已保存题组</span><select id="imageTestEditSelect"></select></label>
+      <div class="image-test-actions">
+        <button class="button secondary" type="button" id="imageTestNewSuite"><i data-lucide="plus"></i>新建题组</button>
+        <button class="button secondary" type="button" id="imageTestCopySuite"><i data-lucide="copy"></i>复制题组</button>
+        <button class="button danger" type="button" id="imageTestDeleteSuite"><i data-lucide="trash-2"></i>删除题组</button>
+      </div>
+    </div>
+    <form class="image-test-panel image-test-editor" id="imageTestSuiteForm">
+      <label class="field"><span>题组名称</span><input name="name" maxlength="80" required></label>
+      <p class="subline" id="imageTestBuiltinHint" hidden>编辑内置题组会另存为自定义题组。</p>
+      <div class="image-test-editor-list" id="imageTestEditorQuestions"></div>
+      <div class="image-test-actions image-test-editor-actions">
+        <button class="button secondary" type="button" id="imageTestAddQuestion"><i data-lucide="plus"></i>添加题目</button>
+        <div class="image-test-actions">
+          <button class="button secondary" type="submit" value="save"><i data-lucide="save"></i>保存题组</button>
+          <button class="button primary" type="submit" value="use">保存并用于测试<i data-lucide="arrow-right"></i></button>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <div data-test-pane="history" hidden>
+    <p id="imageTestHistoryRetention" class="image-test-retention subline"></p>
+    <div class="image-test-history">
+      <aside class="image-test-panel image-test-history-list" aria-label="测评批次">
+        <div id="imageTestHistoryRuns"></div>
+        <div class="log-pagination">
+          <span id="imageTestHistoryTotal"></span>
+          <div>
+            <button class="icon-button" type="button" id="imageTestPrevious" aria-label="上一页批次" disabled><i data-lucide="chevron-left"></i></button>
+            <button class="icon-button" type="button" id="imageTestNext" aria-label="下一页批次" disabled><i data-lucide="chevron-right"></i></button>
+          </div>
+        </div>
+      </aside>
+      <div id="imageTestHistoryDetail"></div>
+    </div>
+  </div>
+
+  <article class="image-test-panel image-test-run" id="imageTestRun" aria-label="测评进度和结果" hidden>
+    <header class="image-test-run-heading">
+      <div><h3 id="imageTestRunTitle"></h3><p class="subline" id="imageTestRunDate"></p></div>
+      <div class="image-test-actions">
+        <button class="button danger small" type="button" id="imageTestCancel" hidden><i data-lucide="square"></i>取消批次</button>
+        <button class="button secondary small" type="button" id="imageTestRetry" hidden><i data-lucide="rotate-ccw"></i>重试失败项</button>
+      </div>
+    </header>
+    <div class="image-test-progress">
+      <div><strong id="imageTestProgressLabel"></strong><div class="image-test-metrics" id="imageTestMetrics"></div></div>
+      <progress id="imageTestProgress" max="100" value="0" aria-labelledby="imageTestProgressLabel"></progress>
+      <p class="subline" id="imageTestRunNotice" hidden></p>
+    </div>
+    <div class="image-test-comparison">
+      <label class="field"><span>按题对比</span><select id="imageTestCompareQuestion"></select></label>
+      <div id="imageTestQuestionContext"></div>
+    </div>
+    <div class="image-test-result-grid" id="imageTestResults"></div>
+  </article>
+</section>

@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}管理后台 · {{ site_title }}{% endblock %}
 {% block body_class %}app-page admin-page{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='css/app/admin-image-tests.css') }}">{% endblock %}
 {% block body %}
 {% include "partials/header.html" %}
 <main class="admin-shell" id="adminApp">
@@ -12,6 +13,7 @@
     <button class="admin-tab active" type="button" data-tab="users"><i data-lucide="users"></i>用户</button>
     <button class="admin-tab" type="button" data-tab="generations"><i data-lucide="activity"></i>生成记录</button>
     <button class="admin-tab" type="button" data-tab="channels"><i data-lucide="route"></i>渠道与模型</button>
+    <button class="admin-tab" type="button" data-tab="image-tests"><i data-lucide="flask-conical"></i>生图测评</button>
     <button class="admin-tab" type="button" data-tab="logs"><i data-lucide="scroll-text"></i>日志</button>
     <button class="admin-tab" type="button" data-tab="settings"><i data-lucide="settings-2"></i>系统设置</button>
     <span class="admin-tab-indicator" id="adminTabIndicator" aria-hidden="true"></span>
@@ -76,6 +78,8 @@
       <div class="table-wrap"><table><thead><tr><th>名称</th><th>状态</th><th>适配器 / 上游模型</th><th>运行限制</th><th class="actions-cell">操作</th></tr></thead><tbody id="mattingModelTableBody"></tbody></table></div>
     </div>
   </section>
+
+  {% include "partials/admin-image-tests.html" %}
 
   <section class="admin-view" data-view="logs">
     <div class="view-toolbar">
@@ -364,4 +368,7 @@
   </div>
 </dialog>
 {% endblock %}
-{% block scripts %}<script src="{{ url_for('static', filename='js/admin.js') }}" defer></script>{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/admin-image-tests.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/admin.js') }}" defer></script>
+{% endblock %}

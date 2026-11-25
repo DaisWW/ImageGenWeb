@@ -8,6 +8,7 @@ from . import (  # noqa: E402, F401
     admin,
     generation_api,
     generations,
+    image_tests,
     image_tools,
     library,
     pages,

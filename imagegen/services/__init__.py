@@ -13,6 +13,7 @@ from .generations import (
     SubmitGeneration,
 )
 from .image_library import ImageLibraryService
+from .image_tests import ImageTestService
 from .retention import RetentionService
 from .runtime_logs import RuntimeLogService
 from .settings import RuntimeSettings, SystemSettingsService
@@ -34,6 +35,7 @@ __all__ = [
     "GenerationMaskInput",
     "GenerationWorkflow",
     "ImageLibraryService",
+    "ImageTestService",
     "RetentionService",
     "RuntimeLogService",
     "RuntimeSettings",

@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 from ..errors import ServiceError
 from ..extensions import db
 from ..models import (
+    IMAGE_TEST_KIND,
     Asset,
     ConversationAttachment,
     ConversationMessage,
@@ -65,7 +66,7 @@ class WorkspaceService:
             db.session.scalars(
                 select(Workspace)
                 .options(selectinload(Workspace.assets))
-                .where(Workspace.user_id == user_id)
+                .where(Workspace.user_id == user_id, Workspace.kind != IMAGE_TEST_KIND)
                 .order_by(Workspace.position.asc(), Workspace.updated_at.desc())
             )
         )
@@ -73,7 +74,11 @@ class WorkspaceService:
     def create(self, user_id: int, name: str, kind: str = "image") -> Workspace:
         self.billing.lock_user(user_id)
         count = (
-            db.session.scalar(select(func.count(Workspace.id)).where(Workspace.user_id == user_id))
+            db.session.scalar(
+                select(func.count(Workspace.id)).where(
+                    Workspace.user_id == user_id, Workspace.kind != IMAGE_TEST_KIND
+                )
+            )
             or 0
         )
         max_workspaces = self.max_workspaces
@@ -111,8 +116,9 @@ class WorkspaceService:
             return []
 
         self.billing.lock_user(user_id)
-        if db.session.scalar(select(Workspace.id).where(Workspace.user_id == user_id).limit(1)):
-            return self.list(user_id)
+        existing = self.list(user_id)
+        if existing:
+            return existing
 
         reference_content = self.starter_reference_path.read_bytes()
         reference_time = utcnow()
@@ -201,7 +207,13 @@ class WorkspaceService:
         if len(workspace_ids) != len(set(workspace_ids)):
             raise ServiceError("工作站排序数据不能包含重复项")
         self.billing.lock_user(user_id)
-        workspaces = list(db.session.scalars(select(Workspace).where(Workspace.user_id == user_id)))
+        workspaces = list(
+            db.session.scalars(
+                select(Workspace).where(
+                    Workspace.user_id == user_id, Workspace.kind != IMAGE_TEST_KIND
+                )
+            )
+        )
         by_id = {workspace.id: workspace for workspace in workspaces}
         if len(workspace_ids) != len(workspaces) or set(workspace_ids) != set(by_id):
             raise ServiceError("工作站排序数据必须包含当前账户的全部工作站")

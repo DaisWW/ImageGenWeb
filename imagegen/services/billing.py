@@ -10,7 +10,15 @@ from sqlalchemy import case, func, select
 from ..config.channels import AUTO_CHANNEL_ID, MIXED_CHANNEL_ID
 from ..errors import ServiceError
 from ..extensions import db
-from ..models import AuditLog, GenerationItem, GenerationJob, User, WalletLedger, utcnow
+from ..models import (
+    IMAGE_TEST_KIND,
+    AuditLog,
+    GenerationItem,
+    GenerationJob,
+    User,
+    WalletLedger,
+    utcnow,
+)
 from .common import money
 
 SHANGHAI_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
@@ -148,7 +156,7 @@ class BillingService:
         job.reserved_rmb = money(job.reserved_rmb - amount)
 
     def capture(self, user: User, job: GenerationJob, item: GenerationItem) -> None:
-        if item.charged_rmb > 0:
+        if job.kind == IMAGE_TEST_KIND or item.charged_rmb > 0:
             return
         if (
             db.session.scalar(

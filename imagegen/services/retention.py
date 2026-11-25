@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from ..config.channels import ChannelRegistry
 from ..extensions import db
@@ -12,6 +12,7 @@ from ..models import (
     ConversationAttachment,
     GenerationJob,
     GenerationReference,
+    ImageTestRun,
     utcnow,
 )
 from ..storage import ImageStorage
@@ -65,6 +66,22 @@ class RetentionService:
                 db.session.rollback()
                 errors += 1
                 LOGGER.warning("清理历史生成任务失败：%s", job_id, exc_info=True)
+
+        try:
+            deleted_runs = db.session.execute(
+                delete(ImageTestRun).where(
+                    ImageTestRun.created_at < cutoff,
+                    ~select(GenerationJob.id)
+                    .where(GenerationJob.image_test_run_id == ImageTestRun.id)
+                    .exists(),
+                )
+            )
+            if deleted_runs.rowcount:
+                db.session.commit()
+        except Exception:
+            db.session.rollback()
+            errors += 1
+            LOGGER.warning("清理历史生图测评批次失败", exc_info=True)
 
         orphaned_assets = list(
             db.session.execute(

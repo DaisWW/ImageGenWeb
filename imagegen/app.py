@@ -33,6 +33,7 @@ from .services import (
     GenerationApiService,
     GenerationService,
     ImageLibraryService,
+    ImageTestService,
     RuntimeLogService,
     SystemSettingsService,
     UserService,
@@ -156,6 +157,7 @@ def create_app(config: dict | None = None) -> Flask:
         workspaces=workspaces,
         image_library=ImageLibraryService(storage),
         generations=generations,
+        image_tests=ImageTestService(generations),
         generation_api=GenerationApiService(generation_api_keys, generations),
         generation_api_keys=generation_api_keys,
         conversations=ConversationService(

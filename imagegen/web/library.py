@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from ..errors import ServiceError
 from ..extensions import db
-from ..models import Asset, GenerationItem, Workspace
+from ..models import IMAGE_TEST_KIND, Asset, GenerationItem, GenerationJob, Workspace
 from ..serializers import library_image_dict, workspace_dict
 from ..services.image_library import LIBRARY_PAGE_SIZE, MAX_LIBRARY_BYTES, MAX_LIBRARY_IMAGES
 from . import web
@@ -143,9 +143,12 @@ def _source_upload(data: dict) -> tuple[str, bytes]:
         return asset.original_name, storage().read_bytes(asset.storage_path)
 
     item = db.session.scalar(
-        select(GenerationItem).where(
+        select(GenerationItem)
+        .join(GenerationJob)
+        .where(
             GenerationItem.id == item_id,
             GenerationItem.user_id == current_user.id,
+            GenerationJob.kind != IMAGE_TEST_KIND,
         )
     )
     if item is None or not item.output_path:

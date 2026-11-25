@@ -12,6 +12,7 @@ from .services import (
     GenerationApiService,
     GenerationService,
     ImageLibraryService,
+    ImageTestService,
     RuntimeLogService,
     SystemSettingsService,
     UserService,
@@ -28,6 +29,7 @@ class ApplicationServices:
     workspaces: WorkspaceService
     image_library: ImageLibraryService
     generations: GenerationService
+    image_tests: ImageTestService
     generation_api: GenerationApiService
     generation_api_keys: GenerationApiKeyService
     conversations: ConversationService

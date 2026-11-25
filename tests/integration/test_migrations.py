@@ -11,10 +11,142 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 
+from imagegen.models import (
+    GenerationAttempt,
+    GenerationItem,
+    GenerationJob,
+    ImageTestRun,
+    User,
+    Workspace,
+    utcnow,
+)
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class TestMigrationCompatibility(unittest.TestCase):
+    def test_image_test_downgrade_stops_unfinished_and_retryable_jobs(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "image-tests.sqlite"
+            database_url = f"sqlite:///{database_path.as_posix()}"
+            config = Config(str(PROJECT_ROOT / "alembic.ini"))
+            config.set_main_option("script_location", str(PROJECT_ROOT / "migrations"))
+            with patch.dict(os.environ, {"DATABASE_URL": database_url}):
+                command.upgrade(config, "53e1c8d409af")
+                engine = create_engine(database_url)
+                try:
+                    with engine.begin() as connection:
+                        connection.execute(
+                            User.__table__.insert(),
+                            {
+                                "id": 1,
+                                "username": "tester",
+                                "password_hash": "test",
+                                "role": "admin",
+                            },
+                        )
+                        connection.execute(
+                            Workspace.__table__.insert(),
+                            {"id": "workspace", "user_id": 1, "name": "测评", "kind": "image_test"},
+                        )
+                        connection.execute(
+                            ImageTestRun.__table__.insert(),
+                            {
+                                "id": "run",
+                                "user_id": 1,
+                                "suite_name": "回退测评",
+                                "questions": [],
+                                "total_images": 3,
+                                "estimated_rmb": 3,
+                                "request_digest": "fixture",
+                            },
+                        )
+                        for state in ("running", "failed", "succeeded", "ordinary"):
+                            test_job = state != "ordinary"
+                            status = state if test_job else "queued"
+                            connection.execute(
+                                GenerationJob.__table__.insert(),
+                                {
+                                    "id": state,
+                                    "user_id": 1,
+                                    "workspace_id": "workspace",
+                                    "channel_id": "fixture",
+                                    "channel_label": "Fixture",
+                                    "channel_config_version": "fixture",
+                                    "mode": "text2img",
+                                    "kind": "image_test" if test_job else "image",
+                                    "prompt": "fixture",
+                                    "model": "fixture",
+                                    "size": "auto",
+                                    "quality": "auto",
+                                    "output_format": "png",
+                                    "compression": 90,
+                                    "requested_count": 1,
+                                    "price_per_image_rmb": 1,
+                                    "reserved_rmb": 0,
+                                    "status": status,
+                                    "image_test_run_id": "run" if test_job else None,
+                                },
+                            )
+                            connection.execute(
+                                GenerationItem.__table__.insert(),
+                                {
+                                    "id": state,
+                                    "job_id": state,
+                                    "user_id": 1,
+                                    "channel_id": "fixture",
+                                    "position": 0,
+                                    "status": status,
+                                    "output_path": "existing.png" if state == "succeeded" else None,
+                                },
+                            )
+                        connection.execute(
+                            GenerationAttempt.__table__.insert(),
+                            {
+                                "id": "attempt",
+                                "item_id": "running",
+                                "user_id": 1,
+                                "channel_id": "fixture",
+                                "attempt_number": 1,
+                                "idempotency_key": "fixture",
+                                "status": "running",
+                                "claimed_by": "worker",
+                                "capacity_expires_at": utcnow(),
+                            },
+                        )
+                    command.downgrade(config, "-1")
+                    with engine.connect() as connection:
+                        for table in ("generation_jobs", "generation_items"):
+                            self.assertEqual(
+                                dict(
+                                    connection.execute(
+                                        text(f"SELECT id, status FROM {table}")
+                                    ).all()
+                                ),
+                                {
+                                    "running": "canceled",
+                                    "failed": "canceled",
+                                    "succeeded": "succeeded",
+                                    "ordinary": "queued",
+                                },
+                            )
+                        self.assertEqual(
+                            connection.scalar(text("SELECT status FROM generation_attempts")),
+                            "canceled",
+                        )
+                        self.assertEqual(
+                            connection.scalar(
+                                text(
+                                    "SELECT output_path FROM generation_items WHERE id = 'succeeded'"
+                                )
+                            ),
+                            "existing.png",
+                        )
+                    command.upgrade(config, "head")
+                    command.check(config)
+                finally:
+                    engine.dispose()
+
     def test_saved_channel_priority_fields_are_removed_without_changing_order(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             database_path = Path(temporary_directory) / "channel-order.sqlite"

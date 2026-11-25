@@ -45,12 +45,14 @@
       this.lastLogPoll = 0;
       this.reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
       this.cacheElements();
+      this.imageTests = new window.AdminImageTests();
       this.bindEvents();
       window.requestAnimationFrame(() => this.updateTabIndicator(false));
       this.loadUsers();
       this.loadSettings(false);
       this.pollTimer = window.setInterval(() => {
         if (this.activeTab === "generations") this.loadJobs(false);
+        if (this.activeTab === "image-tests") this.imageTests.poll();
         if (this.activeTab === "logs" && this.logMode === "runtime" && Date.now() - this.lastLogPoll > 10000) {
           this.loadLogs(false);
         }
@@ -218,6 +220,7 @@
         this.loadMattingModels();
       }
       if (name === "logs") this.loadLogs();
+      if (name === "image-tests") this.imageTests.activate();
       if (name === "settings") this.loadSettings();
     }
 

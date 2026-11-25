@@ -16,6 +16,7 @@ from .extensions import db
 MONEY_TYPE = Numeric(14, 4)
 JSON_TYPE = JSON().with_variant(JSONB(), "postgresql")
 JSON_LIST_TYPE = JSON().with_variant(JSONB(), "postgresql")
+IMAGE_TEST_KIND = "image_test"
 
 
 def utcnow() -> datetime:
@@ -221,6 +222,29 @@ class LibraryImage(TimestampMixin, db.Model):
     sha256: Mapped[str] = mapped_column(db.String(64))
 
 
+class ImageTestSuite(TimestampMixin, db.Model):
+    __tablename__ = "image_test_suites"
+
+    id: Mapped[str] = mapped_column(db.String(32), primary_key=True, default=new_public_id)
+    name: Mapped[str] = mapped_column(db.String(80))
+    questions: Mapped[list[dict]] = mapped_column(JSON_LIST_TYPE)
+    revision: Mapped[int] = mapped_column(default=1)
+
+
+class ImageTestRun(db.Model):
+    __tablename__ = "image_test_runs"
+
+    id: Mapped[str] = mapped_column(db.String(32), primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    suite_name: Mapped[str] = mapped_column(db.String(80))
+    questions: Mapped[list[dict]] = mapped_column(JSON_LIST_TYPE)
+    total_images: Mapped[int]
+    estimated_rmb: Mapped[Decimal] = mapped_column(Numeric(16, 4))
+    request_digest: Mapped[str] = mapped_column(db.String(64))
+    retry_of: Mapped[str | None] = mapped_column(db.String(32))
+    created_at: Mapped[datetime] = mapped_column(default=utcnow, index=True)
+
+
 class GenerationJob(TimestampMixin, db.Model):
     __tablename__ = "generation_jobs"
     __table_args__ = (
@@ -264,6 +288,14 @@ class GenerationJob(TimestampMixin, db.Model):
     size: Mapped[str] = mapped_column(db.String(20))
     quality: Mapped[str] = mapped_column(db.String(20))
     workflow: Mapped[dict] = mapped_column(MutableDict.as_mutable(JSON_TYPE), default=dict)
+    image_test_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey(
+            "image_test_runs.id", name="fk_generation_jobs_image_test_run", ondelete="RESTRICT"
+        ),
+        index=True,
+    )
+    image_test_question_index: Mapped[int | None]
+    image_test_verdict: Mapped[str | None] = mapped_column(db.String(10))
     output_format: Mapped[str] = mapped_column(db.String(20))
     compression: Mapped[int]
     transparent_background: Mapped[bool] = mapped_column(default=False)

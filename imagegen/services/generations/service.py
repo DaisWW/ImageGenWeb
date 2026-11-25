@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import timedelta, timezone
 from decimal import Decimal
 
@@ -17,10 +18,12 @@ from ...config.channels import (
 from ...errors import ServiceError
 from ...extensions import db
 from ...models import (
+    IMAGE_TEST_KIND,
     GenerationAttempt,
     GenerationItem,
     GenerationJob,
     GenerationReference,
+    ImageTestRun,
     User,
     Workspace,
     new_public_id,
@@ -35,6 +38,8 @@ from .contracts import SubmitGeneration, sanitize_workflow
 from .estimates import GenerationDurationEstimator
 from .masks import GenerationMaskManager
 from .validation import GenerationRequestValidator
+
+ACTIVE_GENERATION_STATUSES = ("queued", "running", "canceling", "reconnecting")
 
 
 class GenerationService:
@@ -76,13 +81,6 @@ class GenerationService:
         ):
             raise ServiceError("xhigh 和 max 质量仅支持 GPT Image 2.5 系列")
         requested_count = request.batch_count
-        item_prompts = tuple(
-            str(item).strip()
-            for item in (
-                request.item_prompts or tuple(request.prompt for _ in range(requested_count))
-            )
-        )
-
         user = self.billing.lock_user(user_id)
         if not user.is_active:
             raise ServiceError("账户已被禁用", status_code=403)
@@ -96,48 +94,20 @@ class GenerationService:
         # Reserve the most expensive eligible provider up front.  A routed
         # item later records its concrete provider price and settlement charges
         # that amount while releasing the full per-item reservation.
-        reservation_unit_price = max(channel.price_rmb for channel in routing_channels)
-        primary_channel = routing_channels[0]
-        requested_channel_id = str(request.channel_id or "").strip()
-        user_selected_channel = requested_channel_id not in {"", AUTO_CHANNEL_ID}
-        reserved = money(reservation_unit_price * requested_count)
-        self.billing.reserve(user, reserved)
-        workflow = sanitize_workflow(request.workflow)
-        workflow["moderation"] = request.moderation
-        workflow["channel_routing"] = {
-            "mode": "selected" if user_selected_channel else "ordered",
-            "candidate_ids": [channel.identifier for channel in routing_channels],
-            "candidate_labels": [channel.label for channel in routing_channels],
-        }
-        job = GenerationJob(
-            id=new_public_id(),
-            user_id=user.id,
-            workspace_id=workspace.id,
-            api_request_id=api_request_id,
-            api_request_digest=api_request_digest,
-            # Keep a useful summary for legacy consumers.  The item-level
-            # channel is authoritative once the Worker has routed it.
-            channel_id=primary_channel.identifier,
-            channel_label=primary_channel.label,
-            channel_config_version=self.channels.version,
-            kind=workspace.kind,
-            mode=request.mode,
-            prompt=request.prompt.strip(),
-            model=selected_model.identifier,
-            size=normalized_size,
-            quality=request.quality,
-            workflow=workflow,
-            output_format=request.output_format,
-            compression=request.compression,
-            transparent_background=request.transparent_background,
-            requested_count=requested_count,
-            price_per_image_rmb=money(reservation_unit_price),
-            reserved_rmb=reserved,
-            charged_rmb=money(0),
-            status="queued",
+        job = self._build_queued_job(
+            workspace,
+            request,
+            routing_channels,
+            selected_model.identifier,
+            normalized_size,
+            self.channels.version,
         )
+        job.api_request_id = api_request_id
+        job.api_request_digest = api_request_digest
+        job.reserved_rmb = money(job.price_per_image_rmb * requested_count)
         stored_mask_path = ""
         try:
+            self.billing.reserve(user, job.reserved_rmb)
             if generation_mask is not None and request.mask is not None:
                 stored_mask = self.masks.save(
                     generation_mask,
@@ -161,33 +131,13 @@ class GenerationService:
                         position=position,
                     )
                 )
-            for position in range(requested_count):
-                db.session.add(
-                    GenerationItem(
-                        job_id=job.id,
-                        user_id=user.id,
-                        channel_id=(
-                            primary_channel.identifier if user_selected_channel else AUTO_CHANNEL_ID
-                        ),
-                        channel_label=(
-                            primary_channel.label if user_selected_channel else AUTO_CHANNEL_LABEL
-                        ),
-                        position=position,
-                        prompt=item_prompts[position],
-                        status="queued",
-                        charged_rmb=money(0),
-                        provider_price_rmb=money(0),
-                    )
-                )
             if api_request_id is None:
                 workspace.settings = sanitize_workspace_settings(
                     {
                         **(workspace.settings or {}),
                         "mode": request.mode,
                         "prompt": request.prompt,
-                        "channel_id": (
-                            primary_channel.identifier if user_selected_channel else AUTO_CHANNEL_ID
-                        ),
+                        "channel_id": job.items[0].channel_id,
                         "model": selected_model.identifier,
                         "size": normalized_size,
                         "quality": request.quality,
@@ -196,10 +146,10 @@ class GenerationService:
                         "transparent_background": request.transparent_background,
                         "moderation": request.moderation,
                         "batch_count": request.batch_count,
-                        "generation_stage": workflow["generation_stage"],
-                        "prompt_draft_id": workflow["prompt_draft_id"],
-                        "creative_direction_id": workflow["creative_direction_id"],
-                        "generation_strategy": workflow.get("generation_strategy", "sample"),
+                        "generation_stage": job.workflow["generation_stage"],
+                        "prompt_draft_id": job.workflow["prompt_draft_id"],
+                        "creative_direction_id": job.workflow["creative_direction_id"],
+                        "generation_strategy": job.workflow.get("generation_strategy", "sample"),
                     },
                     self.settings.runtime(),
                 )
@@ -212,6 +162,86 @@ class GenerationService:
         if api_request_id is not None:
             return job
         return self.get_job(job.id, user_id=user.id)
+
+    def stage_image_test_jobs(
+        self,
+        workspace: Workspace,
+        run_id: str,
+        cases: Iterable[tuple[int, Channel, SubmitGeneration]],
+    ) -> Decimal:
+        """Queue validated cases in the administrator's existing transaction."""
+        jobs = []
+        channel_version = self.channels.version
+        for index, channel, request in cases:
+            try:
+                model = channel.get_model(request.model)
+            except ValueError as exc:
+                raise ServiceError(f"{channel.label} 不支持模型") from exc
+            size = self.validator.validate_request(channel, request, "image")
+            job = self._build_queued_job(
+                workspace, request, [channel], model.identifier, size, channel_version
+            )
+            job.image_test_run_id = run_id
+            job.image_test_question_index = index
+            jobs.append(job)
+        db.session.add_all(jobs)
+        return sum((job.price_per_image_rmb for job in jobs), start=Decimal("0"))
+
+    @staticmethod
+    def _build_queued_job(
+        workspace: Workspace,
+        request: SubmitGeneration,
+        routing_channels: list[Channel],
+        model: str,
+        size: str,
+        channel_version: str,
+    ) -> GenerationJob:
+        primary = routing_channels[0]
+        selected = str(request.channel_id or "").strip() not in {"", AUTO_CHANNEL_ID}
+        workflow = {} if workspace.kind == IMAGE_TEST_KIND else sanitize_workflow(request.workflow)
+        workflow["moderation"] = request.moderation
+        workflow["channel_routing"] = {
+            "mode": "selected" if selected else "ordered",
+            "candidate_ids": [channel.identifier for channel in routing_channels],
+            "candidate_labels": [channel.label for channel in routing_channels],
+        }
+        prompts = request.item_prompts or (request.prompt,) * request.batch_count
+        return GenerationJob(
+            id=new_public_id(),
+            user_id=workspace.user_id,
+            workspace_id=workspace.id,
+            channel_id=primary.identifier,
+            channel_label=primary.label,
+            channel_config_version=channel_version,
+            kind=workspace.kind,
+            mode=request.mode,
+            prompt=request.prompt.strip(),
+            model=model,
+            size=size,
+            quality=request.quality,
+            workflow=workflow,
+            output_format=request.output_format,
+            compression=request.compression,
+            transparent_background=request.transparent_background,
+            requested_count=request.batch_count,
+            price_per_image_rmb=money(max(channel.price_rmb for channel in routing_channels)),
+            reserved_rmb=money(0),
+            charged_rmb=money(0),
+            status="queued",
+            items=[
+                GenerationItem(
+                    user_id=workspace.user_id,
+                    channel_id=primary.identifier if selected else AUTO_CHANNEL_ID,
+                    channel_label=primary.label if selected else AUTO_CHANNEL_LABEL,
+                    position=position,
+                    prompt=str(prompt).strip(),
+                    status="queued",
+                    charged_rmb=money(0),
+                    provider_price_rmb=money(0),
+                )
+                for position, prompt in enumerate(prompts)
+            ],
+        )
 
     def _resolve_routing(
         self,
@@ -312,11 +342,36 @@ class GenerationService:
         user, job = self._lock_job_and_owner(job_id, user_id=user_id, admin=admin)
         if job.status in {"succeeded", "failed", "canceled", "partial"}:
             return job
+        self._cancel_locked_job(user, job)
+        db.session.commit()
+        return job
+
+    def stage_image_test_cancellation(self, run: ImageTestRun) -> bool:
+        if run.user_id is None:
+            return False
+        user = self.billing.lock_user(run.user_id)
+        jobs = list(
+            db.session.scalars(
+                select(GenerationJob)
+                .options(selectinload(GenerationJob.items))
+                .where(
+                    GenerationJob.image_test_run_id == run.id,
+                    GenerationJob.status.in_(ACTIVE_GENERATION_STATUSES),
+                )
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
+        )
+        for job in jobs:
+            self._cancel_locked_job(user, job)
+        return bool(jobs)
+
+    def _cancel_locked_job(self, user: User, job: GenerationJob) -> None:
         now = utcnow()
         job.cancel_requested_at = now
         releasable = Decimal("0")
         for item in job.items:
-            if item.status not in {"queued", "running", "canceling", "reconnecting"}:
+            if item.status not in ACTIVE_GENERATION_STATUSES:
                 continue
             item.status = "canceled"
             item.cancel_requested_at = now
@@ -340,8 +395,6 @@ class GenerationService:
             releasable += money(job.price_per_image_rmb)
         self.billing.release(user, job, releasable)
         self.refresh_job_status(job)
-        db.session.commit()
-        return job
 
     def retry(
         self,
@@ -424,7 +477,7 @@ class GenerationService:
                 selectinload(GenerationJob.references).selectinload(GenerationReference.asset),
                 selectinload(GenerationJob.user),
             )
-            .where(GenerationJob.id == job_id)
+            .where(GenerationJob.id == job_id, GenerationJob.kind != IMAGE_TEST_KIND)
         )
         if not admin:
             query = query.where(GenerationJob.user_id == user_id)
@@ -447,7 +500,11 @@ class GenerationService:
         ]
         if admin:
             eager_options.append(selectinload(GenerationJob.user))
-        query = select(GenerationJob).options(*eager_options)
+        query = (
+            select(GenerationJob)
+            .options(*eager_options)
+            .where(GenerationJob.kind != IMAGE_TEST_KIND)
+        )
         if not admin or user_id is not None:
             query = query.where(GenerationJob.user_id == user_id)
         if workspace_id:
@@ -466,6 +523,7 @@ class GenerationService:
                 .options(selectinload(GenerationJob.items))
                 .where(
                     GenerationJob.user_id == user_id,
+                    GenerationJob.kind != IMAGE_TEST_KIND,
                     GenerationJob.status.in_(("queued", "running", "canceling", "reconnecting")),
                 )
                 .order_by(GenerationJob.created_at)
@@ -515,7 +573,8 @@ class GenerationService:
         user_id: int | None,
         admin: bool = False,
     ) -> tuple[User, GenerationJob]:
-        owner_query = select(GenerationJob.user_id).where(GenerationJob.id == job_id)
+        visible_job = (GenerationJob.id == job_id, GenerationJob.kind != IMAGE_TEST_KIND)
+        owner_query = select(GenerationJob.user_id).where(*visible_job)
         if not admin:
             owner_query = owner_query.where(GenerationJob.user_id == user_id)
         owner_id = db.session.scalar(owner_query)
@@ -524,9 +583,7 @@ class GenerationService:
 
         user = self.billing.lock_user(owner_id)
         job_query = (
-            select(GenerationJob)
-            .options(selectinload(GenerationJob.items))
-            .where(GenerationJob.id == job_id)
+            select(GenerationJob).options(selectinload(GenerationJob.items)).where(*visible_job)
         )
         if not admin:
             job_query = job_query.where(GenerationJob.user_id == user_id)
