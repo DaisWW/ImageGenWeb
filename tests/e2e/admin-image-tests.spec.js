@@ -16,11 +16,22 @@ test("管理员保存题组后按题对比生图结果 @responsive", async ({ st
   let finished = false;
   let releaseInitialHistory;
   const initialHistory = new Promise((resolve) => { releaseInitialHistory = resolve; });
+  let startSuiteSave;
+  let releaseSuiteSave;
+  const suiteSaveStarted = new Promise((resolve) => { startSuiteSave = resolve; });
+  const suiteSaveGate = new Promise((resolve) => { releaseSuiteSave = resolve; });
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route(`**${root}`, async (route) => {
     const response = await route.fetch();
     const catalog = await response.json();
     await route.fulfill({ response, json: { ...catalog, channels: [channel] } });
+  });
+  await page.route(`**${root}/suites`, async (route) => {
+    if (route.request().method() === "POST") {
+      startSuiteSave();
+      await suiteSaveGate;
+    }
+    await route.continue();
   });
   await page.route(`**${root}/runs*`, async (route) => {
     if (route.request().method() === "GET") {
@@ -90,7 +101,17 @@ test("管理员保存题组后按题对比生图结果 @responsive", async ({ st
   await page.getByLabel("题目名称").nth(1).fill("排版");
   await page.getByLabel("绘图提示词").nth(1).fill("春日书展海报");
   await page.getByRole("button", { name: "上移题目" }).nth(1).click();
+  const saveResponse = page.waitForResponse((response) =>
+    response.request().method() === "POST" && new URL(response.url()).pathname === `${root}/suites`,
+  );
   await page.getByRole("button", { name: "保存并用于测试" }).click();
+  await suiteSaveStarted;
+  await expect(page.getByLabel("题组名称")).toBeDisabled();
+  await expect(page.getByRole("button", { name: "新建题组" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "添加题目" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "下移题目" }).first()).toBeDisabled();
+  releaseSuiteSave();
+  await saveResponse;
   await expect(page.locator("#imageTestEstimate")).toContainText("2 道题 · 4 张图");
   await page.getByRole("button", { name: "开始测试" }).click();
   await expect(page.locator("#imageTestProgressLabel")).toHaveText("0 / 4 张已处理");

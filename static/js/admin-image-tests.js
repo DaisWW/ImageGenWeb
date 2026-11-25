@@ -13,6 +13,183 @@
   const option = (value, label) => `<option value="${escape(value)}">${escape(label)}</option>`;
   const rmb = (amount) => `¥${Number(amount).toFixed(4)}`;
 
+  class AdminImageTestSuites {
+    constructor(app) {
+      this.app = app;
+      this.el = app.el;
+      this.editor = null;
+      this.copyable = false;
+      this.pending = false;
+      this.bind();
+    }
+
+    bind() {
+      const el = this.el;
+      el.EditSuite.addEventListener("click", () => this.app.showPage("suites", this.app.selectedSuite()));
+      el.EditSelect.addEventListener("change", () => this.editSuite(this.app.selectedSuite(el.EditSelect)));
+      el.NewSuite.addEventListener("click", () => {
+        this.editSuite();
+        el.SuiteForm.elements.name.focus();
+      });
+      el.CopySuite.addEventListener("click", () => this.editSuite({
+        name: el.SuiteForm.elements.name.value,
+        questions: this.editorQuestions(),
+      }, true));
+      el.DeleteSuite.addEventListener("click", () => this.deleteSuite());
+      el.AddQuestion.addEventListener("click", () => this.addQuestion({}, true));
+      el.EditorQuestions.addEventListener("click", (event) => this.editQuestionOrder(event));
+      el.SuiteForm.addEventListener("submit", (event) => this.saveSuite(event));
+    }
+
+    setPending(pending) {
+      this.pending = pending;
+      this.el.EditSelect.disabled = pending;
+      this.el.NewSuite.disabled = pending;
+      this.el.CopySuite.disabled = pending || !this.copyable;
+      this.el.DeleteSuite.disabled = pending || !this.editor?.id || this.editor.builtin;
+      [...this.el.SuiteForm.elements].forEach((field) => { field.disabled = pending; });
+      this.updateQuestionOrder();
+    }
+
+    loadCatalog(catalog) {
+      this.catalog = catalog;
+      this.renderSuites();
+      if (!this.editor) this.editSuite(this.app.selectedSuite());
+    }
+
+    renderSuites(selected = this.el.Suite.value) {
+      const suites = this.catalog.suites;
+      const options = suites.map((suite) => option(suite.id, suite.name)).join("");
+      this.el.Suite.innerHTML = options;
+      this.el.Suite.value = suites.some((suite) => suite.id === selected) ? selected : "default";
+      this.el.Suite.disabled = false;
+      this.el.EditSelect.innerHTML = option("", "新题组") + options;
+      this.el.EditSelect.value = this.editor?.id || "";
+      this.app.previewSuite();
+    }
+
+    editSuite(suite, copy = false) {
+      if (!this.catalog) return;
+      this.copyable = !!suite;
+      this.editor = {
+        id: copy ? "" : suite?.id || "",
+        revision: suite?.revision,
+        builtin: !copy && suite?.builtin,
+      };
+      this.el.EditSelect.value = this.editor.id;
+      this.el.SuiteForm.elements.name.value = copy ? `${suite.name.slice(0, 75)} · 副本` : suite?.name || "";
+      this.el.BuiltinHint.hidden = !this.editor.builtin;
+      this.el.CopySuite.disabled = !suite;
+      this.el.DeleteSuite.disabled = !this.editor.id || !!this.editor.builtin;
+      this.el.EditorQuestions.replaceChildren();
+      (suite?.questions || [{}]).forEach((question) => this.addQuestion(question));
+    }
+
+    editorQuestions() {
+      return [...this.el.EditorQuestions.querySelectorAll(".image-test-question")].map((row) =>
+        Object.fromEntries([...row.querySelectorAll("[name]")].map((field) => [field.name, field.value])),
+      );
+    }
+
+    addQuestion(question, focus = false) {
+      const list = this.el.EditorQuestions;
+      if (list.children.length >= this.catalog.max_questions) return;
+      list.insertAdjacentHTML("beforeend", `<fieldset class="image-test-question">
+        <legend></legend>
+        <div class="image-test-actions image-test-order">
+          <button class="icon-button" type="button" data-question-action="up" aria-label="上移题目" title="上移题目"><i data-lucide="arrow-up"></i></button>
+          <button class="icon-button" type="button" data-question-action="down" aria-label="下移题目" title="下移题目"><i data-lucide="arrow-down"></i></button>
+          <button class="icon-button danger" type="button" data-question-action="remove" aria-label="删除题目" title="删除题目"><i data-lucide="trash-2"></i></button>
+        </div>
+        <div class="image-test-question-fields">
+          <label class="field"><span>题目名称</span><input name="title" maxlength="80" required value="${escape(question.title)}"></label>
+          <label class="field"><span>尺寸</span><input name="size" maxlength="20" placeholder="auto 或 1024x1024" value="${escape(question.size || "auto")}"></label>
+          <label class="field"><span>质量</span><select name="quality">${Object.entries(qualities).map(([value, label]) => option(value, label)).join("")}</select></label>
+        </div>
+        <label class="field"><span>绘图提示词</span><textarea name="prompt" rows="3" maxlength="${this.catalog.max_prompt_characters}" required>${escape(question.prompt)}</textarea></label>
+        <label class="field"><span>评审标准（选填）</span><textarea name="criteria" rows="2" maxlength="500">${escape(question.criteria)}</textarea></label>
+      </fieldset>`);
+      const row = list.lastElementChild;
+      row.querySelector("[name=quality]").value = question.quality || "auto";
+      this.updateQuestionOrder();
+      UI.icons(row);
+      if (focus) row.querySelector("[name=title]").focus();
+    }
+
+    updateQuestionOrder() {
+      const rows = [...this.el.EditorQuestions.children];
+      rows.forEach((row, index) => {
+        row.querySelector("legend").textContent = `第 ${index + 1} 题`;
+        row.querySelector("[data-question-action=up]").disabled = this.pending || index === 0;
+        row.querySelector("[data-question-action=down]").disabled = this.pending || index === rows.length - 1;
+        row.querySelector("[data-question-action=remove]").disabled = this.pending || rows.length === 1;
+      });
+      this.el.AddQuestion.disabled = this.pending || rows.length >= this.catalog.max_questions;
+    }
+
+    editQuestionOrder(event) {
+      const button = event.target.closest("[data-question-action]");
+      if (!button) return;
+      const row = button.closest(".image-test-question");
+      if (button.dataset.questionAction === "remove") row.remove();
+      if (button.dataset.questionAction === "up") row.previousElementSibling?.before(row);
+      if (button.dataset.questionAction === "down") row.nextElementSibling?.after(row);
+      this.updateQuestionOrder();
+    }
+
+    async saveSuite(event) {
+      event.preventDefault();
+      if (this.pending) return;
+      this.setPending(true);
+      const button = event.submitter;
+      this.app.setError("");
+      const suiteId = this.editor.builtin ? "" : this.editor.id;
+      try {
+        const { suite } = await UI.api(`${apiRoot}/suites${suiteId ? `/${suiteId}` : ""}`, {
+          method: suiteId ? "PUT" : "POST",
+          body: {
+            name: this.el.SuiteForm.elements.name.value,
+            revision: this.editor.revision,
+            questions: this.editorQuestions(),
+          },
+        });
+        this.catalog.suites = [
+          this.catalog.suites[0],
+          suite,
+          ...this.catalog.suites.slice(1).filter((item) => item.id !== suite.id),
+        ];
+        this.editSuite(suite);
+        this.renderSuites(suite.id);
+        this.app.updateEstimate();
+        if (button?.value === "use") this.app.showPage("workbench");
+        UI.toast("已保存题组", "success");
+      } catch (error) {
+        this.app.setError(error.message);
+      } finally {
+        this.setPending(false);
+      }
+    }
+
+    async deleteSuite() {
+      const { id, revision, builtin } = this.editor || {};
+      if (!id || builtin || this.pending || !window.confirm("删除此题组？已生成的测评记录会保留。")) return;
+      this.setPending(true);
+      this.app.setError("");
+      try {
+        await UI.api(`${apiRoot}/suites/${id}`, { method: "DELETE", body: { revision } });
+        this.catalog.suites = this.catalog.suites.filter((suite) => suite.id !== id);
+        this.editSuite(this.catalog.suites[0]);
+        this.renderSuites();
+        this.app.updateEstimate();
+        UI.toast("已删除题组", "success");
+      } catch (error) {
+        this.app.setError(error.message);
+      } finally {
+        this.setPending(false);
+      }
+    }
+  }
+
   class AdminImageTests {
     constructor() {
       this.root = document.querySelector(".image-tests");
@@ -24,6 +201,7 @@
       this.historyId = "";
       this.offset = 0;
       this.detailVersion = 0;
+      this.suites = new AdminImageTestSuites(this);
       this.bind();
     }
 
@@ -33,7 +211,10 @@
         button.addEventListener("click", () => this.showPage(button.dataset.testPage));
       });
       el.Refresh.addEventListener("click", () => this.activate(true));
-      el.Suite.addEventListener("change", () => this.previewSuite());
+      el.Suite.addEventListener("change", () => {
+        this.previewSuite();
+        this.updateEstimate();
+      });
       el.Targets.addEventListener("change", (event) => {
         const group = event.target.closest("[data-test-channel]");
         if (group) {
@@ -53,20 +234,6 @@
           suite_id: suite.id, suite_revision: suite.revision, targets: this.selectedTargets(),
         });
       });
-      el.EditSuite.addEventListener("click", () => this.showPage("suites", this.selectedSuite()));
-      el.EditSelect.addEventListener("change", () => this.editSuite(this.selectedSuite(el.EditSelect)));
-      el.NewSuite.addEventListener("click", () => {
-        this.editSuite();
-        el.SuiteForm.elements.name.focus();
-      });
-      el.CopySuite.addEventListener("click", () => this.editSuite({
-        name: el.SuiteForm.elements.name.value,
-        questions: this.editorQuestions(),
-      }, true));
-      el.DeleteSuite.addEventListener("click", () => this.deleteSuite());
-      el.AddQuestion.addEventListener("click", () => this.addQuestion({}, true));
-      el.EditorQuestions.addEventListener("click", (event) => this.editQuestionOrder(event));
-      el.SuiteForm.addEventListener("submit", (event) => this.saveSuite(event));
       el.HistoryRuns.addEventListener("click", (event) => {
         const batch = event.target.closest("[data-test-run]");
         if (batch) this.openHistoryRun(batch.dataset.testRun);
@@ -93,9 +260,9 @@
         const selected = this.selectedTargets();
         const hadAll = !this.catalog || selected.length === this.targetBoxes().length;
         this.catalog = await UI.api(apiRoot);
-        this.renderSuites();
+        this.suites.loadCatalog(this.catalog);
         this.renderTargets(hadAll, selected);
-        if (!this.editor) this.editSuite(this.selectedSuite());
+        this.updateEstimate();
         this.el.HistoryRetention.textContent = `测评记录和图片随生成记录保留 ${this.catalog.history_retention_days} 天。`;
         if (this.page === "history") {
           await this.loadHistory(this.offset);
@@ -127,7 +294,7 @@
         pane.hidden = pane.dataset.testPane !== page;
       });
       if (page === "suites") {
-        if (suite) this.editSuite(suite);
+        if (suite) this.suites.editSuite(suite);
         return;
       }
       const slot = page === "history" ? this.el.HistoryDetail : this.el.Current;
@@ -146,16 +313,6 @@
       return this.catalog?.suites.find((suite) => suite.id === select.value);
     }
 
-    renderSuites(selected = this.el.Suite.value) {
-      const options = this.catalog.suites.map((suite) => option(suite.id, suite.name)).join("");
-      this.el.Suite.innerHTML = options;
-      this.el.Suite.value = this.catalog.suites.some((suite) => suite.id === selected) ? selected : "default";
-      this.el.Suite.disabled = false;
-      this.el.EditSelect.innerHTML = option("", "新题组") + options;
-      this.el.EditSelect.value = this.editor?.id || "";
-      this.previewSuite();
-    }
-
     previewSuite() {
       const suite = this.selectedSuite();
       this.el.SuitePreview.innerHTML = suite ? `
@@ -163,7 +320,6 @@
           <small>${escape(question.size === "auto" ? "自动尺寸" : question.size)} · ${qualities[question.quality]}</small></li>`).join("")}</ul>
       ` : "";
       this.el.EditSuite.disabled = !suite;
-      this.updateEstimate();
     }
 
     targetBoxes() {
@@ -195,7 +351,6 @@
                <div class="image-test-models">${models}</div>`}
           </div>`;
       }).join("") || '<p class="image-test-empty">暂无启用的生图渠道。</p>';
-      this.updateEstimate();
     }
 
     selectTargets(checked) {
@@ -222,120 +377,6 @@
       this.el.Estimate.textContent = images > this.catalog.max_images
         ? `已选 ${images} 张，单批最多 ${this.catalog.max_images} 张，请减少模型或题目。`
         : `${questions} 道题 · ${images} 张图 · 预计渠道价 ${rmb(price)}`;
-    }
-
-    editSuite(suite, copy = false) {
-      if (!this.catalog) return;
-      this.editor = {
-        id: copy ? "" : suite?.id || "",
-        revision: suite?.revision,
-        builtin: !copy && suite?.builtin,
-      };
-      this.el.EditSelect.value = this.editor.id;
-      this.el.SuiteForm.elements.name.value = copy ? `${suite.name.slice(0, 75)} · 副本` : suite?.name || "";
-      this.el.BuiltinHint.hidden = !this.editor.builtin;
-      this.el.CopySuite.disabled = !suite;
-      this.el.DeleteSuite.disabled = !this.editor.id || !!this.editor.builtin;
-      this.el.EditorQuestions.replaceChildren();
-      (suite?.questions || [{}]).forEach((question) => this.addQuestion(question));
-    }
-
-    editorQuestions() {
-      return [...this.el.EditorQuestions.querySelectorAll(".image-test-question")].map((row) =>
-        Object.fromEntries([...row.querySelectorAll("[name]")].map((field) => [field.name, field.value])),
-      );
-    }
-
-    addQuestion(question, focus = false) {
-      const list = this.el.EditorQuestions;
-      if (!this.catalog || list.children.length >= this.catalog.max_questions) return;
-      list.insertAdjacentHTML("beforeend", `<fieldset class="image-test-question">
-        <legend></legend>
-        <div class="image-test-actions image-test-order">
-          <button class="icon-button" type="button" data-question-action="up" aria-label="上移题目" title="上移题目"><i data-lucide="arrow-up"></i></button>
-          <button class="icon-button" type="button" data-question-action="down" aria-label="下移题目" title="下移题目"><i data-lucide="arrow-down"></i></button>
-          <button class="icon-button danger" type="button" data-question-action="remove" aria-label="删除题目" title="删除题目"><i data-lucide="trash-2"></i></button>
-        </div>
-        <div class="image-test-question-fields">
-          <label class="field"><span>题目名称</span><input name="title" maxlength="80" required value="${escape(question.title)}"></label>
-          <label class="field"><span>尺寸</span><input name="size" maxlength="20" placeholder="auto 或 1024x1024" value="${escape(question.size || "auto")}"></label>
-          <label class="field"><span>质量</span><select name="quality">${Object.entries(qualities).map(([value, label]) => option(value, label)).join("")}</select></label>
-        </div>
-        <label class="field"><span>绘图提示词</span><textarea name="prompt" rows="3" maxlength="${this.catalog.max_prompt_characters}" required>${escape(question.prompt)}</textarea></label>
-        <label class="field"><span>评审标准（选填）</span><textarea name="criteria" rows="2" maxlength="500">${escape(question.criteria)}</textarea></label>
-      </fieldset>`);
-      const row = list.lastElementChild;
-      row.querySelector("[name=quality]").value = question.quality || "auto";
-      this.updateQuestionOrder();
-      UI.icons(row);
-      if (focus) row.querySelector("[name=title]").focus();
-    }
-
-    updateQuestionOrder() {
-      const rows = [...this.el.EditorQuestions.children];
-      rows.forEach((row, index) => {
-        row.querySelector("legend").textContent = `第 ${index + 1} 题`;
-        row.querySelector("[data-question-action=up]").disabled = index === 0;
-        row.querySelector("[data-question-action=down]").disabled = index === rows.length - 1;
-        row.querySelector("[data-question-action=remove]").disabled = rows.length === 1;
-      });
-      this.el.AddQuestion.disabled = rows.length >= this.catalog.max_questions;
-    }
-
-    editQuestionOrder(event) {
-      const button = event.target.closest("[data-question-action]");
-      if (!button) return;
-      const row = button.closest(".image-test-question");
-      if (button.dataset.questionAction === "remove") row.remove();
-      if (button.dataset.questionAction === "up") row.previousElementSibling?.before(row);
-      if (button.dataset.questionAction === "down") row.nextElementSibling?.after(row);
-      this.updateQuestionOrder();
-    }
-
-    async saveSuite(event) {
-      event.preventDefault();
-      if (this.suitePending) return;
-      this.suitePending = true;
-      const button = event.submitter;
-      if (button) button.disabled = true;
-      this.setError("");
-      const suiteId = this.editor.builtin ? "" : this.editor.id;
-      try {
-        const { suite } = await UI.api(`${apiRoot}/suites${suiteId ? `/${suiteId}` : ""}`, {
-          method: suiteId ? "PUT" : "POST",
-          body: { name: this.el.SuiteForm.elements.name.value, revision: this.editor.revision, questions: this.editorQuestions() },
-        });
-        this.catalog.suites = [this.catalog.suites[0], suite, ...this.catalog.suites.slice(1).filter((item) => item.id !== suite.id)];
-        this.editSuite(suite);
-        this.renderSuites(suite.id);
-        if (button?.value === "use") this.showPage("workbench");
-        UI.toast("已保存题组", "success");
-      } catch (error) {
-        this.setError(error.message);
-      } finally {
-        this.suitePending = false;
-        if (button) button.disabled = false;
-      }
-    }
-
-    async deleteSuite() {
-      const { id, revision, builtin } = this.editor || {};
-      if (!id || builtin || this.suitePending || !window.confirm("删除此题组？已生成的测评记录会保留。")) return;
-      this.suitePending = true;
-      this.el.DeleteSuite.disabled = true;
-      this.setError("");
-      try {
-        await UI.api(`${apiRoot}/suites/${id}`, { method: "DELETE", body: { revision } });
-        this.catalog.suites = this.catalog.suites.filter((suite) => suite.id !== id);
-        this.editSuite(this.catalog.suites[0]);
-        this.renderSuites();
-        UI.toast("已删除题组", "success");
-      } catch (error) {
-        this.el.DeleteSuite.disabled = false;
-        this.setError(error.message);
-      } finally {
-        this.suitePending = false;
-      }
     }
 
     async loadHistory(offset) {
