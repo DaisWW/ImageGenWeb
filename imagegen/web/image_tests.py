@@ -28,7 +28,7 @@ _HISTORY_PAGE_SIZE = 20
 def image_tests_catalog():
     registry = channels()
     return jsonify(
-        suites=[_suite_dict(suite) for suite in services().image_tests.suites()],
+        suites=[_suite_dict(suite) for suite in services().image_test_suites.list_suites()],
         channels=[channel.public_dict() for channel in registry.list(include_disabled=False)],
         max_images=MAX_TEST_IMAGES,
         max_questions=MAX_TEST_QUESTIONS,
@@ -40,21 +40,21 @@ def image_tests_catalog():
 @web.post("/api/admin/image-tests/suites")
 @admin_required
 def create_image_test_suite():
-    suite = services().image_tests.save_suite(current_user.id, json_body())
+    suite = services().image_test_suites.save(current_user.id, json_body())
     return jsonify(suite=_suite_dict(suite)), 201
 
 
 @web.put("/api/admin/image-tests/suites/<suite_id>")
 @admin_required
 def update_image_test_suite(suite_id: str):
-    suite = services().image_tests.save_suite(current_user.id, json_body(), suite_id)
+    suite = services().image_test_suites.save(current_user.id, json_body(), suite_id)
     return jsonify(suite=_suite_dict(suite))
 
 
 @web.delete("/api/admin/image-tests/suites/<suite_id>")
 @admin_required
 def delete_image_test_suite(suite_id: str):
-    services().image_tests.delete_suite(current_user.id, suite_id, json_body())
+    services().image_test_suites.delete(current_user.id, suite_id, json_body())
     return jsonify(ok=True)
 
 
@@ -62,7 +62,7 @@ def delete_image_test_suite(suite_id: str):
 @admin_required
 def image_test_runs():
     offset = min(100000, max(0, request.args.get("offset", 0, type=int)))
-    rows, total = services().image_tests.list_runs(_HISTORY_PAGE_SIZE, offset)
+    rows, total = services().image_test_runs.list_runs(_HISTORY_PAGE_SIZE, offset)
     return jsonify(
         runs=[_run_summary(run, counts) for run, counts in rows],
         total=total,
@@ -73,7 +73,7 @@ def image_test_runs():
 @web.post("/api/admin/image-tests/runs")
 @admin_required
 def start_image_test_run():
-    run = services().image_tests.start(current_user.id, json_body())
+    run = services().image_test_runs.start(current_user.id, json_body())
     return jsonify(run=_run_detail(run)), 202
 
 
@@ -81,28 +81,28 @@ def start_image_test_run():
 @admin_required
 def image_test_run(run_id: str):
     include_questions = request.args.get("progress") != "1"
-    run = services().image_tests.get_run(run_id, include_questions=include_questions)
+    run = services().image_test_runs.get_run(run_id, include_questions=include_questions)
     return jsonify(run=_run_detail(run, include_questions=include_questions))
 
 
 @web.post("/api/admin/image-tests/runs/<run_id>/cancel")
 @admin_required
 def cancel_image_test_run(run_id: str):
-    run = services().image_tests.cancel(current_user.id, run_id)
+    run = services().image_test_runs.cancel(current_user.id, run_id)
     return jsonify(run=_run_detail(run))
 
 
 @web.post("/api/admin/image-tests/runs/<run_id>/retry")
 @admin_required
 def retry_image_test_run(run_id: str):
-    run = services().image_tests.start(current_user.id, json_body(), retry_of=run_id)
+    run = services().image_test_runs.start(current_user.id, json_body(), retry_of=run_id)
     return jsonify(run=_run_detail(run)), 202
 
 
 @web.put("/api/admin/image-tests/runs/<run_id>/results/<job_id>")
 @admin_required
 def review_image_test_result(run_id: str, job_id: str):
-    services().image_tests.review(run_id, job_id, json_body().get("verdict"))
+    services().image_test_runs.review(run_id, job_id, json_body().get("verdict"))
     return jsonify(ok=True)
 
 
@@ -158,7 +158,7 @@ def _run_summary(run: ImageTestRun, counts: dict[str, int]) -> dict:
 
 
 def _run_detail(run: ImageTestRun, *, include_questions: bool = True) -> dict:
-    jobs = services().image_tests.jobs(run.id)
+    jobs = services().image_test_runs.jobs(run.id)
     payload = _run_summary(run, Counter(job.status for job in jobs))
     if include_questions:
         payload["questions"] = run.questions

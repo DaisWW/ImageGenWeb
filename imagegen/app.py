@@ -33,7 +33,8 @@ from .services import (
     GenerationApiService,
     GenerationService,
     ImageLibraryService,
-    ImageTestService,
+    ImageTestRunService,
+    ImageTestSuiteService,
     RuntimeLogService,
     SystemSettingsService,
     UserService,
@@ -149,6 +150,7 @@ def create_app(config: dict | None = None) -> Flask:
     matting_adapters = MattingAdapterFactory()
     generations = GenerationService(channels, billing, settings, storage)
     generation_api_keys = GenerationApiKeyService(billing)
+    image_test_suites = ImageTestSuiteService(settings)
     services = ApplicationServices(
         auth=auth,
         background_removal=BackgroundRemovalService(matting_models, storage, matting_adapters),
@@ -157,7 +159,8 @@ def create_app(config: dict | None = None) -> Flask:
         workspaces=workspaces,
         image_library=ImageLibraryService(storage),
         generations=generations,
-        image_tests=ImageTestService(generations),
+        image_test_suites=image_test_suites,
+        image_test_runs=ImageTestRunService(generations, image_test_suites),
         generation_api=GenerationApiService(generation_api_keys, generations),
         generation_api_keys=generation_api_keys,
         conversations=ConversationService(

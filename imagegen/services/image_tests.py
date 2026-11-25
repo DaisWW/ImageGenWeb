@@ -9,6 +9,7 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.orm import defer, joinedload, load_only
 
+from ..config.channels import Channel
 from ..errors import ServiceError
 from ..extensions import db
 from ..models import (
@@ -23,10 +24,36 @@ from ..models import (
 )
 from .common import normalize_image_size
 from .generations import ACTIVE_GENERATION_STATUSES, GenerationService, SubmitGeneration
+from .settings import SystemSettingsService
 
 MAX_TEST_IMAGES = 100
 MAX_TEST_QUESTIONS = 20
 TEST_QUALITIES = ("auto", "low", "medium", "high")
+
+
+def _bounded_text(value: object, limit: int, label: str, *, optional: bool = False) -> str:
+    if not isinstance(value, str) or "\x00" in value:
+        raise ServiceError(f"{label}必须是有效文本")
+    text = value.strip()
+    if len(text) > limit or (not text and not optional):
+        raise ServiceError(f"{label}长度无效，最多 {limit} 个字符")
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ServiceError(f"{label}必须是有效文本") from exc
+    return text
+
+
+def _record_audit(user_id: int, action: str, target_id: str, kind: str) -> None:
+    db.session.add(
+        AuditLog(
+            actor_user_id=user_id,
+            action=f"image_test.{action}",
+            target_type=f"image_test_{kind}",
+            target_id=target_id,
+        )
+    )
+
 
 DEFAULT_SUITE = ImageTestSuite(
     id="default",
@@ -70,19 +97,19 @@ DEFAULT_SUITE = ImageTestSuite(
 )
 
 
-class ImageTestService:
-    def __init__(self, generations: GenerationService):
-        self.generations = generations
+class ImageTestSuiteService:
+    def __init__(self, settings: SystemSettingsService):
+        self.settings = settings
 
     @staticmethod
-    def suites() -> list[ImageTestSuite]:
+    def list_suites() -> list[ImageTestSuite]:
         return [
             DEFAULT_SUITE,
             *db.session.scalars(select(ImageTestSuite).order_by(ImageTestSuite.created_at.desc())),
         ]
 
     @staticmethod
-    def _suite(suite_id: str, *, lock: bool = False) -> ImageTestSuite:
+    def get(suite_id: str, *, lock: bool = False) -> ImageTestSuite:
         if suite_id == DEFAULT_SUITE.id:
             if lock:
                 raise ServiceError("请先复制内置题组再编辑", status_code=400)
@@ -93,31 +120,91 @@ class ImageTestService:
             raise ServiceError("题组不存在", status_code=404)
         return suite
 
-    def save_suite(self, user_id: int, data: dict, suite_id: str = "") -> ImageTestSuite:
-        name = self._text(data.get("name"), 80, "题组名称")
+    def save(self, user_id: int, data: dict, suite_id: str = "") -> ImageTestSuite:
+        name = _bounded_text(data.get("name"), 80, "题组名称")
         questions = data.get("questions")
         if not isinstance(questions, list) or not 1 <= len(questions) <= MAX_TEST_QUESTIONS:
             raise ServiceError(f"每个题组需要 1 到 {MAX_TEST_QUESTIONS} 道题")
         parsed = [self._question(question, index) for index, question in enumerate(questions, 1)]
         if suite_id:
-            suite = self._suite(suite_id, lock=True)
-            self._check_revision(suite, data.get("revision"))
+            suite = self.get(suite_id, lock=True)
+            self.check_revision(suite, data.get("revision"))
             suite.revision += 1
         else:
             suite = ImageTestSuite(id=new_public_id())
             db.session.add(suite)
         suite.name = name
         suite.questions = parsed
-        self._audit(user_id, "suite.update" if suite_id else "suite.create", suite.id, "suite")
+        _record_audit(user_id, "suite.update" if suite_id else "suite.create", suite.id, "suite")
         db.session.commit()
         return suite
 
-    def delete_suite(self, user_id: int, suite_id: str, data: dict) -> None:
-        suite = self._suite(suite_id, lock=True)
-        self._check_revision(suite, data.get("revision"))
+    def delete(self, user_id: int, suite_id: str, data: dict) -> None:
+        suite = self.get(suite_id, lock=True)
+        self.check_revision(suite, data.get("revision"))
         db.session.delete(suite)
-        self._audit(user_id, "suite.delete", suite_id, "suite")
+        _record_audit(user_id, "suite.delete", suite_id, "suite")
         db.session.commit()
+
+    def _question(self, value: object, number: int) -> dict:
+        if not isinstance(value, dict):
+            raise ServiceError(f"第 {number} 题无效")
+        quality = value.get("quality", "auto")
+        if quality not in TEST_QUALITIES:
+            raise ServiceError(f"第 {number} 题的质量无效")
+        return {
+            "title": _bounded_text(value.get("title"), 80, f"第 {number} 题的名称"),
+            "prompt": _bounded_text(
+                value.get("prompt"),
+                self.settings.runtime().max_prompt_characters,
+                f"第 {number} 题的提示词",
+            ),
+            "criteria": _bounded_text(
+                value.get("criteria", ""), 500, f"第 {number} 题的评审标准", optional=True
+            ),
+            "size": normalize_image_size(value.get("size") or "auto"),
+            "quality": quality,
+        }
+
+    @staticmethod
+    def check_revision(suite: ImageTestSuite, revision: object) -> None:
+        if type(revision) is not int or revision != suite.revision:
+            raise ServiceError("题组已更新，请刷新后再操作", status_code=409)
+
+
+class ImageTestRunService:
+    def __init__(self, generations: GenerationService, suites: ImageTestSuiteService):
+        self.generations = generations
+        self.suites = suites
+
+    def _run_cases(
+        self, data: dict, retry_of: str | None
+    ) -> tuple[str, list[dict], list[tuple[int, str, str]]]:
+        if retry_of:
+            original = self.get_run(retry_of)
+            jobs = self.jobs(retry_of)
+            if any(job.status in ACTIVE_GENERATION_STATUSES for job in jobs):
+                raise ServiceError("请等当前批次结束后重试", status_code=409)
+            cells = [
+                (job.image_test_question_index, job.channel_id, job.model)
+                for job in jobs
+                if job.status in {"failed", "interrupted"}
+            ]
+            if not cells:
+                raise ServiceError("当前批次没有可重试的失败项", status_code=409)
+            return original.suite_name, original.questions, cells
+
+        suite = self.suites.get(_bounded_text(data.get("suite_id"), 32, "题组"))
+        self.suites.check_revision(suite, data.get("suite_revision"))
+        targets = self._targets(data.get("targets"))
+        if len(suite.questions) * len(targets) > MAX_TEST_IMAGES:
+            raise ServiceError(f"单批测评最多生成 {MAX_TEST_IMAGES} 张图")
+        cells = [
+            (index, channel_id, model)
+            for index in range(len(suite.questions))
+            for channel_id, model in targets
+        ]
+        return suite.name, suite.questions, cells
 
     def start(self, user_id: int, data: dict, *, retry_of: str | None = None) -> ImageTestRun:
         request_id = data.get("request_id")
@@ -139,90 +226,79 @@ class ImageTestService:
                 if existing.request_digest != digest:
                     raise ServiceError("测试请求 ID 已用于其他批次", status_code=409)
                 return existing
-            if retry_of:
-                original = self.get_run(retry_of)
-                jobs = self.jobs(retry_of)
-                if any(job.status in ACTIVE_GENERATION_STATUSES for job in jobs):
-                    raise ServiceError("请等当前批次结束后重试", status_code=409)
-                cells = [
-                    (job.image_test_question_index, job.channel_id, job.model)
-                    for job in jobs
-                    if job.status in {"failed", "interrupted"}
-                ]
-                if not cells:
-                    raise ServiceError("当前批次没有可重试的失败项", status_code=409)
-                name, questions = original.suite_name, original.questions
-            else:
-                suite_id = self._text(data.get("suite_id"), 32, "题组")
-                suite = self._suite(suite_id)
-                self._check_revision(suite, data.get("suite_revision"))
-                targets = self._targets(data.get("targets"))
-                if len(suite.questions) * len(targets) > MAX_TEST_IMAGES:
-                    raise ServiceError(f"单批测评最多生成 {MAX_TEST_IMAGES} 张图")
-                name, questions = suite.name, suite.questions
-                cells = [
-                    (index, channel_id, model)
-                    for index in range(len(questions))
-                    for channel_id, model in targets
-                ]
+            suite_name, questions, cells = self._run_cases(data, retry_of)
             run = ImageTestRun(
                 id=run_id,
                 user_id=user_id,
-                suite_name=name,
+                suite_name=suite_name,
                 questions=questions,
                 total_images=len(cells),
                 estimated_rmb=Decimal("0"),
                 request_digest=digest,
                 retry_of=retry_of,
             )
-            workspace = db.session.scalar(
-                select(Workspace).where(
-                    Workspace.user_id == user_id, Workspace.kind == IMAGE_TEST_KIND
-                )
-            )
-            if workspace is None:
-                workspace_id = new_public_id()
-                workspace = Workspace(
-                    id=workspace_id,
-                    user_id=user_id,
-                    name=f"生图测评 {workspace_id}",
-                    kind=IMAGE_TEST_KIND,
-                )
-                db.session.add(workspace)
+            workspace = self._workspace(user_id)
             db.session.add(run)
             db.session.flush()
-            channels = {
+            channels_by_id = {
                 channel.identifier: channel
                 for channel in self.generations.channels.list(include_disabled=False)
                 if channel.configured
             }
-            requests = []
-            for index, channel_id, model in cells:
-                question = questions[index]
-                channel = channels.get(channel_id)
-                if channel is None:
-                    raise ServiceError("生图渠道不存在或未启用")
-                formats = channel.capabilities.formats
-                request = SubmitGeneration(
-                    channel_id=channel_id,
-                    model=model,
-                    mode="text2img",
-                    prompt=question["prompt"],
-                    size=question["size"],
-                    quality=question["quality"],
-                    output_format="png" if "png" in formats else formats[0],
-                    compression=90,
-                    batch_count=1,
-                    reference_ids=(),
-                )
-                requests.append((index, channel, request))
-            run.estimated_rmb = self.generations.stage_image_test_jobs(workspace, run_id, requests)
-            self._audit(user_id, "run.retry" if retry_of else "run.start", run_id, "run")
+            generation_requests = self._generation_requests(cells, questions, channels_by_id)
+            run.estimated_rmb = self.generations.stage_image_test_jobs(
+                workspace, run_id, generation_requests
+            )
+            _record_audit(user_id, "run.retry" if retry_of else "run.start", run_id, "run")
             db.session.commit()
         except Exception:
             db.session.rollback()
             raise
         return run
+
+    @staticmethod
+    def _workspace(user_id: int) -> Workspace:
+        workspace = db.session.scalar(
+            select(Workspace).where(Workspace.user_id == user_id, Workspace.kind == IMAGE_TEST_KIND)
+        )
+        if workspace is None:
+            workspace_id = new_public_id()
+            workspace = Workspace(
+                id=workspace_id,
+                user_id=user_id,
+                name=f"生图测评 {workspace_id}",
+                kind=IMAGE_TEST_KIND,
+            )
+            db.session.add(workspace)
+        return workspace
+
+    @staticmethod
+    def _generation_requests(
+        cells: list[tuple[int, str, str]],
+        questions: list[dict],
+        channels: dict[str, Channel],
+    ) -> list[tuple[int, Channel, SubmitGeneration]]:
+        requests = []
+        for index, channel_id, model in cells:
+            channel = channels.get(channel_id)
+            if channel is None:
+                raise ServiceError("生图渠道不存在或未启用")
+            question = questions[index]
+            formats = channel.capabilities.formats
+            request = SubmitGeneration(
+                channel_id=channel_id,
+                model=model,
+                mode="text2img",
+                prompt=question["prompt"],
+                size=question["size"],
+                quality=question["quality"],
+                output_format="png" if "png" in formats else formats[0],
+                compression=90,
+                batch_count=1,
+                reference_ids=(),
+            )
+            requests.append((index, channel, request))
+        return requests
 
     @staticmethod
     def get_run(run_id: str, *, include_questions: bool = True) -> ImageTestRun:
@@ -284,7 +360,7 @@ class ImageTestService:
         run = self.get_run(run_id)
         try:
             if self.generations.stage_image_test_cancellation(run):
-                self._audit(user_id, "run.cancel", run_id, "run")
+                _record_audit(user_id, "run.cancel", run_id, "run")
             db.session.commit()
         except Exception:
             db.session.rollback()
@@ -307,27 +383,6 @@ class ImageTestService:
         job.image_test_verdict = verdict or None
         db.session.commit()
 
-    def _question(self, value: object, number: int) -> dict:
-        if not isinstance(value, dict):
-            raise ServiceError(f"第 {number} 题无效")
-        quality = value.get("quality", "auto")
-        if quality not in TEST_QUALITIES:
-            raise ServiceError(f"第 {number} 题的质量无效")
-        size = normalize_image_size(value.get("size") or "auto")
-        return {
-            "title": self._text(value.get("title"), 80, f"第 {number} 题的名称"),
-            "prompt": self._text(
-                value.get("prompt"),
-                self.generations.settings.runtime().max_prompt_characters,
-                f"第 {number} 题的提示词",
-            ),
-            "criteria": self._text(
-                value.get("criteria", ""), 500, f"第 {number} 题的评审标准", optional=True
-            ),
-            "size": size,
-            "quality": quality,
-        }
-
     def _targets(self, value: object) -> list[tuple[str, str]]:
         if not isinstance(value, list) or not 1 <= len(value) <= MAX_TEST_IMAGES:
             raise ServiceError("请选择要测试的渠道模型")
@@ -337,37 +392,8 @@ class ImageTestService:
                 raise ServiceError("渠道模型选项无效")
             targets.append(
                 (
-                    self._text(target.get("channel_id"), 64, "渠道 ID"),
-                    self._text(target.get("model"), 100, "模型 ID"),
+                    _bounded_text(target.get("channel_id"), 64, "渠道 ID"),
+                    _bounded_text(target.get("model"), 100, "模型 ID"),
                 )
             )
         return list(dict.fromkeys(targets))
-
-    @staticmethod
-    def _text(value: object, limit: int, label: str, *, optional: bool = False) -> str:
-        if not isinstance(value, str) or "\x00" in value:
-            raise ServiceError(f"{label}必须是有效文本")
-        text = value.strip()
-        if len(text) > limit or (not text and not optional):
-            raise ServiceError(f"{label}长度无效，最多 {limit} 个字符")
-        try:
-            text.encode("utf-8")
-        except UnicodeEncodeError as exc:
-            raise ServiceError(f"{label}必须是有效文本") from exc
-        return text
-
-    @staticmethod
-    def _check_revision(suite: ImageTestSuite, revision: object) -> None:
-        if type(revision) is not int or revision != suite.revision:
-            raise ServiceError("题组已更新，请刷新后再操作", status_code=409)
-
-    @staticmethod
-    def _audit(user_id: int, action: str, target_id: str, kind: str) -> None:
-        db.session.add(
-            AuditLog(
-                actor_user_id=user_id,
-                action=f"image_test.{action}",
-                target_type=f"image_test_{kind}",
-                target_id=target_id,
-            )
-        )
