@@ -84,8 +84,21 @@ def accessible_item(item_id: str) -> GenerationItem:
     return item
 
 
-def json_body() -> dict[str, Any]:
-    data = request.get_json(silent=True)
+def json_body(*, max_bytes: int | None = None) -> dict[str, Any]:
+    if max_bytes is not None and request.is_json:
+        content = request.stream.read(max_bytes + 1)
+        if len(content) > max_bytes:
+            raise ServiceError(
+                f"请求内容超过 {max_bytes // 1024} KiB 限制",
+                code="payload_too_large",
+                status_code=413,
+            )
+        try:
+            data = current_app.json.loads(content)
+        except (ValueError, RecursionError):
+            data = None
+    else:
+        data = request.get_json(silent=True)
     if not isinstance(data, dict):
         raise ServiceError("请求内容必须是 JSON")
     return data

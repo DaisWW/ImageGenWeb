@@ -4,7 +4,7 @@ import hashlib
 import json
 from dataclasses import asdict
 
-from sqlalchemy import and_, select
+from sqlalchemy import ColumnElement, and_, select
 from sqlalchemy.orm import defer, joinedload
 
 from ..errors import ServiceError
@@ -27,28 +27,20 @@ class GenerationApiService:
         ).hexdigest()
         user = self.keys.lock_active_owner(key)
 
-        existing = db.session.execute(
-            select(
-                GenerationJob.id, GenerationJob.workspace_id, GenerationJob.api_request_digest
-            ).where(
-                GenerationJob.user_id == user.id,
-                GenerationJob.api_request_id == request_id,
-            )
-        ).one_or_none()
+        existing = _read_job(
+            GenerationJob.user_id == user.id,
+            GenerationJob.api_request_id == request_id,
+        )
         if existing is not None:
-            if existing.workspace_id != key.workspace_id:
-                raise ServiceError(
-                    "此请求 ID 已在另一个工作站提交",
-                    code="idempotency_conflict",
-                    status_code=409,
-                )
-            if existing.api_request_digest != digest:
-                raise ServiceError(
-                    "此请求 ID 已用于其他生成参数",
-                    code="idempotency_conflict",
-                    status_code=409,
-                )
-            return self.get_job(key, existing.id), False
+            same_workspace = existing.workspace_id == key.workspace_id
+            if same_workspace and existing.api_request_digest == digest:
+                return existing, False
+            message = (
+                "此请求 ID 已用于其他生成参数"
+                if same_workspace
+                else "此请求 ID 已在另一个工作站提交"
+            )
+            raise ServiceError(message, code="idempotency_conflict", status_code=409)
 
         job = self.generations.submit(
             user.id,
@@ -60,18 +52,7 @@ class GenerationApiService:
         return self.get_job(key, job.id), True
 
     def get_job(self, key: GenerationApiKey, job_id: str) -> GenerationJob:
-        job = (
-            db.session.execute(
-                select(GenerationJob)
-                .options(
-                    defer(GenerationJob.prompt),
-                    joinedload(GenerationJob.items).defer(GenerationItem.prompt),
-                )
-                .where(*self._job_scope(key, job_id))
-            )
-            .unique()
-            .scalar_one_or_none()
-        )
+        job = _read_job(*self._job_scope(key, job_id))
         if job is None:
             raise ServiceError("生成任务不存在", code="generation_not_found", status_code=404)
         return job
@@ -97,10 +78,22 @@ class GenerationApiService:
         return image.output_path, image.output_mime_type
 
     @staticmethod
-    def _job_scope(key: GenerationApiKey, job_id: str):
+    def _job_scope(key: GenerationApiKey, job_id: str) -> tuple[ColumnElement[bool], ...]:
         return (
             GenerationJob.id == job_id,
             GenerationJob.user_id == key.user_id,
             GenerationJob.workspace_id == key.workspace_id,
             GenerationJob.api_request_id.is_not(None),
         )
+
+
+def _read_job(*conditions: ColumnElement[bool]) -> GenerationJob | None:
+    query = (
+        select(GenerationJob)
+        .options(
+            defer(GenerationJob.prompt),
+            joinedload(GenerationJob.items).defer(GenerationItem.prompt),
+        )
+        .where(*conditions)
+    )
+    return db.session.execute(query).unique().scalar_one_or_none()

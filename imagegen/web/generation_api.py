@@ -7,10 +7,8 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from flask import (
     Blueprint,
-    current_app,
     g,
     jsonify,
-    make_response,
     render_template,
     request,
     send_file,
@@ -130,11 +128,10 @@ def submit():
         "Idempotency-Key 必须是 UUID",
         code="invalid_request_id",
     )
-    generation = _parse_generation(_submission_body())
+    generation = _parse_generation(json_body(max_bytes=MAX_GENERATION_REQUEST_BYTES))
     job, created = services().generation_api.submit(g.generation_api_key, request_id, generation)
-    response = make_response(jsonify(job=_job_payload(job)), 202 if created else 200)
-    response.headers["Location"] = url_for("generation_api.status", job_id=job.id)
-    return response
+    status_url = url_for("generation_api.status", job_id=job.id)
+    return jsonify(job=_job_payload(job)), 202 if created else 200, {"Location": status_url}
 
 
 @api.get("/generations/<job_id>")
@@ -161,10 +158,8 @@ def download(job_id: str, item_id: str):
 
 
 def _uuid_hex(value: object, message: str, *, code: str = "invalid_request") -> str:
-    if not isinstance(value, str):
-        raise ServiceError(message, code=code)
     try:
-        return UUID(value).hex
+        return UUID(value if isinstance(value, str) else "").hex
     except ValueError as exc:
         raise ServiceError(message, code=code) from exc
 
@@ -206,21 +201,6 @@ def _parse_generation(data: dict) -> SubmitGeneration:
         compression=compression,
         reference_ids=(),
     )
-
-
-def _submission_body() -> dict:
-    if not request.is_json:
-        raise ServiceError("请求内容必须是 JSON")
-    content = request.stream.read(MAX_GENERATION_REQUEST_BYTES + 1)
-    if len(content) > MAX_GENERATION_REQUEST_BYTES:
-        raise ServiceError("生图请求超过 192 KiB 限制", code="payload_too_large", status_code=413)
-    try:
-        data = current_app.json.loads(content)
-    except (ValueError, RecursionError) as exc:
-        raise ServiceError("请求内容必须是 JSON") from exc
-    if not isinstance(data, dict):
-        raise ServiceError("请求内容必须是 JSON")
-    return data
 
 
 def _job_payload(job: GenerationJob) -> dict:
