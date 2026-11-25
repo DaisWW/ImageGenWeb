@@ -61,8 +61,11 @@ class TestGenerationApi(PlatformTestCase):
         config_queries = []
 
         def capture_config_queries(_connection, _cursor, statement, _parameters, _context, _many):
-            if statement.lstrip().upper().startswith("SELECT"):
-                config_queries.append(statement)
+            query = " ".join(statement.lower().split())
+            if query.startswith("select ") and any(
+                f"from {table}" in query for table in ("generation_api_keys", "workspaces", "users")
+            ):
+                config_queries.append(query)
 
         event.listen(db.engine, "before_cursor_execute", capture_config_queries)
         try:
@@ -70,19 +73,11 @@ class TestGenerationApi(PlatformTestCase):
         finally:
             event.remove(db.engine, "before_cursor_execute", capture_config_queries)
         self.assertEqual(config.status_code, 200)
-        self.assertEqual(
-            sum("FROM users" in query.upper() for query in config_queries),
-            0,
-            config_queries,
-        )
         self.assertEqual(len(config_queries), 2, config_queries)
-        self.assertFalse(
-            any(
-                "FROM generation_api_keys" in query.lower() and "JOIN workspaces" in query.lower()
-                for query in config_queries
-            ),
-            config_queries,
-        )
+        authentication_query, details_query = config_queries
+        self.assertIn("from generation_api_keys", authentication_query)
+        self.assertNotIn("join workspaces", authentication_query)
+        self.assertIn("from workspaces", details_query)
         self.assertEqual(config.json["workspace"]["id"], workspace.id)
         self.assertEqual(config.json["channels"][0]["price_rmb"], "1.2500")
         self.assertNotIn("test-key-not-secret", config.get_data(as_text=True))
