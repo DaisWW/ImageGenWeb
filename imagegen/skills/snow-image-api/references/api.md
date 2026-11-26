@@ -1,6 +1,8 @@
 # Snow AI Studio 个人生图 API
 
-在网页顶部打开 **API**，点击 **开通并生成密钥**。把页面显示的站点地址配置为 `SNOW_IMAGE_API_URL`，把本次生成的密钥配置为 `SNOW_IMAGE_API_KEY`。配置后，客户端可独立提交任务、查询进度和下载原图。连接时使用该站点的 HTTPS 地址（本机调试可用 HTTP）。每个账号有一把有效密钥，更换或关闭会立即撤销旧密钥。
+从 HTTPS 站点打开 **生图 API**，生成密钥后点击 **下载免配置 Skill**。解压 `snow-image-api-configured.zip` 并安装完整目录即可调用。免配置包携带该账号的密钥，只通过公司内部渠道分发。更换或关闭密钥会使旧包失效。
+
+通用包需要将页面显示的站点地址和生成的密钥分别配置为 `SNOW_IMAGE_API_URL` 和 `SNOW_IMAGE_API_KEY`。这两个环境变量须一起设置，可以覆盖包内配置。本机调试可用 HTTP。
 
 下载并解压 **AI Skill**，把整个 `snow-image-api` 目录放入 AI 工具的 Skills 目录，或直接让 AI 读取目录中的 `SKILL.md`。内置脚本使用 Python 3.10 及以上版本的标准库。
 

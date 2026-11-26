@@ -117,15 +117,27 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> int:
-    parser = build_parser()
-    args = parser.parse_args()
-
-    base_url = os.environ.get("SNOW_IMAGE_API_URL", "").strip().rstrip("/")
+def load_connection() -> tuple[str, str]:
+    base_url = os.environ.get("SNOW_IMAGE_API_URL", "").strip()
     api_key = os.environ.get("SNOW_IMAGE_API_KEY", "").strip()
+    if not base_url and not api_key:
+        config_path = Path(__file__).resolve().parents[1] / "connection.json"
+        try:
+            connection = json.loads(config_path.read_text(encoding="utf-8"))
+            base_url = connection["base_url"].strip()
+            api_key = connection["api_key"].strip()
+        except FileNotFoundError:
+            pass
+        except (AttributeError, KeyError, OSError, TypeError, ValueError):
+            raise ValueError("Invalid Skill connection.json.") from None
     if not base_url or not api_key:
-        parser.error("Set SNOW_IMAGE_API_URL and SNOW_IMAGE_API_KEY in the environment.")
-    address = urlsplit(base_url)
+        raise ValueError(
+            "Install a configured Skill or set both SNOW_IMAGE_API_URL and SNOW_IMAGE_API_KEY."
+        )
+    try:
+        address = urlsplit(base_url)
+    except ValueError:
+        raise ValueError("The site URL must be a valid HTTP(S) URL.") from None
     if (
         address.scheme not in {"http", "https"}
         or not address.hostname
@@ -133,7 +145,17 @@ def main() -> int:
         or address.query
         or address.fragment
     ):
-        parser.error("SNOW_IMAGE_API_URL must be an HTTP(S) site URL.")
+        raise ValueError("The site URL must be a valid HTTP(S) URL.")
+    return base_url.rstrip("/"), api_key
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    try:
+        base_url, api_key = load_connection()
+    except ValueError as error:
+        parser.error(str(error))
     client = GenerationApiClient(base_url, api_key)
 
     try:

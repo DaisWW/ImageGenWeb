@@ -5,7 +5,7 @@ description: Generate images from text through the user's Snow AI Studio API. Us
 
 # Snow AI Studio 生图
 
-使用用户在「生图 API」页面开通的个人密钥。运行环境需要站点地址 `SNOW_IMAGE_API_URL` 和密钥 `SNOW_IMAGE_API_KEY`。如缺少配置，引导用户在该页面获取值并设置到运行环境。密钥只用于请求头，避免放入对话、请求文件、命令参数和输出。
+免配置包自带连接信息，安装完整目录后直接运行脚本。通用包使用环境变量 `SNOW_IMAGE_API_URL` 和 `SNOW_IMAGE_API_KEY`，可在「生图 API」页面获取。脚本读取密钥并用于请求头，避免在对话、请求模板、命令参数和输出中显示密钥。
 
 1. 运行 `python scripts/generate.py config` 查渠道、模型、每张价格、可用余额和张数上限。按用户指定的渠道或模型选择，未指定时可从支持需求的渠道中选择价格最低的一个。
 2. 按 [JSON 模板](references/request.json) 创建 UTF-8 请求文件。填写具体的 `channel_id` 和最终 `prompt`，保留用户要求的画幅、张数和精确文字。用户未指定张数时生成一张。

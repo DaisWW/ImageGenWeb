@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
+import os
 import re
+import subprocess
+import sys
 import unittest
 from decimal import Decimal
 from http.client import HTTPResponse
@@ -8,11 +12,13 @@ from io import BytesIO
 from pathlib import Path
 from runpy import run_path
 from tempfile import TemporaryDirectory
+from threading import Thread
 from unittest.mock import Mock, patch
 from uuid import uuid4
 from zipfile import ZipFile
 
 from sqlalchemy import event, select
+from werkzeug.serving import make_server
 
 from imagegen.extensions import db
 from imagegen.models import GENERATION_API_WORKSPACE_KIND, GenerationJob, User, Workspace
@@ -102,6 +108,87 @@ class TestGenerationApi(PlatformTestCase):
                     "snow-image-api/scripts/generate.py",
                 },
             )
+
+    def test_configured_skill_download_checks_transport_csrf_and_key_owner(self):
+        url = "/account/generation-api/skill"
+        site = "https://studio.example.test"
+        client = self.app.test_client()
+        token = self.services.generation_api_keys.issue_key(self.user.id)
+        other_token = self.services.generation_api_keys.issue_key(self.admin.id)
+        self.assertEqual(client.post(url, base_url=site).status_code, 302)
+        self.assertEqual(
+            client.post(
+                "/login",
+                base_url=site,
+                data={"username": self.user.username, "password": "StrongPass123!"},
+            ).status_code,
+            302,
+        )
+        self.assertEqual(
+            client.post(
+                url, base_url="http://studio.example.test", data={"api_key": token}
+            ).status_code,
+            400,
+        )
+        self.app.config["WTF_CSRF_ENABLED"] = True
+        self.assertEqual(client.post(url, base_url=site).json["code"], "csrf_error")
+        page = client.get("/account/generation-api", base_url=site).get_data(as_text=True)
+        csrf_token = re.search(r'name="csrf-token" content="([^"]+)"', page).group(1)
+        headers = {
+            "X-CSRFToken": csrf_token,
+            "Referer": f"{site}/account/generation-api",
+        }
+        self.assertEqual(
+            client.post(
+                url, base_url=site, headers=headers, data={"api_key": other_token}
+            ).status_code,
+            403,
+        )
+        bundle = client.post(url, base_url=site, headers=headers, data={"api_key": token})
+        self.assertEqual(bundle.status_code, 200)
+        self.assertTrue(bundle.cache_control.no_store)
+        with ZipFile(BytesIO(bundle.data)) as archive:
+            self.assertEqual(
+                json.loads(archive.read("snow-image-api/connection.json")),
+                {"base_url": site, "api_key": token},
+            )
+            self.assertNotIn(token.encode(), archive.read("snow-image-api/SKILL.md"))
+
+    def test_downloaded_skill_connects_without_environment_variables(self):
+        client = self.user_client()
+        token = self.services.generation_api_keys.issue_key(self.user.id)
+        with make_server("127.0.0.1", 0, self.app) as server:
+            server_thread = Thread(target=server.serve_forever, daemon=True)
+            server_thread.start()
+            try:
+                bundle = client.post(
+                    "/account/generation-api/skill",
+                    base_url=f"http://localhost:{server.server_port}",
+                    data={"api_key": token},
+                )
+                self.assertEqual(bundle.status_code, 200)
+                with TemporaryDirectory() as directory:
+                    with ZipFile(BytesIO(bundle.data)) as archive:
+                        archive.extractall(directory)
+                    script = Path(directory) / "snow-image-api/scripts/generate.py"
+                    env = os.environ.copy()
+                    env.pop("SNOW_IMAGE_API_URL", None)
+                    env.pop("SNOW_IMAGE_API_KEY", None)
+                    env["NO_PROXY"] = "localhost"
+                    result = subprocess.run(
+                        [sys.executable, str(script), "config"],
+                        cwd=directory,
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                        timeout=15,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(json.loads(result.stdout)["available_balance_rmb"], "20.0000")
+                    self.assertNotIn(token, result.stdout + result.stderr)
+            finally:
+                server.shutdown()
+                server_thread.join()
 
     def test_bearer_submission_replays_once_and_downloads_the_worker_result(self):
         account = self.user_client()

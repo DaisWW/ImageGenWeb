@@ -16,7 +16,7 @@
 
 登录后，从页面顶部的 **API** 开通个人密钥。每个账号有一把有效密钥，可在同一页面更换或关闭。客户端凭站点地址和密钥直接提交文生图任务，结果通过 API 下载，费用从该账号余额结算。
 
-页面可下载 AI Skill，其中包含调用脚本、请求模板及接口说明。为 AI 的运行环境设置 `SNOW_IMAGE_API_URL` 和 `SNOW_IMAGE_API_KEY` 后，即可提交任务、查询进度和下载原图。 [接口说明](imagegen/skills/snow-image-api/references/api.md)
+从 HTTPS 站点生成密钥后，可下载免配置 AI Skill。公司内部可共用一份专用账号生成的免配置包，安装完整目录即可调用，费用统一从该账号结算。通用包通过 `SNOW_IMAGE_API_URL` 和 `SNOW_IMAGE_API_KEY` 设置连接信息。 [接口说明](imagegen/skills/snow-image-api/references/api.md)
 
 ## AI 创作工作流
 

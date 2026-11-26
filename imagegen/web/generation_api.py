@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import UUID
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -39,6 +41,7 @@ def generation_api_page():
         "pages/generation-api.html",
         key_enabled=key is not None,
         base_url=request.url_root.rstrip("/"),
+        can_package_key=_can_package_key(),
     )
 
 
@@ -57,9 +60,27 @@ def generation_api_key():
     return response
 
 
-@web.get("/account/generation-api/skill")
+def _can_package_key() -> bool:
+    return request.is_secure or urlsplit(request.url_root).hostname in {
+        "localhost",
+        "127.0.0.1",
+        "::1",
+    }
+
+
+@web.route("/account/generation-api/skill", methods=["GET", "POST"])
 @login_required
 def generation_api_skill():
+    connection = None
+    if request.method == "POST":
+        if not _can_package_key():
+            raise ServiceError("请通过 HTTPS 下载免配置 Skill")
+        token = request.form.get("api_key", "")
+        key, _ = services().generation_api_keys.authenticate(token)
+        if key.user_id != current_user.id:
+            raise ServiceError("只能打包当前账号的密钥", status_code=403)
+        connection = {"base_url": request.url_root.rstrip("/"), "api_key": token}
+
     bundle = BytesIO()
     with ZipFile(bundle, "w", compression=ZIP_DEFLATED) as archive:
         for entry in (
@@ -69,13 +90,19 @@ def generation_api_skill():
             "scripts/generate.py",
         ):
             archive.write(SKILL_DIR / entry, f"{SKILL_DIR.name}/{entry}")
+        if connection is not None:
+            archive.writestr(f"{SKILL_DIR.name}/connection.json", json.dumps(connection))
     bundle.seek(0)
-    return send_file(
+    suffix = "-configured" if connection is not None else ""
+    response = send_file(
         bundle,
         mimetype="application/zip",
         as_attachment=True,
-        download_name=f"{SKILL_DIR.name}.zip",
+        download_name=f"{SKILL_DIR.name}{suffix}.zip",
     )
+    if connection is not None:
+        response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 @api.before_request
