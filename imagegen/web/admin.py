@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from ..errors import ServiceError
 from ..extensions import db
-from ..models import IMAGE_TEST_KIND, User, Workspace
+from ..models import INTERNAL_WORKSPACE_KINDS, User, Workspace
 from ..serializers import job_dict, user_dict
 from ..services import SpendingSummary
 from ..services.runtime_logs import audit_log_dict, runtime_log_dict
@@ -140,7 +140,7 @@ def admin_generation_filters():
     workspaces = list(
         db.session.scalars(
             select(Workspace)
-            .where(Workspace.kind != IMAGE_TEST_KIND)
+            .where(Workspace.kind.not_in(INTERNAL_WORKSPACE_KINDS))
             .order_by(Workspace.updated_at.desc())
         )
     )

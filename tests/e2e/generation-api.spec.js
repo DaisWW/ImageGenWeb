@@ -4,6 +4,7 @@ test("users can enable the generation API and download its skill", { tag: "@resp
   await loginAsAdmin(page);
   await page.getByRole("link", { name: "生图 API", exact: true }).click();
   await expect(page.getByRole("heading", { name: "生图 API" })).toBeVisible();
+  await expect(page.getByLabel("结果工作站")).toHaveCount(0);
   await expect(page.locator("#generationApiStatus")).toHaveText("未开通");
 
   await page.getByRole("button", { name: "开通并生成密钥" }).click();
@@ -13,7 +14,7 @@ test("users can enable the generation API and download its skill", { tag: "@resp
   const headers = { Authorization: "Bearer " + await token.inputValue() };
   const config = await page.request.get("/api/v1/config", { headers });
   expect(config.ok()).toBeTruthy();
-  expect((await config.json()).workspace.id).toBe(await page.getByLabel("结果工作站").inputValue());
+  expect((await config.json()).channels).toBeInstanceOf(Array);
 
   const downloaded = page.waitForEvent("download");
   await page.getByRole("link", { name: "下载 AI Skill" }).click();

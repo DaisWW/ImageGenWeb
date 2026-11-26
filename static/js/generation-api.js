@@ -6,7 +6,6 @@
 
   const { api, toast } = window.ImageGen;
   const submit = form.querySelector('[type="submit"]');
-  const workspace = form.elements.workspace_id;
   const revoke = document.getElementById("revokeGenerationApi");
   const status = document.getElementById("generationApiStatus");
   const rotationNote = document.getElementById("generationApiRotationNote");
@@ -23,25 +22,23 @@
     secret.hidden = !value;
   }
 
-  async function changeKey(method, body) {
+  async function changeKey(method) {
     submit.disabled = true;
     revoke.disabled = true;
-    workspace.disabled = true;
     try {
-      const payload = await api(form.action, { method, body });
+      const payload = await api(form.action, { method });
       updateKey(method === "POST", payload?.api_key);
     } catch (error) {
       toast(error.message, "error");
     } finally {
       submit.disabled = false;
       revoke.disabled = false;
-      workspace.disabled = false;
     }
   }
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    changeKey("POST", { workspace_id: workspace.value });
+    changeKey("POST");
   });
   revoke.addEventListener("click", () => changeKey("DELETE"));
 

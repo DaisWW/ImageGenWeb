@@ -5,7 +5,16 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from flask_login import UserMixin
-from sqlalchemy import CheckConstraint, ForeignKey, Index, Numeric, UniqueConstraint, func, text
+from sqlalchemy import (
+    CheckConstraint,
+    ColumnElement,
+    ForeignKey,
+    Index,
+    Numeric,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -17,6 +26,8 @@ MONEY_TYPE = Numeric(14, 4)
 JSON_TYPE = JSON().with_variant(JSONB(), "postgresql")
 JSON_LIST_TYPE = JSON().with_variant(JSONB(), "postgresql")
 IMAGE_TEST_KIND = "image_test"
+GENERATION_API_WORKSPACE_KIND = "generation_api"
+INTERNAL_WORKSPACE_KINDS = (IMAGE_TEST_KIND, GENERATION_API_WORKSPACE_KIND)
 
 
 def utcnow() -> datetime:
@@ -102,6 +113,10 @@ class Workspace(TimestampMixin, db.Model):
         uselist=False,
     )
 
+    @property
+    def generation_kind(self) -> str:
+        return "image" if self.kind == GENERATION_API_WORKSPACE_KIND else self.kind
+
 
 class GenerationApiKey(db.Model):
     __tablename__ = "generation_api_keys"
@@ -110,13 +125,8 @@ class GenerationApiKey(db.Model):
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
     )
-    workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
-    )
     token_digest: Mapped[str] = mapped_column(db.String(64))
-
-    user: Mapped[User] = relationship()
-    workspace: Mapped[Workspace] = relationship()
+    legacy_workspace_id: Mapped[str | None] = mapped_column(db.String(32), deferred=True)
 
 
 class ConversationMessage(db.Model):
@@ -324,6 +334,10 @@ class GenerationJob(TimestampMixin, db.Model):
     items: Mapped[list[GenerationItem]] = relationship(
         back_populates="job", cascade="all, delete-orphan", order_by="GenerationItem.position"
     )
+
+    @classmethod
+    def in_interactive_workspace(cls) -> ColumnElement[bool]:
+        return cls.workspace.has(Workspace.kind.not_in(INTERNAL_WORKSPACE_KINDS))
 
 
 class GenerationReference(db.Model):

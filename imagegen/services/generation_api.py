@@ -9,7 +9,14 @@ from sqlalchemy.orm import defer, joinedload
 
 from ..errors import ServiceError
 from ..extensions import db
-from ..models import GenerationApiKey, GenerationItem, GenerationJob
+from ..models import (
+    GENERATION_API_WORKSPACE_KIND,
+    GenerationApiKey,
+    GenerationItem,
+    GenerationJob,
+    Workspace,
+    new_public_id,
+)
 from .generation_api_keys import GenerationApiKeyService
 from .generations import GenerationService, SubmitGeneration
 
@@ -32,24 +39,24 @@ class GenerationApiService:
             GenerationJob.api_request_id == request_id,
         )
         if existing is not None:
-            same_workspace = existing.workspace_id == key.workspace_id
-            if same_workspace and existing.api_request_digest == digest:
+            if existing.api_request_digest == digest:
                 return existing, False
-            message = (
-                "此请求 ID 已用于其他生成参数"
-                if same_workspace
-                else "此请求 ID 已在另一个工作站提交"
+            raise ServiceError(
+                "此请求 ID 已用于其他生成参数", code="idempotency_conflict", status_code=409
             )
-            raise ServiceError(message, code="idempotency_conflict", status_code=409)
 
-        job = self.generations.submit(
-            user.id,
-            key.workspace,
-            request,
-            api_request_id=request_id,
-            api_request_digest=digest,
-        )
-        return self.get_job(key, job.id), True
+        try:
+            job = self.generations.submit(
+                user.id,
+                _get_or_create_api_workspace(user.id),
+                request,
+                api_request_id=request_id,
+                api_request_digest=digest,
+            )
+        except Exception:
+            db.session.rollback()
+            raise
+        return job, True
 
     def get_job(self, key: GenerationApiKey, job_id: str) -> GenerationJob:
         job = _read_job(*self._job_scope(key, job_id))
@@ -82,9 +89,27 @@ class GenerationApiService:
         return (
             GenerationJob.id == job_id,
             GenerationJob.user_id == key.user_id,
-            GenerationJob.workspace_id == key.workspace_id,
             GenerationJob.api_request_id.is_not(None),
         )
+
+
+def _get_or_create_api_workspace(user_id: int) -> Workspace:
+    # The caller holds the account lock until the workspace and job are committed.
+    workspace = db.session.scalar(
+        select(Workspace).where(
+            Workspace.user_id == user_id, Workspace.kind == GENERATION_API_WORKSPACE_KIND
+        )
+    )
+    if workspace is None:
+        workspace_id = new_public_id()
+        workspace = Workspace(
+            id=workspace_id,
+            user_id=user_id,
+            name=f"生图 API {workspace_id}",
+            kind=GENERATION_API_WORKSPACE_KIND,
+        )
+        db.session.add(workspace)
+    return workspace
 
 
 def _read_job(*conditions: ColumnElement[bool]) -> GenerationJob | None:

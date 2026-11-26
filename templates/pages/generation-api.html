@@ -18,26 +18,14 @@
         <h2>访问密钥</h2>
         <span id="generationApiStatus" role="status" data-enabled="{{ 'true' if key_enabled else 'false' }}">{{ '已开通' if key_enabled else '未开通' }}</span>
       </div>
-      <p>API 任务使用当前账号的余额，生成结果保存在选定的工作站。</p>
-      {% if workspaces %}
+      <p>个人密钥可从任意支持 HTTP 的客户端提交文生图任务。任务按当前账号余额结算。</p>
       <form id="generationApiForm" action="{{ url_for('web.generation_api_key') }}" method="post" autocomplete="off">
-        <label class="field">
-          <span>结果工作站</span>
-          <select name="workspace_id" required>
-            {% for workspace in workspaces %}
-            <option value="{{ workspace.id }}"{% if workspace.id == key_workspace_id %} selected{% endif %}>{{ workspace.name }}</option>
-            {% endfor %}
-          </select>
-        </label>
         <div class="generation-api-actions">
           <button class="button primary" type="submit">{{ '更换密钥' if key_enabled else '开通并生成密钥' }}</button>
           <button class="button secondary" type="button" id="revokeGenerationApi"{% if not key_enabled %} hidden{% endif %}>关闭 API</button>
         </div>
       </form>
-      <p id="generationApiRotationNote"{% if not key_enabled %} hidden{% endif %}>更换或关闭后，旧密钥立即失效。更换时可重新选择结果工作站。</p>
-      {% else %}
-      <p>请先在工作台创建一个工作站。</p>
-      {% endif %}
+      <p id="generationApiRotationNote"{% if not key_enabled %} hidden{% endif %}>更换或关闭后，旧密钥立即失效。</p>
       <div class="generation-api-secret" id="generationApiSecret" hidden>
         <label class="field">
           <span>新密钥仅显示一次，请妥善保存</span>

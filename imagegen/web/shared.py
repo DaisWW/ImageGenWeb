@@ -12,7 +12,13 @@ from ..config import ChannelRegistry, ChatModelRegistry, MattingModelRegistry
 from ..container import ApplicationServices
 from ..errors import ServiceError
 from ..extensions import db
-from ..models import IMAGE_TEST_KIND, GenerationItem, GenerationJob, Workspace
+from ..models import (
+    IMAGE_TEST_KIND,
+    INTERNAL_WORKSPACE_KINDS,
+    GenerationItem,
+    GenerationJob,
+    Workspace,
+)
 from ..serializers import workspace_dict
 from ..storage import ImageStorage
 from ..validation import as_bool
@@ -62,7 +68,7 @@ def owned_workspace(workspace_id: str) -> Workspace:
         .where(
             Workspace.id == workspace_id,
             Workspace.user_id == current_user.id,
-            Workspace.kind != IMAGE_TEST_KIND,
+            Workspace.kind.not_in(INTERNAL_WORKSPACE_KINDS),
         )
     )
     if workspace is None:
@@ -85,7 +91,10 @@ def accessible_item(item_id: str, *, image_test: bool = False) -> GenerationItem
         .where(GenerationItem.id == item_id, kind_filter)
     )
     if not current_user.is_admin:
-        query = query.where(GenerationItem.user_id == current_user.id)
+        query = query.where(
+            GenerationItem.user_id == current_user.id,
+            GenerationJob.in_interactive_workspace(),
+        )
     item = db.session.scalar(query)
     if item is None:
         abort(404)

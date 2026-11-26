@@ -25,6 +25,93 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class TestMigrationCompatibility(unittest.TestCase):
+    def test_generation_api_keys_survive_workspace_removal_and_downgrade(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "generation-api.sqlite"
+            database_url = f"sqlite:///{database_path.as_posix()}"
+            config = Config(str(PROJECT_ROOT / "alembic.ini"))
+            config.set_main_option("script_location", str(PROJECT_ROOT / "migrations"))
+            engine = create_engine(database_url)
+            try:
+                with patch.dict(os.environ, {"DATABASE_URL": database_url}):
+                    command.upgrade(config, "53e1c8d409af")
+                    with engine.begin() as connection:
+                        connection.execute(
+                            User.__table__.insert(),
+                            [
+                                {"id": 1, "username": "legacy", "password_hash": "fixture"},
+                                {"id": 2, "username": "new-account", "password_hash": "fixture"},
+                                {"id": 3, "username": "keep-binding", "password_hash": "fixture"},
+                            ],
+                        )
+                        connection.execute(
+                            Workspace.__table__.insert(),
+                            [
+                                {"id": "legacy", "user_id": 1, "name": "旧工作站"},
+                                {"id": "original", "user_id": 3, "name": "原绑定工作站"},
+                            ],
+                        )
+                        connection.execute(
+                            text(
+                                "INSERT INTO generation_api_keys (user_id, workspace_id, token_digest) "
+                                "VALUES (1, 'legacy', 'legacy-digest'), "
+                                "(3, 'original', 'preserved-digest')"
+                            )
+                        )
+
+                    command.upgrade(config, "head")
+                    command.check(config)
+                    with engine.begin() as connection:
+                        connection.execute(text("DELETE FROM workspaces WHERE id = 'legacy'"))
+                        self.assertEqual(
+                            connection.scalar(
+                                text(
+                                    "SELECT token_digest FROM generation_api_keys WHERE user_id = 1"
+                                )
+                            ),
+                            "legacy-digest",
+                        )
+                        connection.execute(
+                            Workspace.__table__.insert(),
+                            [
+                                {
+                                    "id": "internal",
+                                    "user_id": 1,
+                                    "name": "生图 API",
+                                    "kind": "generation_api",
+                                },
+                                {
+                                    "id": "other-archive",
+                                    "user_id": 3,
+                                    "name": "原账号的 API 归档",
+                                    "kind": "generation_api",
+                                },
+                            ],
+                        )
+                        connection.execute(
+                            text(
+                                "INSERT INTO generation_api_keys (user_id, token_digest) "
+                                "VALUES (2, 'new-digest')"
+                            )
+                        )
+
+                    command.downgrade(config, "53e1c8d409af")
+                    with engine.connect() as connection:
+                        keys = connection.execute(
+                            text(
+                                "SELECT k.user_id, k.token_digest, w.kind, w.id "
+                                "FROM generation_api_keys k JOIN workspaces w ON w.id = k.workspace_id "
+                                "ORDER BY k.user_id"
+                            )
+                        ).all()
+                    self.assertEqual(keys[0], (1, "legacy-digest", "image", "internal"))
+                    self.assertEqual(keys[1][:3], (2, "new-digest", "image"))
+                    self.assertEqual(keys[2], (3, "preserved-digest", "image", "original"))
+                    command.upgrade(config, "head")
+                    command.check(config)
+            finally:
+                engine.dispose()
+
     def test_image_test_downgrade_stops_unfinished_and_retryable_jobs(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             database_path = Path(temporary_directory) / "image-tests.sqlite"

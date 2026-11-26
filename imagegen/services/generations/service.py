@@ -71,7 +71,7 @@ class GenerationService:
         generation_mask = self.masks.validate(request.mask, references)
         routing_channels, selected_model, normalized_size = self._resolve_routing(
             request,
-            workspace.kind,
+            workspace.generation_kind,
             references,
         )
         if request.moderation == "low" and not is_gpt_image_2_model(selected_model.identifier):
@@ -213,7 +213,7 @@ class GenerationService:
             channel_id=primary.identifier,
             channel_label=primary.label,
             channel_config_version=channel_version,
-            kind=workspace.kind,
+            kind=workspace.generation_kind,
             mode=request.mode,
             prompt=request.prompt.strip(),
             model=model,
@@ -480,7 +480,10 @@ class GenerationService:
             .where(GenerationJob.id == job_id, GenerationJob.kind != IMAGE_TEST_KIND)
         )
         if not admin:
-            query = query.where(GenerationJob.user_id == user_id)
+            query = query.where(
+                GenerationJob.user_id == user_id,
+                GenerationJob.in_interactive_workspace(),
+            )
         job = db.session.scalar(query)
         if job is None:
             raise ServiceError("生成任务不存在", status_code=404)
@@ -507,6 +510,8 @@ class GenerationService:
         )
         if not admin or user_id is not None:
             query = query.where(GenerationJob.user_id == user_id)
+        if not admin:
+            query = query.where(GenerationJob.in_interactive_workspace())
         if workspace_id:
             query = query.where(GenerationJob.workspace_id == workspace_id)
         cutoff = utcnow() - timedelta(days=self.channels.queue.history_retention_days)
@@ -524,6 +529,7 @@ class GenerationService:
                 .where(
                     GenerationJob.user_id == user_id,
                     GenerationJob.kind != IMAGE_TEST_KIND,
+                    GenerationJob.in_interactive_workspace(),
                     GenerationJob.status.in_(("queued", "running", "canceling", "reconnecting")),
                 )
                 .order_by(GenerationJob.created_at)
@@ -573,11 +579,12 @@ class GenerationService:
         user_id: int | None,
         admin: bool = False,
     ) -> tuple[User, GenerationJob]:
-        visible_job = (GenerationJob.id == job_id, GenerationJob.kind != IMAGE_TEST_KIND)
-        owner_query = select(GenerationJob.user_id).where(*visible_job)
+        visible_job = [GenerationJob.id == job_id, GenerationJob.kind != IMAGE_TEST_KIND]
         if not admin:
-            owner_query = owner_query.where(GenerationJob.user_id == user_id)
-        owner_id = db.session.scalar(owner_query)
+            visible_job.extend(
+                (GenerationJob.user_id == user_id, GenerationJob.in_interactive_workspace())
+            )
+        owner_id = db.session.scalar(select(GenerationJob.user_id).where(*visible_job))
         if owner_id is None:
             raise ServiceError("生成任务不存在", status_code=404)
 
@@ -585,8 +592,6 @@ class GenerationService:
         job_query = (
             select(GenerationJob).options(selectinload(GenerationJob.items)).where(*visible_job)
         )
-        if not admin:
-            job_query = job_query.where(GenerationJob.user_id == user_id)
         job = db.session.scalar(
             job_query.execution_options(populate_existing=True).with_for_update()
         )

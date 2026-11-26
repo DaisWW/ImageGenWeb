@@ -34,13 +34,10 @@ MAX_GENERATION_REQUEST_BYTES = 192 * 1024
 @web.get("/account/generation-api")
 @login_required
 def generation_api_page():
-    application_services = services()
-    key = application_services.generation_api_keys.get_key(current_user.id)
+    key = services().generation_api_keys.get_key(current_user.id)
     return render_template(
         "pages/generation-api.html",
         key_enabled=key is not None,
-        key_workspace_id=key.workspace_id if key else None,
-        workspaces=application_services.workspaces.list(current_user.id),
         base_url=request.url_root.rstrip("/"),
     )
 
@@ -54,8 +51,7 @@ def generation_api_key():
         keys.revoke_key(current_user.id)
         return "", 204
 
-    workspace_id = _uuid_hex(json_body().get("workspace_id"), "请选择工作站")
-    token = keys.issue_key(current_user.id, workspace_id)
+    token = keys.issue_key(current_user.id)
     response = jsonify(api_key=token)
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -86,9 +82,10 @@ def generation_api_skill():
 def authenticate_generation_api():
     authorization = request.authorization
     token = authorization.token if authorization and authorization.type == "bearer" else None
-    key = services().generation_api_keys.authenticate(token or "")
+    key, balance = services().generation_api_keys.authenticate(token or "")
     g.generation_api_key = key
     g.generation_api_user_id = key.user_id
+    g.generation_api_balance = balance
 
 
 @api.after_request
@@ -101,13 +98,10 @@ def generation_api_headers(response):
 
 @api.get("/config")
 def config():
-    key = g.generation_api_key
-    workspace_name, available_balance = services().generation_api_keys.account_details(key)
     runtime = services().settings.runtime()
     registry = channels()
     return jsonify(
-        workspace={"id": key.workspace_id, "name": workspace_name},
-        available_balance_rmb=format(available_balance, ".4f"),
+        available_balance_rmb=format(g.generation_api_balance, ".4f"),
         channels=[
             channel.public_dict()
             for channel in registry.list(include_disabled=False)
@@ -209,7 +203,6 @@ def _job_payload(job: GenerationJob) -> dict:
     return {
         "id": job.id,
         "request_id": job.api_request_id,
-        "workspace_id": job.workspace_id,
         "status": job.status,
         "progress_percent": status["progress_percent"],
         "estimated_end_at": status["estimated_end_at"],

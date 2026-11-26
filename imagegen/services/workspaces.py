@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 from ..errors import ServiceError
 from ..extensions import db
 from ..models import (
-    IMAGE_TEST_KIND,
+    INTERNAL_WORKSPACE_KINDS,
     Asset,
     ConversationAttachment,
     ConversationMessage,
@@ -66,7 +66,9 @@ class WorkspaceService:
             db.session.scalars(
                 select(Workspace)
                 .options(selectinload(Workspace.assets))
-                .where(Workspace.user_id == user_id, Workspace.kind != IMAGE_TEST_KIND)
+                .where(
+                    Workspace.user_id == user_id, Workspace.kind.not_in(INTERNAL_WORKSPACE_KINDS)
+                )
                 .order_by(Workspace.position.asc(), Workspace.updated_at.desc())
             )
         )
@@ -76,7 +78,7 @@ class WorkspaceService:
         count = (
             db.session.scalar(
                 select(func.count(Workspace.id)).where(
-                    Workspace.user_id == user_id, Workspace.kind != IMAGE_TEST_KIND
+                    Workspace.user_id == user_id, Workspace.kind.not_in(INTERNAL_WORKSPACE_KINDS)
                 )
             )
             or 0
@@ -94,7 +96,9 @@ class WorkspaceService:
             raise ServiceError("工作站类型无效")
         self._ensure_name_available(user_id, name)
         minimum_position = db.session.scalar(
-            select(func.min(Workspace.position)).where(Workspace.user_id == user_id)
+            select(func.min(Workspace.position)).where(
+                Workspace.user_id == user_id, Workspace.kind.not_in(INTERNAL_WORKSPACE_KINDS)
+            )
         )
         workspace = Workspace(
             user_id=user_id,
@@ -210,7 +214,7 @@ class WorkspaceService:
         workspaces = list(
             db.session.scalars(
                 select(Workspace).where(
-                    Workspace.user_id == user_id, Workspace.kind != IMAGE_TEST_KIND
+                    Workspace.user_id == user_id, Workspace.kind.not_in(INTERNAL_WORKSPACE_KINDS)
                 )
             )
         )
