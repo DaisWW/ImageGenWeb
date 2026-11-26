@@ -126,6 +126,7 @@ class GenerationApiKey(db.Model):
         ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
     )
     token_digest: Mapped[str] = mapped_column(db.String(64))
+    token_encrypted: Mapped[str | None] = mapped_column(db.Text, deferred=True)
     legacy_workspace_id: Mapped[str | None] = mapped_column(db.String(32), deferred=True)
 
 

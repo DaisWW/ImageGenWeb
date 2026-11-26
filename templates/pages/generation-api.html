@@ -26,11 +26,12 @@
         </div>
       </form>
       <p id="generationApiRotationNote"{% if not key_enabled %} hidden{% endif %}>更换或关闭后，旧密钥立即失效。</p>
-      <form class="generation-api-secret" id="generationApiSecret" action="{{ url_for('web.generation_api_skill') }}" method="post" autocomplete="off" hidden>
+      <p id="generationApiUnavailable"{% if not key_enabled or api_key %} hidden{% endif %}>当前密钥仍可使用。更换一次后，新密钥会显示在这里。</p>
+      <form class="generation-api-secret" id="generationApiSecret" action="{{ url_for('web.generation_api_skill') }}" method="post" autocomplete="off"{% if not api_key %} hidden{% endif %}>
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <label class="field">
-          <span>新密钥仅显示一次，请妥善保存</span>
-          <input id="generationApiToken" name="api_key" type="text" readonly spellcheck="false" autocomplete="off">
+          <span>个人生图 API 密钥</span>
+          <input id="generationApiToken" name="api_key" type="text" value="{{ api_key }}" readonly spellcheck="false" autocomplete="off">
         </label>
         <div class="generation-api-actions">
           <button class="button secondary" type="button" id="copyGenerationApiKey">复制密钥</button>
@@ -51,7 +52,7 @@
       <p>将密钥设为 <code>SNOW_IMAGE_API_KEY</code>。Skill 包含调用脚本、接口说明和 JSON 请求模板。</p>
       <a class="button primary" href="{{ url_for('web.generation_api_skill') }}"><i data-lucide="download"></i>下载 AI Skill</a>
       {% if can_package_key %}
-      <p>生成密钥时可下载免配置版本。安装完整目录即可连接，生图费用从发放密钥的账号扣除。</p>
+      <p>可用当前密钥下载免配置版本。安装完整目录即可连接，生图费用从发放密钥的账号扣除。</p>
       {% else %}
       <p>从 HTTPS 站点打开此页，可下载免配置版本。</p>
       {% endif %}

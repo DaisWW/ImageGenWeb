@@ -11,6 +11,7 @@ from flask import (
     Blueprint,
     g,
     jsonify,
+    make_response,
     render_template,
     request,
     send_file,
@@ -36,13 +37,18 @@ MAX_GENERATION_REQUEST_BYTES = 192 * 1024
 @web.get("/account/generation-api")
 @login_required
 def generation_api_page():
-    key = services().generation_api_keys.get_key(current_user.id)
-    return render_template(
-        "pages/generation-api.html",
-        key_enabled=key is not None,
-        base_url=request.url_root.rstrip("/"),
-        can_package_key=_can_package_key(),
+    enabled, token = services().generation_api_keys.key_for_display(current_user.id)
+    response = make_response(
+        render_template(
+            "pages/generation-api.html",
+            key_enabled=enabled,
+            api_key=token,
+            base_url=request.url_root.rstrip("/"),
+            can_package_key=_can_package_key(),
+        )
     )
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 @web.route("/account/generation-api/key", methods=["POST", "DELETE"])

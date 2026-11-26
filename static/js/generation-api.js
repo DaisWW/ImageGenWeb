@@ -9,8 +9,10 @@
   const revoke = document.getElementById("revokeGenerationApi");
   const status = document.getElementById("generationApiStatus");
   const rotationNote = document.getElementById("generationApiRotationNote");
+  const unavailable = document.getElementById("generationApiUnavailable");
   const secret = document.getElementById("generationApiSecret");
   const token = document.getElementById("generationApiToken");
+  const copy = document.getElementById("copyGenerationApiKey");
 
   function updateKey(enabled, value = "") {
     status.dataset.enabled = String(enabled);
@@ -18,6 +20,9 @@
     submit.textContent = enabled ? "更换密钥" : "开通并生成密钥";
     revoke.hidden = !enabled;
     rotationNote.hidden = !enabled;
+    unavailable.hidden = !enabled || Boolean(value);
+    copy.hidden = false;
+    token.removeAttribute("value");
     token.value = value;
     secret.hidden = !value;
   }
@@ -42,18 +47,37 @@
   });
   revoke.addEventListener("click", () => changeKey("DELETE"));
 
-  document.getElementById("copyGenerationApiKey").addEventListener("click", async () => {
+  copy.addEventListener("click", async () => {
+    const value = token.value;
+    if (!value) return;
     try {
-      await navigator.clipboard.writeText(token.value);
-      toast("已复制密钥", "success");
+      await navigator.clipboard.writeText(value);
     } catch (_error) {
+      if (token.value !== value) return;
+      token.focus();
       token.select();
-      toast("密钥已选中，请手动复制");
+      let copied = false;
+      try {
+        copied = document.execCommand("copy");
+      } catch (_legacyError) {
+        // Both clipboard methods can be blocked by the browser.
+      }
+      if (!copied) {
+        copy.hidden = true;
+        toast("请手动复制选中的密钥", "error");
+        return;
+      }
     }
+    toast("已复制密钥", "success");
   });
 
   window.addEventListener("pagehide", () => {
+    token.removeAttribute("value");
     token.value = "";
     secret.hidden = true;
+  });
+
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) window.location.reload();
   });
 })();

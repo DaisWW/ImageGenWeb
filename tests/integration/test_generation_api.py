@@ -44,11 +44,15 @@ class TestGenerationApi(PlatformTestCase):
         self.assertEqual(issued.status_code, 200)
         self.assertEqual(issued.headers["Cache-Control"], "no-store")
         token = issued.json["api_key"]
-        self.assertNotIn(token, client.get("/account/generation-api").get_data(as_text=True))
-        self.assertNotEqual(
-            self.services.generation_api_keys.get_key(self.user.id).token_digest, token
+        key_page = client.get("/account/generation-api")
+        self.assertEqual(key_page.headers["Cache-Control"], "private, no-store")
+        self.assertIn(f'value="{token}"'.encode(), key_page.data)
+        self.assertEqual(
+            self.services.generation_api_keys.key_for_display(self.user.id), (True, token)
         )
-
+        encrypted_token = self.services.generation_api_keys.get_key(self.user.id).token_encrypted
+        self.assertTrue(encrypted_token.startswith("gAAAA"))
+        self.assertNotIn(token, encrypted_token)
         config_url = "/api/v1/config"
         headers = {"Authorization": f"Bearer {token}"}
         self.assertEqual(client.get(config_url).status_code, 401)
@@ -73,6 +77,7 @@ class TestGenerationApi(PlatformTestCase):
         self.assertEqual(len(config_queries), 1, config_queries)
         (authentication_query,) = config_queries
         self.assertIn("from generation_api_keys", authentication_query)
+        self.assertNotIn("token_encrypted", authentication_query)
         self.assertNotIn("join workspaces", authentication_query)
         self.assertNotIn("password_hash", authentication_query)
         self.assertNotIn("workspace", config.json)
@@ -109,6 +114,22 @@ class TestGenerationApi(PlatformTestCase):
                 },
             )
 
+    def test_api_key_is_only_rendered_for_its_account(self):
+        token = self.services.generation_api_keys.issue_key(self.user.id)
+        client = self.user_client()
+        owner_page = client.get("/account/generation-api")
+        client.post("/logout")
+        self.assertEqual(
+            client.post(
+                "/login",
+                data={"username": "admin", "password": "StrongPass123!"},
+            ).status_code,
+            302,
+        )
+        other_page = client.get("/account/generation-api")
+        self.assertIn(f'value="{token}"'.encode(), owner_page.data)
+        self.assertNotIn(token.encode(), other_page.data)
+
     def test_configured_skill_download_checks_transport_csrf_and_key_owner(self):
         url = "/account/generation-api/skill"
         site = "https://studio.example.test"
@@ -138,6 +159,10 @@ class TestGenerationApi(PlatformTestCase):
             "X-CSRFToken": csrf_token,
             "Referer": f"{site}/account/generation-api",
         }
+        with patch.object(self.services.generation_api_keys._cipher, "decrypt", return_value=""):
+            legacy_page = client.get("/account/generation-api", base_url=site)
+        self.assertIn(b"generationApiUnavailable", legacy_page.data)
+        self.assertNotIn(token.encode(), legacy_page.data)
         self.assertEqual(
             client.post(
                 url, base_url=site, headers=headers, data={"api_key": other_token}

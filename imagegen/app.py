@@ -123,7 +123,8 @@ def create_app(config: dict | None = None) -> Flask:
         BASE_DIR / "static" / "assets" / "starter-ocean-sky-reference.png",
         settings,
     )
-    repository = RuntimeConfigRepository(SecretCipher(app.config["CONFIG_ENCRYPTION_KEY"]))
+    cipher = SecretCipher(app.config["CONFIG_ENCRYPTION_KEY"])
+    repository = RuntimeConfigRepository(cipher)
 
     with app.app_context():
         if app.config.get("AUTO_CREATE_DB", True):
@@ -149,7 +150,7 @@ def create_app(config: dict | None = None) -> Flask:
     configuration = RuntimeConfigService(repository, channels, chat_models, matting_models)
     matting_adapters = MattingAdapterFactory()
     generations = GenerationService(channels, billing, settings, storage)
-    generation_api_keys = GenerationApiKeyService(billing)
+    generation_api_keys = GenerationApiKeyService(billing, cipher)
     image_test_suites = ImageTestSuiteService(settings)
     services = ApplicationServices(
         auth=auth,

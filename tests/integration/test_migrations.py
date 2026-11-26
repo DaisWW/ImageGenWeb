@@ -25,6 +25,68 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class TestMigrationCompatibility(unittest.TestCase):
+    def test_encrypted_generation_api_key_storage_keeps_old_key_data(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "generation-api-key-storage.sqlite"
+            database_url = f"sqlite:///{database_path.as_posix()}"
+            config = Config(str(PROJECT_ROOT / "alembic.ini"))
+            config.set_main_option("script_location", str(PROJECT_ROOT / "migrations"))
+            engine = create_engine(database_url)
+            try:
+                with patch.dict(os.environ, {"DATABASE_URL": database_url}):
+                    command.upgrade(config, "d17c62af909e")
+                    with engine.begin() as connection:
+                        connection.execute(
+                            User.__table__.insert(),
+                            {"id": 1, "username": "old-key", "password_hash": "fixture"},
+                        )
+                        connection.execute(
+                            text(
+                                "INSERT INTO generation_api_keys (user_id, token_digest) "
+                                "VALUES (1, 'old-digest')"
+                            )
+                        )
+
+                    command.upgrade(config, "head")
+                    command.check(config)
+                    with engine.begin() as connection:
+                        key = connection.execute(
+                            text(
+                                "SELECT token_digest, token_encrypted "
+                                "FROM generation_api_keys WHERE user_id = 1"
+                            )
+                        ).one()
+                        self.assertEqual(key, ("old-digest", None))
+                        connection.execute(
+                            text(
+                                "UPDATE generation_api_keys "
+                                "SET token_encrypted = 'encrypted-value' WHERE user_id = 1"
+                            )
+                        )
+
+                    command.downgrade(config, "d17c62af909e")
+                    command.upgrade(config, "head")
+                    command.check(config)
+                    with engine.connect() as connection:
+                        self.assertEqual(
+                            connection.scalar(
+                                text(
+                                    "SELECT token_digest FROM generation_api_keys WHERE user_id = 1"
+                                )
+                            ),
+                            "old-digest",
+                        )
+                        self.assertIsNone(
+                            connection.scalar(
+                                text(
+                                    "SELECT token_encrypted FROM generation_api_keys "
+                                    "WHERE user_id = 1"
+                                )
+                            )
+                        )
+            finally:
+                engine.dispose()
+
     def test_generation_api_keys_survive_workspace_removal_and_downgrade(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             database_path = Path(temporary_directory) / "generation-api.sqlite"

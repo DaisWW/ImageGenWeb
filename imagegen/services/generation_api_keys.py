@@ -7,6 +7,7 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
+from ..config import SecretCipher
 from ..errors import ServiceError
 from ..extensions import db
 from ..models import AuditLog, GenerationApiKey, User
@@ -14,11 +15,30 @@ from .billing import BillingService
 
 
 class GenerationApiKeyService:
-    def __init__(self, billing: BillingService):
+    def __init__(self, billing: BillingService, cipher: SecretCipher):
         self.billing = billing
+        self._cipher = cipher
 
     def get_key(self, user_id: int) -> GenerationApiKey | None:
         return db.session.get(GenerationApiKey, user_id)
+
+    def key_for_display(self, user_id: int) -> tuple[bool, str]:
+        row = db.session.execute(
+            select(GenerationApiKey.token_encrypted, GenerationApiKey.token_digest).where(
+                GenerationApiKey.user_id == user_id
+            )
+        ).one_or_none()
+        if row is None:
+            return False, ""
+
+        try:
+            token = self._cipher.decrypt(row.token_encrypted or "")
+            # Older versions can rotate the digest without updating the encrypted token.
+            if token and _token_digest(token) == row.token_digest:
+                return True, token
+        except ValueError:
+            pass
+        return True, ""
 
     def issue_key(self, user_id: int) -> str:
         self.billing.lock_user(user_id)
@@ -29,6 +49,7 @@ class GenerationApiKeyService:
             key = GenerationApiKey(user_id=user_id)
             db.session.add(key)
         key.token_digest = _token_digest(token)
+        key.token_encrypted = self._cipher.encrypt(token)
         _record_key_change(user_id, action)
         db.session.commit()
         return token
