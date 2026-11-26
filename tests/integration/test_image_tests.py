@@ -23,7 +23,16 @@ class TestAdminImageTests(PlatformTestCase):
             self.assertEqual(regular.get(ROOT).status_code, 403)
         catalog = admin.get(ROOT)
         self.assertNotIn("test-key-not-secret", catalog.get_data(as_text=True))
-        self.assertEqual(len(catalog.json["suites"][0]["questions"]), 3)
+        default_suite = catalog.json["suites"][0]
+        self.assertEqual(default_suite["name"], "幻想武备·绘图实力展示")
+        self.assertEqual(
+            [question["title"] for question in default_suite["questions"]],
+            [
+                "二次元角色·全身主视觉",
+                "苗刀·电影级产品渲染",
+                "苗刀·3D建模三视参考",
+            ],
+        )
 
         question = {
             "title": "文字准确性",
