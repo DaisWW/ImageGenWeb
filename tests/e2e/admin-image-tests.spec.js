@@ -87,7 +87,8 @@ test("管理员保存题组后按题对比生图结果 @responsive", async ({ st
   }));
   await page.goto("/admin");
   await page.getByRole("button", { name: "生图测评", exact: true }).click();
-  await expect(page.locator("#imageTestEstimate")).toContainText("6 张图");
+  await expect(page.locator("#imageTestEstimate")).toContainText("1 道题 · 2 张图");
+  await expect(page.locator("#imageTestSuitePreview")).toContainText("鹤羽苗刀·正侧俯三视图");
   await page.getByRole("button", { name: "清空", exact: true }).click();
   await expect(page.getByRole("button", { name: "开始测试" })).toBeDisabled();
   await page.getByRole("button", { name: "全选", exact: true }).click();

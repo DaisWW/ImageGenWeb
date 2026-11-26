@@ -23,16 +23,6 @@ class TestAdminImageTests(PlatformTestCase):
             self.assertEqual(regular.get(ROOT).status_code, 403)
         catalog = admin.get(ROOT)
         self.assertNotIn("test-key-not-secret", catalog.get_data(as_text=True))
-        default_suite = catalog.json["suites"][0]
-        self.assertEqual(default_suite["name"], "幻想武备·绘图实力展示")
-        self.assertEqual(
-            [question["title"] for question in default_suite["questions"]],
-            [
-                "二次元角色·全身主视觉",
-                "苗刀·电影级产品渲染",
-                "苗刀·3D建模三视参考",
-            ],
-        )
 
         question = {
             "title": "文字准确性",
@@ -170,10 +160,14 @@ class TestAdminImageTests(PlatformTestCase):
                     ).status_code,
                     400,
                 )
+        default_suite = admin.get(ROOT).json["suites"][0]
+        self.assertEqual(default_suite["name"], "二次元苗刀·建模三视图")
+        (question,) = default_suite["questions"]
+        self.assertEqual(question["title"], "鹤羽苗刀·正侧俯三视图")
         request = {
             "request_id": uuid4().hex,
-            "suite_id": "default",
-            "suite_revision": 1,
+            "suite_id": default_suite["id"],
+            "suite_revision": default_suite["revision"],
             "targets": [
                 {"channel_id": "test", "model": "model-a"},
                 {"channel_id": "test", "model": "disabled-model"},
@@ -184,15 +178,22 @@ class TestAdminImageTests(PlatformTestCase):
         self.assertEqual(admin.get(f"{ROOT}/runs").json["total"], 0)
 
         request["targets"].pop()
-        run = admin.post(f"{ROOT}/runs", json=request).json["run"]
+        stale_request = {**request, "suite_revision": default_suite["revision"] - 1}
+        self.assertEqual(admin.post(f"{ROOT}/runs", json=stale_request).status_code, 409)
+        started = admin.post(f"{ROOT}/runs", json=request)
+        self.assertEqual(started.status_code, 202, started.json)
+        run = started.json["run"]
+        self.assertEqual(run["questions"], [question])
+        (result,) = run["results"]
+        job = db.session.get(GenerationJob, result["id"])
+        self.assertEqual(job.items[0].prompt, question["prompt"])
         path = f"{ROOT}/runs/{run['id']}"
         self.assertEqual(admin.post(f"{path}/cancel").status_code, 200)
         old = utcnow() - timedelta(days=31)
         db.session.get(ImageTestRun, run["id"]).created_at = old
-        for result in run["results"]:
-            db.session.get(GenerationJob, result["id"]).completed_at = old
+        job.completed_at = old
         db.session.commit()
         self.assertEqual(
-            self.create_worker().retention.cleanup(), {"jobs": 3, "assets": 0, "errors": 0}
+            self.create_worker().retention.cleanup(), {"jobs": 1, "assets": 0, "errors": 0}
         )
         self.assertEqual(admin.get(path).status_code, 404)
