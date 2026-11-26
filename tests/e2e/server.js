@@ -1,6 +1,6 @@
 const { spawn } = require("node:child_process");
 const { randomBytes } = require("node:crypto");
-const { existsSync } = require("node:fs");
+const { existsSync, mkdirSync, mkdtempSync } = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 
@@ -22,7 +22,10 @@ module.exports = async (config) => {
   const root = path.dirname(config.configFile);
   const baseURL = new URL(config.projects[0].use.baseURL);
   const port = baseURL.port;
-  const dataDir = path.join(root, ".ui-test-data", `playwright-${process.pid}`);
+  const dataRoot = path.join(root, ".ui-test-data");
+  mkdirSync(dataRoot, { recursive: true });
+  const dataDir = mkdtempSync(path.join(dataRoot, "playwright-"));
+  const databasePath = path.join(dataDir, "imagegen.db").split(path.sep).join("/");
   const venvPython = path.join(
     root,
     ".venv",
@@ -39,6 +42,7 @@ module.exports = async (config) => {
       ADMIN_PASSWORD: "E2eStrongPass123!",
       AUTO_CREATE_DB: "true",
       CONFIG_ENCRYPTION_KEY: "e2e-config-key",
+      DATABASE_URL: `sqlite:///${databasePath}`,
       E2E_SHUTDOWN_TOKEN: token,
       IMAGEGEN_DATA_DIR: dataDir,
       IMAGE_STORAGE_PATH: path.join(dataDir, "files"),

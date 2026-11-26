@@ -2,6 +2,7 @@ const { expect, loginAsAdmin, test } = require("./fixtures");
 
 test("users can enable the generation API and download its skill", { tag: "@responsive" }, async ({ page }) => {
   await loginAsAdmin(page);
+  await expect(await page.request.get("/api/generations/active")).toBeOK();
   await page.getByRole("link", { name: "生图 API", exact: true }).click();
   await expect(page.getByRole("heading", { name: "生图 API" })).toBeVisible();
   await expect(page.getByLabel("结果工作站")).toHaveCount(0);
