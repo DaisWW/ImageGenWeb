@@ -258,6 +258,22 @@ class TestGenerationApi(PlatformTestCase):
         self.assertEqual(response.json["code"], "internal_error")
         self.assertNotIn("private-input", "\n".join(logs.output))
 
+    def test_admin_can_filter_generation_history_by_api_archive(self):
+        token = self.services.generation_api_keys.issue_key(self.user.id)
+        submitted = self.app.test_client().post(
+            "/api/v1/generations",
+            headers={"Authorization": f"Bearer {token}", "Idempotency-Key": str(uuid4())},
+            json={"channel_id": "test", "prompt": "管理端筛选测试"},
+        )
+        self.assertEqual(submitted.status_code, 202)
+        job = db.session.get(GenerationJob, submitted.json["job"]["id"])
+
+        admin = self.admin_client()
+        filters = admin.get("/api/admin/generation-filters").json
+        self.assertIn(job.workspace_id, {workspace["id"] for workspace in filters["workspaces"]})
+        history = admin.get(f"/api/admin/generations?workspace_id={job.workspace_id}").json
+        self.assertEqual([entry["id"] for entry in history["jobs"]], [job.id])
+
     def test_insufficient_balance_rolls_back_the_first_api_workspace(self):
         token = self.services.generation_api_keys.issue_key(self.user.id)
         response = self.app.test_client().post(

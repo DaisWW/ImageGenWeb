@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from ..errors import ServiceError
 from ..extensions import db
-from ..models import INTERNAL_WORKSPACE_KINDS, User, Workspace
+from ..models import IMAGE_TEST_KIND, User, Workspace
 from ..serializers import job_dict, user_dict
 from ..services import SpendingSummary
 from ..services.runtime_logs import audit_log_dict, runtime_log_dict
@@ -137,13 +137,11 @@ def admin_generations():
 @admin_required
 def admin_generation_filters():
     users = list(db.session.scalars(select(User).order_by(User.created_at.desc())))
-    workspaces = list(
-        db.session.scalars(
-            select(Workspace)
-            .where(Workspace.kind.not_in(INTERNAL_WORKSPACE_KINDS))
-            .order_by(Workspace.updated_at.desc())
-        )
-    )
+    workspaces = db.session.execute(
+        select(Workspace.id, Workspace.name, Workspace.user_id)
+        .where(Workspace.kind != IMAGE_TEST_KIND)
+        .order_by(Workspace.updated_at.desc())
+    ).all()
     return jsonify(
         users=[user_dict(user, include_private=False) for user in users],
         workspaces=[
