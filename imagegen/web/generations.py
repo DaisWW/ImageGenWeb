@@ -8,7 +8,6 @@ from sqlalchemy import select
 
 from ..errors import ServiceError
 from ..extensions import db
-from ..image_masks import MAX_MASK_BYTES
 from ..models import Asset, GenerationJob, Workspace
 from ..serializers import job_dict, job_status_dict
 from ..services import GenerationMaskInput, GenerationWorkflow, SubmitGeneration
@@ -24,6 +23,7 @@ from .shared import (
     json_bool,
     owned_workspace,
     query_limit,
+    read_generation_mask,
     services,
     storage,
 )
@@ -77,14 +77,7 @@ def _generation_submission_body() -> tuple[dict, GenerationMaskInput | None]:
             code="invalid_mask",
             status_code=422,
         )
-    content = upload.stream.read(MAX_MASK_BYTES + 1)
-    if len(content) > MAX_MASK_BYTES:
-        raise ServiceError(
-            "蒙版不能超过 4 MiB",
-            code="invalid_mask",
-            status_code=422,
-        )
-    return data, GenerationMaskInput(target_asset_id=target_asset_id, content=content)
+    return data, GenerationMaskInput(target_asset_id, read_generation_mask(upload))
 
 
 @web.post("/api/generations")

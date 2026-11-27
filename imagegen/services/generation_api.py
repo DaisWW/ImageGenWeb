@@ -62,7 +62,11 @@ class GenerationApiService:
             GenerationJob.api_request_id == request_id,
         )
         if existing is not None:
-            if existing.api_request_digest == digest:
+            if existing.api_request_digest == digest or (
+                not reference_uploads
+                and mask_content is None
+                and _matches_legacy_digest(request, existing.api_request_digest)
+            ):
                 return existing, False
             raise ServiceError(
                 "此请求 ID 已用于其他生成参数", code="idempotency_conflict", status_code=409
@@ -75,7 +79,8 @@ class GenerationApiService:
                 status_code=422,
             )
 
-        workspace = _new_api_workspace(user.id)
+        user_id = user.id
+        workspace = _new_api_workspace(user_id)
         try:
             db.session.add(workspace)
             assets = (
@@ -86,7 +91,6 @@ class GenerationApiService:
             generation = replace(
                 request,
                 reference_ids=tuple(asset.id for asset in assets),
-                mode="img2img" if assets else "text2img",
                 mask=(
                     GenerationMaskInput(target_asset_id=assets[0].id, content=mask_content)
                     if mask_content is not None
@@ -94,7 +98,7 @@ class GenerationApiService:
                 ),
             )
             job = self.generations.submit(
-                user.id,
+                user_id,
                 workspace,
                 generation,
                 api_request_id=request_id,
@@ -103,7 +107,7 @@ class GenerationApiService:
         except Exception:
             db.session.rollback()
             try:
-                self.workspaces.storage.delete_workspace(user.id, workspace.id)
+                self.workspaces.storage.delete_workspace(user_id, workspace.id)
             except Exception:
                 LOGGER.warning("清理未提交的生图 API 工作站失败：%s", workspace.id, exc_info=True)
             raise
@@ -157,10 +161,9 @@ def _new_api_workspace(user_id: int) -> Workspace:
 
 def _request_digest(
     request: SubmitGeneration,
-    reference_uploads: tuple[tuple[str, bytes], ...],
-    mask_content: bytes | None,
+    reference_uploads: tuple[tuple[str, bytes], ...] = (),
+    mask_content: bytes | None = None,
 ) -> str:
-    # Keep JSON-only digests compatible with API jobs submitted before file uploads were added.
     payload = asdict(request)
     if reference_uploads:
         payload["reference_uploads"] = [
@@ -170,6 +173,16 @@ def _request_digest(
     if mask_content is not None:
         payload["mask_content_sha256"] = hashlib.sha256(mask_content).hexdigest()
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("ascii")).hexdigest()
+
+
+def _matches_legacy_digest(request: SubmitGeneration, digest: str | None) -> bool:
+    # Before workflow options were exposed, JSON requests hashed an empty workflow.
+    return (
+        request.workflow.get("generation_stage", "final") == "final"
+        and request.workflow.get("generation_strategy", "sample") == "sample"
+        and request.workflow.get("creative_direction_id", "auto") == "auto"
+        and _request_digest(replace(request, workflow={})) == digest
+    )
 
 
 def _read_job(*conditions: ColumnElement[bool]) -> GenerationJob | None:

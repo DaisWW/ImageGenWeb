@@ -39,15 +39,24 @@
 | `moderation` | `auto` 或 `low`，默认 `auto`。`low` 仅支持 GPT Image 2 系列。 |
 | `generation_stage` | 工作流阶段 `draft`、`refine` 或 `final`，默认 `final`。 |
 | `generation_strategy` | `sample` 或 `explore`，默认 `sample`。局部重绘只支持 `sample`。 |
-| `item_prompts` | 可选的逐张最终提示词列表。用于 `explore` 时必须提供，数量须等于 `batch_count`。不需要对话模型接口。 |
+| `item_prompts` | 可选的逐张最终提示词列表。用于 `explore` 时必须提供，数量须等于 `batch_count`，张数为 2 到 `limits.max_exploration_images`。不需要对话模型接口。 |
 | `creative_direction_id` | 可选的工作流元数据，默认 `auto`。 |
 
-将参考图和蒙版文件放入同一个 multipart 请求。下面的 Skill 命令会完成打包并只发送一次任务提交请求：
+将参考图和蒙版文件放入同一个 multipart 请求。例如以下请求同时传递原图、生成参数和局部蒙版：
 
 ```powershell
+curl.exe -X POST "$env:SNOW_IMAGE_API_URL/api/v1/generations" `
+  -H "Authorization: Bearer $env:SNOW_IMAGE_API_KEY" `
+  -H "Idempotency-Key: 0f84e20e-d621-4a28-a3f9-65d8ce64d31e" `
+  -F 'payload={"channel_id":"REPLACE_WITH_CHANNEL_ID","prompt":"保留人物和构图，只重绘框选区域","size":"1024x1024","quality":"auto","output_format":"png","batch_count":1}' `
+  -F "references=@source.png" `
+  -F "mask=@mask.png"
+
 python scripts/generate.py generate request.json --reference source.png --mask mask.png
 python scripts/generate.py generate request.json --reference subject.png --reference style.png
 ```
+
+每次创建新任务时生成新的 UUID 作为 `Idempotency-Key`。请求超时后重试时，复用原 UUID、参数及附件。
 
 ## 等待与下载
 

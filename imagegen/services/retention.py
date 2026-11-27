@@ -4,6 +4,7 @@ import logging
 from datetime import timedelta
 
 from sqlalchemy import delete, select
+from sqlalchemy.orm import selectinload
 
 from ..config.channels import ChannelRegistry
 from ..extensions import db
@@ -69,27 +70,30 @@ class RetentionService:
                 errors += 1
                 LOGGER.warning("清理历史生成任务失败：%s", job_id, exc_info=True)
 
-        empty_api_workspaces = list(
-            db.session.scalars(
-                select(Workspace)
-                .where(
-                    Workspace.kind == GENERATION_API_WORKSPACE_KIND,
-                    ~select(GenerationJob.id)
-                    .where(GenerationJob.workspace_id == Workspace.id)
-                    .exists(),
-                )
-                .with_for_update()
-            )
+        empty_api_workspace = (
+            Workspace.kind == GENERATION_API_WORKSPACE_KIND,
+            ~select(GenerationJob.id).where(GenerationJob.workspace_id == Workspace.id).exists(),
         )
+        empty_api_workspaces = db.session.execute(
+            select(Workspace.id, Workspace.user_id).where(*empty_api_workspace)
+        ).all()
         deleted_assets = 0
-        for workspace in empty_api_workspaces:
-            workspace_id = workspace.id
+        for workspace_id, user_id in empty_api_workspaces:
             try:
-                workspace_asset_count = len(workspace.assets)
-                self.storage.delete_workspace(workspace.user_id, workspace_id)
+                workspace = db.session.scalar(
+                    select(Workspace)
+                    .options(selectinload(Workspace.assets))
+                    .where(Workspace.id == workspace_id, *empty_api_workspace)
+                    .with_for_update()
+                )
+                if workspace is None:
+                    db.session.commit()
+                    continue
+                asset_count = len(workspace.assets)
+                self.storage.delete_workspace(user_id, workspace_id)
                 db.session.delete(workspace)
                 db.session.commit()
-                deleted_assets += workspace_asset_count
+                deleted_assets += asset_count
             except Exception:
                 db.session.rollback()
                 errors += 1

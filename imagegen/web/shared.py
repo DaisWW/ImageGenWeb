@@ -7,11 +7,13 @@ from flask import abort, current_app, request
 from flask_login import current_user, login_required
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
+from werkzeug.datastructures import FileStorage
 
 from ..config import ChannelRegistry, ChatModelRegistry, MattingModelRegistry
 from ..container import ApplicationServices
 from ..errors import ServiceError
 from ..extensions import db
+from ..image_masks import MAX_MASK_BYTES
 from ..models import (
     IMAGE_TEST_KIND,
     INTERNAL_WORKSPACE_KINDS,
@@ -26,6 +28,37 @@ from ..validation import as_bool
 
 def services() -> ApplicationServices:
     return current_app.extensions["imagegen_services"]
+
+
+def read_reference_uploads(files: list[FileStorage]) -> list[tuple[str, bytes]]:
+    runtime = services().settings.runtime()
+    if len(files) > runtime.max_assets_per_workspace:
+        raise ServiceError(
+            f"单次最多上传 {runtime.max_assets_per_workspace} 张参考图", status_code=413
+        )
+    uploads = []
+    total = 0
+    for uploaded in files:
+        name = uploaded.filename or "reference"
+        if "\x00" in name:
+            raise ServiceError("参考图文件名无效")
+        content = uploaded.read(runtime.max_attachment_bytes + 1)
+        if len(content) > runtime.max_attachment_bytes:
+            raise ServiceError(f"单张垫图不能超过 {runtime.max_attachment_mb} MiB", status_code=413)
+        total += len(content)
+        if total > runtime.max_attachment_total_bytes:
+            raise ServiceError(
+                f"垫图合计不能超过 {runtime.max_attachment_total_mb} MiB", status_code=413
+            )
+        uploads.append((name, content))
+    return uploads
+
+
+def read_generation_mask(upload: FileStorage) -> bytes:
+    content = upload.read(MAX_MASK_BYTES + 1)
+    if len(content) > MAX_MASK_BYTES:
+        raise ServiceError("蒙版不能超过 4 MiB", code="invalid_mask", status_code=422)
+    return content
 
 
 def channels() -> ChannelRegistry:

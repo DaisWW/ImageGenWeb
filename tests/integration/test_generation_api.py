@@ -17,9 +17,10 @@ from runpy import run_path
 from tempfile import TemporaryDirectory
 from threading import Thread
 from unittest.mock import Mock, patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 from zipfile import ZipFile
 
+import yaml
 from sqlalchemy import event, func, select
 from werkzeug.serving import make_server
 
@@ -32,7 +33,7 @@ from imagegen.models import (
     Workspace,
     utcnow,
 )
-from imagegen.web.generation_api import _parse_generation
+from imagegen.services import SubmitGeneration
 from tests.support.platform import (
     FakeProviderFactory,
     PlatformTestCase,
@@ -103,6 +104,22 @@ class TestGenerationApi(PlatformTestCase):
         self.assertEqual(config.json["limits"]["max_mask_bytes"], 4 * 1024 * 1024)
         self.assertNotIn("test-key-not-secret", config.get_data(as_text=True))
         self.assertNotIn("relay.example", config.get_data(as_text=True))
+
+        channels = yaml.safe_load(self.channel_path.read_text(encoding="utf-8"))
+        edit_only = dict(channels["channels"][0])
+        edit_only["id"] = "edit-only"
+        edit_only["label"] = "垫图专用渠道"
+        edit_only["capabilities"] = {
+            **edit_only["capabilities"],
+            "modes": ["img2img"],
+        }
+        channels["channels"].append(edit_only)
+        self.channel_path.write_text(yaml.safe_dump(channels, allow_unicode=True), encoding="utf-8")
+        self.app.extensions["channel_registry"].reload(force=True)
+        channel_ids = {
+            channel["id"] for channel in external.get(config_url, headers=headers).json["channels"]
+        }
+        self.assertIn("edit-only", channel_ids)
 
         rotated = client.post(key_url, headers=csrf_headers).json["api_key"]
         self.assertEqual(external.get(config_url, headers=headers).status_code, 401)
@@ -431,6 +448,47 @@ class TestGenerationApi(PlatformTestCase):
         self.assertEqual(job.workflow["generation_strategy"], "explore")
         self.assertEqual([item.prompt for item in job.items], ["暖色光线", "冷色光线"])
 
+    def test_api_rejects_masks_without_references_and_explore_masks(self):
+        token = self.services.generation_api_keys.issue_key(self.user.id)
+        client = self.app.test_client()
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Idempotency-Key": str(uuid4()),
+        }
+        missing_reference = client.post(
+            "/api/v1/generations",
+            headers=headers,
+            data={
+                "payload": json.dumps({"channel_id": "test", "prompt": "局部重绘"}),
+                "mask": (BytesIO(mask_png_bytes()), "mask.png", "image/png"),
+            },
+        )
+        self.assertEqual(missing_reference.status_code, 422)
+        self.assertEqual(missing_reference.json["code"], "mask_reference_count_invalid")
+
+        explore_mask = client.post(
+            "/api/v1/generations",
+            headers={"Authorization": f"Bearer {token}", "Idempotency-Key": str(uuid4())},
+            data={
+                "payload": json.dumps(
+                    {
+                        "channel_id": "test",
+                        "prompt": "局部重绘",
+                        "batch_count": 2,
+                        "generation_strategy": "explore",
+                        "item_prompts": ["方案甲", "方案乙"],
+                    }
+                ),
+                "references": (BytesIO(png_bytes()), "source.png", "image/png"),
+                "mask": (BytesIO(mask_png_bytes()), "mask.png", "image/png"),
+            },
+        )
+        self.assertEqual(explore_mask.status_code, 422)
+        self.assertEqual(explore_mask.json["code"], "mask_strategy_invalid")
+        self.assertIsNone(
+            db.session.scalar(select(Workspace.id).where(Workspace.user_id == self.user.id))
+        )
+
     def test_rotated_key_can_replay_legacy_job_from_a_regular_workspace(self):
         legacy_workspace = self.create_workspace()
         key_url = "/account/generation-api/key"
@@ -442,30 +500,38 @@ class TestGenerationApi(PlatformTestCase):
 
         token = account.post(key_url).json["api_key"]
         headers = {"Authorization": f"Bearer {token}", "Idempotency-Key": request_id}
-        with patch(
-            "imagegen.services.generation_api._new_api_workspace",
-            return_value=legacy_workspace,
-        ):
-            original = external.post(submit_url, headers=headers, json=body)
-        self.assertEqual(original.status_code, 202)
-        job = db.session.get(GenerationJob, original.json["job"]["id"])
-        legacy_request = _parse_generation(body)
-        job.api_request_digest = hashlib.sha256(
-            json.dumps(asdict(legacy_request), sort_keys=True).encode("ascii")
-        ).hexdigest()
-        db.session.commit()
+        legacy_request = SubmitGeneration(
+            **body,
+            model="",
+            mode="text2img",
+            size="auto",
+            output_format="png",
+            compression=90,
+            batch_count=1,
+            reference_ids=(),
+        )
+        original = self.services.generations.submit(
+            self.user.id,
+            legacy_workspace,
+            legacy_request,
+            api_request_id=UUID(request_id).hex,
+            api_request_digest=hashlib.sha256(
+                json.dumps(asdict(legacy_request), sort_keys=True).encode("ascii")
+            ).hexdigest(),
+        )
+        status_url = f"{submit_url}/{original.id}"
 
         rotated = account.post(key_url).json["api_key"]
-        self.assertEqual(
-            external.get(original.headers["Location"], headers=headers).status_code, 401
-        )
+        self.assertEqual(external.get(status_url, headers=headers).status_code, 401)
         headers["Authorization"] = f"Bearer {rotated}"
-        self.assertEqual(
-            external.get(original.headers["Location"], headers=headers).status_code, 200
-        )
+        self.assertEqual(external.get(status_url, headers=headers).status_code, 200)
         replay = external.post(submit_url, headers=headers, json=body)
         self.assertEqual(replay.status_code, 200)
-        self.assertEqual(replay.json["job"]["id"], original.json["job"]["id"])
+        self.assertEqual(replay.json["job"]["id"], original.id)
+        changed = external.post(
+            submit_url, headers=headers, json={**body, "generation_stage": "draft"}
+        )
+        self.assertEqual(changed.status_code, 409)
         self.assertEqual(db.session.get(User, self.user.id).reserved_rmb, Decimal("1.2500"))
 
     def test_invalid_submission_does_not_echo_text_and_rejects_oversized_json(self):
@@ -552,7 +618,11 @@ class TestGenerationApiSkill(unittest.TestCase):
             reference.write_bytes(png_bytes())
             mask.write_bytes(mask_png_bytes())
             body, content_type = module["_multipart_generation"](
-                {"channel_id": "test", "prompt": "修改局部"}, [reference], mask
+                json.dumps({"channel_id": "test", "prompt": "修改局部"}, ensure_ascii=False).encode(
+                    "utf-8"
+                ),
+                [reference],
+                mask,
             )
 
             class RecordingOpener:

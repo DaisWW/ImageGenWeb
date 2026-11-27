@@ -13,6 +13,7 @@ from .shared import (
     json_bool,
     owned_workspace,
     query_limit,
+    read_reference_uploads,
     services,
     workspace_payload,
 )
@@ -85,25 +86,9 @@ def delete_workspace(workspace_id: str):
 @login_required
 def upload_assets(workspace_id: str):
     workspace = owned_workspace(workspace_id)
-    runtime = services().settings.runtime()
-    uploads: list[tuple[str, bytes]] = []
-    total = 0
-    files = request.files.getlist("references")
-    if len(files) > runtime.max_assets_per_workspace:
-        raise ServiceError(
-            f"单次最多上传 {runtime.max_assets_per_workspace} 张参考图", status_code=413
-        )
-    for uploaded in files:
-        content = uploaded.read(runtime.max_attachment_bytes + 1)
-        if len(content) > runtime.max_attachment_bytes:
-            raise ServiceError(f"单张垫图不能超过 {runtime.max_attachment_mb} MiB", status_code=413)
-        total += len(content)
-        uploads.append((uploaded.filename or "reference", content))
-    if total > runtime.max_attachment_total_bytes:
-        raise ServiceError(
-            f"垫图合计不能超过 {runtime.max_attachment_total_mb} MiB", status_code=413
-        )
-    assets = services().workspaces.add_assets(workspace, uploads)
+    assets = services().workspaces.add_assets(
+        workspace, read_reference_uploads(request.files.getlist("references"))
+    )
     return jsonify(
         assets=[workspace_dict(workspace, [asset])["assets"][0] for asset in assets]
     ), 201

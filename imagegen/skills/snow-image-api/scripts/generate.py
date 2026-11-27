@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 from http.client import HTTPException, HTTPResponse
+from io import BytesIO
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
@@ -18,6 +19,7 @@ from uuid import UUID, uuid4
 
 TERMINAL_STATES = {"succeeded", "partial", "failed", "canceled"}
 IMAGE_EXTENSIONS = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
+MAX_UPLOAD_BYTES = 45 * 1024 * 1024
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -119,47 +121,50 @@ def save_image(response: HTTPResponse, path: Path, mime_type: str) -> None:
 
 
 def _multipart_generation(
-    payload: dict, references: list[Path], mask: Path | None
+    payload: bytes, references: list[Path], mask: Path | None
 ) -> tuple[bytes, str]:
-    boundary = f"----snow-image-api-{uuid4().hex}"
-    parts = []
-
-    def field(name: str, value: bytes, content_type: str | None = None) -> None:
-        headers = [f'Content-Disposition: form-data; name="{name}"']
-        if content_type:
-            headers.append(f"Content-Type: {content_type}")
-        parts.append(
-            f"--{boundary}\r\n".encode("ascii")
-            + "\r\n".join(headers).encode("ascii")
-            + b"\r\n\r\n"
-            + value
-            + b"\r\n"
-        )
-
-    field("payload", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    if not references:
+        raise ValueError("Multipart generation requires at least one reference image.")
+    boundary = f"snow-image-api-{uuid4().hex}"
     mime_types = {
         ".png": "image/png",
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
         ".webp": "image/webp",
     }
-    files = []
-    for index, path in enumerate(references):
-        extension = path.suffix.lower()
-        filename = f"reference_{index}{extension if extension in mime_types else ''}"
-        files.append(("references", path, filename))
+    files = [("references", path) for path in references]
     if mask is not None:
-        files.append(("mask", mask, "mask.png"))
-    for name, path, filename in files:
-        content_type = mime_types.get(Path(filename).suffix.lower(), "application/octet-stream")
-        file_header = (
+        files.append(("mask", mask))
+    body = BytesIO()
+    body.write(
+        f'--{boundary}\r\nContent-Disposition: form-data; name="payload"\r\n\r\n'.encode("ascii")
+    )
+    body.write(payload)
+    body.write(b"\r\n")
+    for index, (name, path) in enumerate(files):
+        extension = ".png" if name == "mask" else path.suffix.lower()
+        mime_type = mime_types.get(extension, "application/octet-stream")
+        filename = "mask.png" if name == "mask" else f"reference_{index}"
+        if name == "references" and extension in mime_types:
+            filename += extension
+        header = (
             f"--{boundary}\r\n"
             f'Content-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'
-            f"Content-Type: {content_type}\r\n\r\n"
+            f"Content-Type: {mime_type}\r\n\r\n"
         ).encode("ascii")
-        parts.append(file_header + path.read_bytes() + b"\r\n")
-    parts.append(f"--{boundary}--\r\n".encode("ascii"))
-    return b"".join(parts), f"multipart/form-data; boundary={boundary}"
+        body.write(header)
+        total = body.tell()
+        with path.open("rb") as file:
+            while chunk := file.read(64 * 1024):
+                total += len(chunk)
+                if total > MAX_UPLOAD_BYTES:
+                    raise ValueError("Generation request exceeds 45 MiB.")
+                body.write(chunk)
+        body.write(b"\r\n")
+    body.write(f"--{boundary}--\r\n".encode("ascii"))
+    if body.tell() > MAX_UPLOAD_BYTES:
+        raise ValueError("Generation request exceeds 45 MiB.")
+    return body.getvalue(), f"multipart/form-data; boundary={boundary}"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -167,7 +172,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, default=Path("snow-images"))
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("config", help="List available channels, prices and request limits")
-    generate = commands.add_parser("generate", help="Submit a JSON request and download its images")
+    generate = commands.add_parser("generate", help="Submit a generation and download its images")
     generate.add_argument("request_file", type=Path)
     generate.add_argument(
         "--reference",
@@ -234,13 +239,12 @@ def main() -> int:
                 raise ValueError("A local-edit mask requires exactly one --reference image.")
             request_id = args.request_id or uuid4()
             payload = json.loads(args.request_file.read_text(encoding="utf-8-sig"))
-            if args.reference or args.mask is not None:
+            request_body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            content_type = "application/json"
+            if args.reference:
                 request_body, content_type = _multipart_generation(
-                    payload, args.reference, args.mask
+                    request_body, args.reference, args.mask
                 )
-            else:
-                request_body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-                content_type = "application/json"
             print(f"Request ID: {request_id}", file=sys.stderr, flush=True)
             job = client.request_json(
                 "generations",

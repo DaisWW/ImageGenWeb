@@ -18,7 +18,7 @@
         <h2>访问密钥</h2>
         <span id="generationApiStatus" role="status" data-enabled="{{ 'true' if key_enabled else 'false' }}">{{ '已开通' if key_enabled else '未开通' }}</span>
       </div>
-      <p>个人密钥可从任意支持 HTTP 的客户端提交文生图任务。任务按当前账号余额结算。</p>
+      <p>凭个人密钥即可提交文生图、垫图编辑或局部重绘任务。任务按当前账号余额结算。</p>
       <form id="generationApiForm" action="{{ url_for('web.generation_api_key') }}" method="post" autocomplete="off">
         <div class="generation-api-actions">
           <button class="button primary" type="submit">{{ '更换密钥' if key_enabled else '开通并生成密钥' }}</button>
@@ -49,7 +49,7 @@
         <span>站点地址 · SNOW_IMAGE_API_URL</span>
         <input type="url" value="{{ base_url }}" readonly>
       </label>
-      <p>将密钥设为 <code>SNOW_IMAGE_API_KEY</code>。Skill 包含调用脚本、接口说明和 JSON 请求模板。</p>
+      <p>将密钥设为 <code>SNOW_IMAGE_API_KEY</code>。Skill 包含调用脚本、接口说明和 JSON 模板。垫图与蒙版可随参数一起提交到 <code>POST /api/v1/generations</code>。</p>
       <a class="button primary" href="{{ url_for('web.generation_api_skill') }}"><i data-lucide="download"></i>下载 AI Skill</a>
       {% if can_package_key %}
       <p>可用当前密钥下载免配置版本。安装完整目录即可连接，生图费用从发放密钥的账号扣除。</p>
