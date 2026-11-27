@@ -40,7 +40,7 @@ test("users can enable the generation API and download its skill", { tag: "@resp
 
   const downloaded = page.waitForEvent("download");
   await page.getByRole("link", { name: "下载 AI Skill" }).click();
-  expect((await downloaded).suggestedFilename()).toBe("snow-image-api.zip");
+  expect((await downloaded).suggestedFilename()).toBe("snow-image-api-configured.zip");
   await page.reload();
   await expect(page.locator("#generationApiStatus")).toHaveText("已开通");
   await expect(token).toHaveValue(issuedToken);

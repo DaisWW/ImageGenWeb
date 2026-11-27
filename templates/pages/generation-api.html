@@ -27,35 +27,26 @@
       </form>
       <p id="generationApiRotationNote"{% if not key_enabled %} hidden{% endif %}>更换或关闭后，旧密钥立即失效。</p>
       <p id="generationApiUnavailable"{% if not key_enabled or api_key %} hidden{% endif %}>当前密钥仍可使用。更换一次后，新密钥会显示在这里。</p>
-      <form class="generation-api-secret" id="generationApiSecret" action="{{ url_for('web.generation_api_skill') }}" method="post" autocomplete="off"{% if not api_key %} hidden{% endif %}>
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="generation-api-secret" id="generationApiSecret"{% if not api_key %} hidden{% endif %}>
         <label class="field">
           <span>个人生图 API 密钥</span>
-          <input id="generationApiToken" name="api_key" type="text" value="{{ api_key }}" readonly spellcheck="false" autocomplete="off">
+          <input id="generationApiToken" type="text" value="{{ api_key }}" readonly spellcheck="false" autocomplete="off">
         </label>
         <div class="generation-api-actions">
           <button class="button secondary" type="button" id="copyGenerationApiKey">复制密钥</button>
-          {% if can_package_key %}
-          <button class="button primary" type="submit">下载免配置 Skill</button>
-          {% endif %}
         </div>
-      </form>
+      </div>
     </section>
 
     <section class="generation-api-card">
       <div class="generation-api-heading"><h2>连接 AI</h2></div>
-      <p>下载并解压 Skill，让 AI 读取 SKILL.md，并在 AI 的运行环境中配置站点地址和密钥。</p>
+      <p>下载完整 Skill 目录。当前账号密钥可显示时，ZIP 会自动包含站点地址和密钥，解压后即可连接。</p>
       <label class="field">
         <span>站点地址 · SNOW_IMAGE_API_URL</span>
         <input type="url" value="{{ base_url }}" readonly>
       </label>
-      <p>将密钥设为 <code>SNOW_IMAGE_API_KEY</code>。Skill 包含调用脚本、接口说明和 JSON 模板。垫图与蒙版可随参数一起提交到 <code>POST /api/v1/generations</code>。</p>
+      <p>Skill 包含调用脚本、接口说明和 JSON 模板。垫图与蒙版可随参数一起提交到 <code>POST /api/v1/generations</code>。没有可显示的密钥时，下载的是通用 Skill，需要手动配置连接信息。</p>
       <a class="button primary" href="{{ url_for('web.generation_api_skill') }}"><i data-lucide="download"></i>下载 AI Skill</a>
-      {% if can_package_key %}
-      <p>可用当前密钥下载免配置版本。安装完整目录即可连接，生图费用从发放密钥的账号扣除。</p>
-      {% else %}
-      <p>从 HTTPS 站点打开此页，可下载免配置版本。</p>
-      {% endif %}
     </section>
   </div>
 </main>

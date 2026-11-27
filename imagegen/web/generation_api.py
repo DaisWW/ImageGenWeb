@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from io import BytesIO
 from pathlib import Path
-from urllib.parse import urlsplit
 from uuid import UUID
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -54,7 +53,6 @@ def generation_api_page():
             key_enabled=enabled,
             api_key=token,
             base_url=request.url_root.rstrip("/"),
-            can_package_key=_can_package_key(),
         )
     )
     response.headers["Cache-Control"] = "private, no-store"
@@ -76,26 +74,13 @@ def generation_api_key():
     return response
 
 
-def _can_package_key() -> bool:
-    return request.is_secure or urlsplit(request.url_root).hostname in {
-        "localhost",
-        "127.0.0.1",
-        "::1",
-    }
-
-
-@web.route("/account/generation-api/skill", methods=["GET", "POST"])
+@web.get("/account/generation-api/skill")
 @login_required
 def generation_api_skill():
-    connection = None
-    if request.method == "POST":
-        if not _can_package_key():
-            raise ServiceError("请通过 HTTPS 下载免配置 Skill")
-        token = request.form.get("api_key", "")
-        key, _ = services().generation_api_keys.authenticate(token)
-        if key.user_id != current_user.id:
-            raise ServiceError("只能打包当前账号的密钥", status_code=403)
-        connection = {"base_url": request.url_root.rstrip("/"), "api_key": token}
+    enabled, token = services().generation_api_keys.key_for_display(current_user.id)
+    connection = (
+        {"base_url": request.url_root.rstrip("/"), "api_key": token} if enabled and token else None
+    )
 
     bundle = BytesIO()
     with ZipFile(bundle, "w", compression=ZIP_DEFLATED) as archive:
@@ -116,8 +101,7 @@ def generation_api_skill():
         as_attachment=True,
         download_name=f"{SKILL_DIR.name}{suffix}.zip",
     )
-    if connection is not None:
-        response.headers["Cache-Control"] = "private, no-store"
+    response.headers["Cache-Control"] = "private, no-store"
     return response
 
 

@@ -22,6 +22,7 @@ from zipfile import ZipFile
 
 import yaml
 from sqlalchemy import event, func, select
+from werkzeug.http import parse_options_header
 from werkzeug.serving import make_server
 
 from imagegen.extensions import db
@@ -138,6 +139,7 @@ class TestGenerationApi(PlatformTestCase):
         self.assertTrue(denied.headers["WWW-Authenticate"].startswith("Bearer"))
 
         bundle = client.get("/account/generation-api/skill")
+        self.assertTrue(bundle.cache_control.no_store)
         with ZipFile(BytesIO(bundle.data)) as archive:
             self.assertEqual(
                 set(archive.namelist()),
@@ -165,13 +167,12 @@ class TestGenerationApi(PlatformTestCase):
         self.assertIn(f'value="{token}"'.encode(), owner_page.data)
         self.assertNotIn(token.encode(), other_page.data)
 
-    def test_configured_skill_download_checks_transport_csrf_and_key_owner(self):
+    def test_skill_download_embeds_the_current_account_key_on_http(self):
         url = "/account/generation-api/skill"
-        site = "https://studio.example.test"
+        site = "http://studio.example.test"
         client = self.app.test_client()
         token = self.services.generation_api_keys.issue_key(self.user.id)
         other_token = self.services.generation_api_keys.issue_key(self.admin.id)
-        self.assertEqual(client.post(url, base_url=site).status_code, 302)
         self.assertEqual(
             client.post(
                 "/login",
@@ -180,39 +181,26 @@ class TestGenerationApi(PlatformTestCase):
             ).status_code,
             302,
         )
-        self.assertEqual(
-            client.post(
-                url, base_url="http://studio.example.test", data={"api_key": token}
-            ).status_code,
-            400,
-        )
-        self.app.config["WTF_CSRF_ENABLED"] = True
-        self.assertEqual(client.post(url, base_url=site).json["code"], "csrf_error")
-        page = client.get("/account/generation-api", base_url=site).get_data(as_text=True)
-        csrf_token = re.search(r'name="csrf-token" content="([^"]+)"', page).group(1)
-        headers = {
-            "X-CSRFToken": csrf_token,
-            "Referer": f"{site}/account/generation-api",
-        }
-        with patch.object(self.services.generation_api_keys._cipher, "decrypt", return_value=""):
-            legacy_page = client.get("/account/generation-api", base_url=site)
-        self.assertIn(b"generationApiUnavailable", legacy_page.data)
-        self.assertNotIn(token.encode(), legacy_page.data)
-        self.assertEqual(
-            client.post(
-                url, base_url=site, headers=headers, data={"api_key": other_token}
-            ).status_code,
-            403,
-        )
-        bundle = client.post(url, base_url=site, headers=headers, data={"api_key": token})
+        bundle = client.get(url, base_url=site)
         self.assertEqual(bundle.status_code, 200)
         self.assertTrue(bundle.cache_control.no_store)
+        _, disposition = parse_options_header(bundle.headers["Content-Disposition"])
+        self.assertEqual(disposition["filename"], "snow-image-api-configured.zip")
         with ZipFile(BytesIO(bundle.data)) as archive:
             self.assertEqual(
                 json.loads(archive.read("snow-image-api/connection.json")),
                 {"base_url": site, "api_key": token},
             )
             self.assertNotIn(token.encode(), archive.read("snow-image-api/SKILL.md"))
+            self.assertNotIn(other_token.encode(), archive.read("snow-image-api/connection.json"))
+
+        with patch.object(self.services.generation_api_keys._cipher, "decrypt", return_value=""):
+            legacy_bundle = client.get(url, base_url=site)
+        self.assertEqual(legacy_bundle.status_code, 200)
+        _, disposition = parse_options_header(legacy_bundle.headers["Content-Disposition"])
+        self.assertEqual(disposition["filename"], "snow-image-api.zip")
+        with ZipFile(BytesIO(legacy_bundle.data)) as archive:
+            self.assertNotIn("snow-image-api/connection.json", archive.namelist())
 
     def test_downloaded_skill_connects_without_environment_variables(self):
         client = self.user_client()
@@ -221,12 +209,14 @@ class TestGenerationApi(PlatformTestCase):
             server_thread = Thread(target=server.serve_forever, daemon=True)
             server_thread.start()
             try:
-                bundle = client.post(
+                bundle = client.get(
                     "/account/generation-api/skill",
                     base_url=f"http://localhost:{server.server_port}",
-                    data={"api_key": token},
                 )
                 self.assertEqual(bundle.status_code, 200)
+                self.assertTrue(bundle.cache_control.no_store)
+                _, disposition = parse_options_header(bundle.headers["Content-Disposition"])
+                self.assertEqual(disposition["filename"], "snow-image-api-configured.zip")
                 with TemporaryDirectory() as directory:
                     with ZipFile(BytesIO(bundle.data)) as archive:
                         archive.extractall(directory)
