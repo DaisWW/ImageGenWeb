@@ -16,7 +16,7 @@
         <div class="image-test-setup">
           <label class="field"><span>测试题组</span><select id="imageTestSuite" required disabled></select></label>
           <div id="imageTestSuitePreview" class="image-test-questions"></div>
-          <button class="button secondary small" type="button" id="imageTestEditSuite"><i data-lucide="pencil"></i>编辑题组</button>
+          <button class="button secondary small" type="button" id="imageTestEditSuite" disabled><i data-lucide="book-open"></i>管理题组</button>
         </div>
         <fieldset class="image-test-targets">
           <legend>渠道模型</legend>
@@ -40,22 +40,22 @@
 
   <div data-test-pane="suites" hidden>
     <div class="image-test-panel image-test-suite-toolbar">
-      <label class="field"><span>已保存题组</span><select id="imageTestEditSelect"></select></label>
+      <label class="field"><span>已保存题组</span><select id="imageTestEditSelect" disabled></select></label>
       <div class="image-test-actions">
-        <button class="button secondary" type="button" id="imageTestNewSuite"><i data-lucide="plus"></i>新建题组</button>
-        <button class="button secondary" type="button" id="imageTestCopySuite"><i data-lucide="copy"></i>复制题组</button>
-        <button class="button danger" type="button" id="imageTestDeleteSuite"><i data-lucide="trash-2"></i>删除题组</button>
+        <button class="button secondary" type="button" id="imageTestNewSuite" disabled><i data-lucide="plus"></i>新建题组</button>
+        <button class="button secondary" type="button" id="imageTestCopySuite" disabled><i data-lucide="copy"></i>复制题组</button>
+        <button class="button danger" type="button" id="imageTestDeleteSuite" disabled><i data-lucide="trash-2"></i>删除题组</button>
       </div>
     </div>
     <form class="image-test-panel image-test-editor" id="imageTestSuiteForm">
-      <label class="field"><span>题组名称</span><input name="name" maxlength="80" required></label>
-      <p class="subline" id="imageTestBuiltinHint" hidden>编辑内置题组会另存为自定义题组。</p>
+      <label class="field"><span>题组名称</span><input name="name" maxlength="80" required disabled></label>
+      <p class="subline" id="imageTestBuiltinHint" hidden>内置题组不能删除。如需修改，请先复制题组。</p>
       <div class="image-test-editor-list" id="imageTestEditorQuestions"></div>
       <div class="image-test-actions image-test-editor-actions">
-        <button class="button secondary" type="button" id="imageTestAddQuestion"><i data-lucide="plus"></i>添加题目</button>
+        <button class="button secondary" type="button" id="imageTestAddQuestion" disabled><i data-lucide="plus"></i>添加题目</button>
         <div class="image-test-actions">
-          <button class="button secondary" type="submit" value="save"><i data-lucide="save"></i>保存题组</button>
-          <button class="button primary" type="submit" value="use">保存并用于测试<i data-lucide="arrow-right"></i></button>
+          <button class="button secondary" type="submit" value="save" disabled><i data-lucide="save"></i>保存题组</button>
+          <button class="button primary" type="submit" value="use" disabled>保存并用于测试<i data-lucide="arrow-right"></i></button>
         </div>
       </div>
     </form>

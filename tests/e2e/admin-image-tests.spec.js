@@ -139,3 +139,71 @@ test("管理员保存题组后按题对比生图结果 @responsive", async ({ st
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(page.viewportSize().width);
   expect(errors).toEqual([]);
 });
+
+test("同名题组可以区分并单独删除 @responsive", async ({ studioPage: page }, info) => {
+  const root = "/api/admin/image-tests";
+  await page.goto("/admin");
+  const headers = { "X-CSRFToken": await page.locator('meta[name="csrf-token"]').getAttribute("content") };
+  const { suites: [builtin] } = await page.request.get(root).then((response) => response.json());
+  const custom = [];
+  for (const title of ["同名题组甲", "同名题组乙"]) {
+    const response = await page.request.post(`${root}/suites`, {
+      headers,
+      data: { name: builtin.name, questions: [{ title, prompt: title }] },
+    });
+    expect(response.status()).toBe(201);
+    custom.push((await response.json()).suite);
+  }
+  const [first, second] = custom;
+  const label = (suite) => `${suite.name}（1 题 · ${suite.id.slice(-8)}）`;
+  const builtinLabel = `${builtin.name}（内置）`;
+
+  await page.getByRole("button", { name: "生图测评", exact: true }).click();
+  const workbench = page.getByLabel("测试题组");
+  const editor = page.getByLabel("已保存题组");
+  const deleteButton = page.getByRole("button", { name: "删除题组" });
+  const nameField = page.getByLabel("题组名称");
+  await expect(workbench.locator("option:checked")).toHaveText(builtinLabel);
+  await workbench.selectOption({ label: label(first) });
+  await expect(page.locator("#imageTestSuitePreview")).toContainText("同名题组甲");
+  await page.getByRole("button", { name: "管理题组" }).click();
+  await expect(editor).toHaveValue(first.id);
+  await expect(deleteButton).toBeEnabled();
+
+  await editor.selectOption({ label: builtinLabel });
+  await expect(deleteButton).toBeDisabled();
+  await expect(page.getByText("内置题组不能删除", { exact: false })).toBeVisible();
+  await expect(nameField).toBeDisabled();
+  await page.getByRole("button", { name: "复制题组" }).click();
+  await expect(editor).toHaveValue("");
+  await expect(editor.locator('option[value=""]')).toHaveJSProperty("hidden", true);
+  await expect(editor.locator('option[value=""]')).toHaveJSProperty("disabled", true);
+  await expect(deleteButton).toBeDisabled();
+  await expect(nameField).toHaveValue(`${builtin.name} · 副本`);
+  const copyName = `题组副本 ${info.project.name}`;
+  await nameField.fill(copyName);
+  await page.getByRole("button", { name: "保存题组", exact: true }).click();
+  await expect(editor.locator("option:checked")).toHaveText(copyName);
+  await page.getByRole("button", { name: "测试工作台", exact: true }).click();
+  await expect(workbench).toHaveValue(first.id);
+
+  await page.getByRole("button", { name: "题库", exact: true }).click();
+  await editor.selectOption({ label: label(first) });
+  let confirmation;
+  page.once("dialog", async (dialog) => {
+    confirmation = dialog.message();
+    await dialog.accept();
+  });
+  await deleteButton.click();
+  await expect(editor.locator(`option[value="${first.id}"]`)).toHaveCount(0);
+  expect(confirmation).toContain(label(first));
+  await expect(editor.locator(`option[value="${second.id}"]`)).toHaveText(label(second));
+  await expect(deleteButton).toBeEnabled();
+  await page.getByRole("button", { name: "测试工作台", exact: true }).click();
+  await expect(workbench).toHaveValue(builtin.id);
+  await expect(workbench.locator(`option[value="${first.id}"]`)).toHaveCount(0);
+  await expect(await page.request.delete(`${root}/suites/${second.id}`, {
+    headers,
+    data: { revision: second.revision },
+  })).toBeOK();
+});

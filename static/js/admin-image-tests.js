@@ -51,23 +51,31 @@
       this.el.NewSuite.disabled = pending;
       this.el.CopySuite.disabled = pending || !this.copyable;
       this.el.DeleteSuite.disabled = pending || !this.editor?.id || this.editor.builtin;
-      [...this.el.SuiteForm.elements].forEach((field) => { field.disabled = pending; });
+      [...this.el.SuiteForm.elements].forEach((field) => { field.disabled = pending || this.editor.builtin; });
       this.updateQuestionOrder();
     }
 
     loadCatalog(catalog) {
       this.catalog = catalog;
       this.renderSuites();
-      if (!this.editor) this.editSuite(this.selectedSuite());
+      if (!this.editor || (this.editor.id && !this.selectedSuite(this.el.EditSelect))) {
+        this.editSuite(this.selectedSuite());
+      }
     }
 
     renderSuites(selected = this.el.Suite.value) {
       const suites = this.catalog.suites;
-      const options = suites.map((suite) => option(suite.id, suite.name)).join("");
+      const nameCounts = new Map();
+      for (const suite of suites) nameCounts.set(suite.name, (nameCounts.get(suite.name) || 0) + 1);
+      const options = suites.map((suite) => {
+        const suffix = suite.builtin ? "（内置）" : nameCounts.get(suite.name) > 1
+          ? `（${suite.questions.length} 题 · ${suite.id.slice(-8)}）` : "";
+        return option(suite.id, suite.name + suffix);
+      }).join("");
       this.el.Suite.innerHTML = options;
       this.el.Suite.value = suites.some((suite) => suite.id === selected) ? selected : "default";
       this.el.Suite.disabled = false;
-      this.el.EditSelect.innerHTML = option("", "新题组") + options;
+      this.el.EditSelect.innerHTML = '<option value="" disabled hidden>未保存题组</option>' + options;
       this.el.EditSelect.value = this.editor?.id || "";
       this.previewSuite();
     }
@@ -91,15 +99,14 @@
       this.editor = {
         id: copy ? "" : suite?.id || "",
         revision: suite?.revision,
-        builtin: !copy && suite?.builtin,
+        builtin: !copy && !!suite?.builtin,
       };
       this.el.EditSelect.value = this.editor.id;
       this.el.SuiteForm.elements.name.value = copy ? `${suite.name.slice(0, 75)} · 副本` : suite?.name || "";
       this.el.BuiltinHint.hidden = !this.editor.builtin;
-      this.el.CopySuite.disabled = !suite;
-      this.el.DeleteSuite.disabled = !this.editor.id || !!this.editor.builtin;
       this.el.EditorQuestions.replaceChildren();
       (suite?.questions || [{}]).forEach((question) => this.addQuestion(question));
+      this.setPending(this.pending);
     }
 
     editorQuestions() {
@@ -135,13 +142,14 @@
 
     updateQuestionOrder() {
       const rows = [...this.el.EditorQuestions.children];
+      const disabled = this.pending || this.editor.builtin;
       rows.forEach((row, index) => {
         row.querySelector("legend").textContent = `第 ${index + 1} 题`;
-        row.querySelector("[data-question-action=up]").disabled = this.pending || index === 0;
-        row.querySelector("[data-question-action=down]").disabled = this.pending || index === rows.length - 1;
-        row.querySelector("[data-question-action=remove]").disabled = this.pending || rows.length === 1;
+        row.querySelector("[data-question-action=up]").disabled = disabled || index === 0;
+        row.querySelector("[data-question-action=down]").disabled = disabled || index === rows.length - 1;
+        row.querySelector("[data-question-action=remove]").disabled = disabled || rows.length === 1;
       });
-      this.el.AddQuestion.disabled = this.pending || rows.length >= this.catalog.max_questions;
+      this.el.AddQuestion.disabled = disabled || rows.length >= this.catalog.max_questions;
     }
 
     editQuestionOrder(event) {
@@ -156,11 +164,11 @@
 
     async saveSuite(event) {
       event.preventDefault();
-      if (this.pending) return;
+      if (this.pending || this.editor.builtin) return;
       this.setPending(true);
-      const button = event.submitter;
+      const use = event.submitter?.value === "use";
       this.app.setError("");
-      const suiteId = this.editor.builtin ? "" : this.editor.id;
+      const suiteId = this.editor.id;
       try {
         const { suite } = await UI.api(`${apiRoot}/suites${suiteId ? `/${suiteId}` : ""}`, {
           method: suiteId ? "PUT" : "POST",
@@ -176,9 +184,9 @@
           ...this.catalog.suites.slice(1).filter((item) => item.id !== suite.id),
         ];
         this.editSuite(suite);
-        this.renderSuites(suite.id);
+        this.renderSuites(use ? suite.id : this.el.Suite.value);
         this.app.updateEstimate();
-        if (button?.value === "use") this.app.showPage("workbench");
+        if (use) this.app.showPage("workbench");
         UI.toast("已保存题组", "success");
       } catch (error) {
         this.app.setError(error.message);
@@ -189,14 +197,17 @@
 
     async deleteSuite() {
       const { id, revision, builtin } = this.editor || {};
-      if (!id || builtin || this.pending || !window.confirm("删除此题组？已生成的测评记录会保留。")) return;
+      if (!id || builtin || this.pending) return;
+      const label = this.el.EditSelect.selectedOptions[0].text;
+      if (!window.confirm(`删除题组「${label}」？测评历史和已提交的任务会保留。`)) return;
       this.setPending(true);
       this.app.setError("");
       try {
         await UI.api(`${apiRoot}/suites/${id}`, { method: "DELETE", body: { revision } });
+        const index = this.catalog.suites.findIndex((suite) => suite.id === id);
         this.catalog.suites = this.catalog.suites.filter((suite) => suite.id !== id);
-        this.editSuite(this.catalog.suites[0]);
         this.renderSuites();
+        this.editSuite(this.catalog.suites[index] || this.catalog.suites.at(-1));
         this.app.updateEstimate();
         UI.toast("已删除题组", "success");
       } catch (error) {

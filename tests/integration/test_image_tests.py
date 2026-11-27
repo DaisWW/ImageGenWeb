@@ -65,8 +65,13 @@ class TestAdminImageTests(PlatformTestCase):
             "revision": suite["revision"],
             "questions": [{**question, "prompt": "改成只写「夏天」"}],
         }
-        self.assertEqual(admin.put(f"{ROOT}/suites/{suite['id']}", json=updates).status_code, 200)
-        self.assertEqual(admin.put(f"{ROOT}/suites/{suite['id']}", json=updates).status_code, 409)
+        suite_path = f"{ROOT}/suites/{suite['id']}"
+        updated = admin.put(suite_path, json=updates)
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(admin.put(suite_path, json=updates).status_code, 409)
+        deleted = admin.delete(suite_path, json={"revision": updated.json["suite"]["revision"]})
+        self.assertEqual(deleted.status_code, 200)
+        self.assertNotIn(suite["id"], [entry["id"] for entry in admin.get(ROOT).json["suites"]])
 
         worker = self.create_worker()
         worker.providers = FakeProviderFactory()
@@ -82,6 +87,8 @@ class TestAdminImageTests(PlatformTestCase):
         db.session.expire_all()
         detail_path = f"{ROOT}/runs/{run['id']}"
         finished = admin.get(detail_path).json["run"]
+        self.assertEqual(finished["suite_name"], suite["name"])
+        self.assertEqual(finished["questions"], run["questions"])
         self.assertEqual(finished["counts"], {"succeeded": 1, "failed": 1})
         succeeded = next(
             result for result in finished["results"] if result["status"] == "succeeded"
@@ -162,6 +169,13 @@ class TestAdminImageTests(PlatformTestCase):
                 )
         default_suite = admin.get(ROOT).json["suites"][0]
         self.assertEqual(default_suite["name"], "二次元苗刀·建模三视图")
+        self.assertTrue(default_suite["builtin"])
+        self.assertEqual(
+            admin.delete(
+                f"{ROOT}/suites/{default_suite['id']}", json={"revision": default_suite["revision"]}
+            ).status_code,
+            400,
+        )
         (question,) = default_suite["questions"]
         self.assertEqual(question["title"], "鹤羽苗刀·正侧俯三视图")
         request = {
