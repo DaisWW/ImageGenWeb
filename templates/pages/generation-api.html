@@ -40,13 +40,16 @@
 
     <section class="generation-api-card">
       <div class="generation-api-heading"><h2>连接 AI</h2></div>
-      <p>下载完整 Skill 目录。当前账号密钥可显示时，ZIP 会自动包含站点地址和密钥，解压后即可连接。</p>
       <label class="field">
         <span>站点地址 · SNOW_IMAGE_API_URL</span>
         <input type="url" value="{{ base_url }}" readonly>
       </label>
-      <p>Skill 包含调用脚本、接口说明和 JSON 模板。垫图与蒙版可随参数一起提交到 <code>POST /api/v1/generations</code>。没有可显示的密钥时，下载的是通用 Skill，需要手动配置连接信息。</p>
-      <a class="button primary" href="{{ url_for('web.generation_api_skill') }}"><i data-lucide="download"></i>下载 AI Skill</a>
+      <p>ZIP 附带调用脚本、接口说明和 JSON 模板。垫图和蒙版可随参数提交到 <code>POST /api/v1/generations</code>。</p>
+      <p id="generationApiConfiguredSkill"{% if not api_key %} hidden{% endif %}><strong>ZIP 已包含站点 URL 和当前 API 密钥。</strong>解压后把整个 <code>snow-image-api</code> 目录交给 Codex 等支持 Skill 的 AI 安装，即可直接生图。</p>
+      <p id="generationApiGenericSkill"{% if api_key %} hidden{% endif %}>通用 ZIP 需要手动配置站点 URL 和 API 密钥。页面显示密钥后，即可下载免配置版。</p>
+      <form id="generationApiSkillForm" action="{{ url_for('web.generation_api_skill') }}" method="get">
+        <button class="button primary" type="submit"><i data-lucide="download"></i>下载 AI Skill</button>
+      </form>
     </section>
   </div>
 </main>

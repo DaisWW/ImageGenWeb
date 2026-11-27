@@ -13,6 +13,16 @@
   const secret = document.getElementById("generationApiSecret");
   const token = document.getElementById("generationApiToken");
   const copy = document.getElementById("copyGenerationApiKey");
+  const skillForm = document.getElementById("generationApiSkillForm");
+  const download = skillForm.querySelector('[type="submit"]');
+  const configuredSkill = document.getElementById("generationApiConfiguredSkill");
+  const genericSkill = document.getElementById("generationApiGenericSkill");
+
+  function setActionsDisabled(disabled) {
+    submit.disabled = disabled;
+    revoke.disabled = disabled;
+    download.disabled = disabled;
+  }
 
   function updateKey(enabled, value = "") {
     status.dataset.enabled = String(enabled);
@@ -25,19 +35,53 @@
     token.removeAttribute("value");
     token.value = value;
     secret.hidden = !value;
+    configuredSkill.hidden = !value;
+    genericSkill.hidden = Boolean(value);
   }
 
   async function changeKey(method) {
-    submit.disabled = true;
-    revoke.disabled = true;
+    setActionsDisabled(true);
     try {
       const payload = await api(form.action, { method });
       updateKey(method === "POST", payload?.api_key);
     } catch (error) {
       toast(error.message, "error");
     } finally {
-      submit.disabled = false;
-      revoke.disabled = false;
+      setActionsDisabled(false);
+    }
+  }
+
+  async function downloadSkill(event) {
+    event.preventDefault();
+    setActionsDisabled(true);
+    toast("正在准备 Skill ZIP");
+    try {
+      const response = await fetch(skillForm.action, {
+        cache: "no-store",
+        redirect: "manual",
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (response.type === "opaqueredirect" || response.status === 401) {
+        toast("登录已过期，请重新登录后下载", "error");
+        return;
+      }
+      const filename = response.headers.get("content-disposition")?.match(/\bfilename="?([^";]+)"?/i)?.[1];
+      if (!response.ok || response.headers.get("content-type") !== "application/zip" || !filename) {
+        throw new Error("Invalid Skill ZIP response");
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast(`已发起下载 ${filename}，请在浏览器下载列表查看`, "success");
+    } catch (_error) {
+      toast("Skill 下载失败，请重试", "error");
+    } finally {
+      setActionsDisabled(false);
     }
   }
 
@@ -46,6 +90,7 @@
     changeKey("POST");
   });
   revoke.addEventListener("click", () => changeKey("DELETE"));
+  skillForm.addEventListener("submit", downloadSkill);
 
   copy.addEventListener("click", async () => {
     const value = token.value;
