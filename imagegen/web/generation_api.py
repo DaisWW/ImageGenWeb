@@ -22,11 +22,13 @@ from flask_login import current_user, login_required
 from ..config.channels import AUTO_CHANNEL_ID
 from ..errors import ServiceError
 from ..extensions import csrf
+from ..image_masks import MAX_MASK_BYTES
 from ..models import GenerationJob
 from ..serializers import job_status_dict
-from ..services import SubmitGeneration
+from ..services import GenerationWorkflow, SubmitGeneration
+from ..services.generations.planning import normalize_generation_strategy
 from . import web
-from .shared import channels, image_extension, json_body, services, storage
+from .shared import channels, image_extension, json_body, json_bool, services, storage
 
 api = Blueprint("generation_api", __name__, url_prefix="/api/v1")
 SKILL_DIR = Path(__file__).resolve().parents[1] / "skills" / "snow-image-api"
@@ -138,11 +140,15 @@ def config():
         channels=[
             channel.public_dict()
             for channel in registry.list(include_disabled=False)
-            if channel.configured and "text2img" in channel.capabilities.modes
+            if channel.configured
         ],
         limits={
             "max_batch_images": runtime.max_batch_images,
             "max_prompt_characters": runtime.max_prompt_characters,
+            "max_reference_images": runtime.max_assets_per_workspace,
+            "max_reference_image_mb": runtime.max_attachment_mb,
+            "max_reference_total_mb": runtime.max_attachment_total_mb,
+            "max_mask_bytes": MAX_MASK_BYTES,
         },
         history_retention_days=registry.queue.history_retention_days,
     )
@@ -156,8 +162,15 @@ def submit():
         "Idempotency-Key 必须是 UUID",
         code="invalid_request_id",
     )
-    generation = _parse_generation(json_body(max_bytes=MAX_GENERATION_REQUEST_BYTES))
-    job, created = services().generation_api.submit(g.generation_api_key, request_id, generation)
+    data, reference_uploads, mask_content = _generation_submission_body()
+    generation = _parse_generation(data, has_references=bool(reference_uploads))
+    job, created = services().generation_api.submit(
+        g.generation_api_key,
+        request_id,
+        generation,
+        reference_uploads=reference_uploads,
+        mask_content=mask_content,
+    )
     status_url = url_for("generation_api.status", job_id=job.id)
     return jsonify(job=_job_payload(job)), 202 if created else 200, {"Location": status_url}
 
@@ -192,7 +205,56 @@ def _uuid_hex(value: object, message: str, *, code: str = "invalid_request") -> 
         raise ServiceError(message, code=code) from exc
 
 
-def _parse_generation(data: dict) -> SubmitGeneration:
+def _generation_submission_body() -> tuple[dict, tuple[tuple[str, bytes], ...], bytes | None]:
+    if request.mimetype != "multipart/form-data":
+        return json_body(max_bytes=MAX_GENERATION_REQUEST_BYTES), (), None
+
+    if request.form.keys() - {"payload"} or request.files.keys() - {"references", "mask"}:
+        raise ServiceError("上传请求包含不支持的字段")
+    raw_payload = request.form.get("payload", "")
+    if len(raw_payload.encode("utf-8")) > MAX_GENERATION_REQUEST_BYTES:
+        raise ServiceError("生成参数超过 192 KiB 限制", code="payload_too_large", status_code=413)
+    try:
+        data = json.loads(raw_payload)
+    except (ValueError, RecursionError) as exc:
+        raise ServiceError("请求内容必须是有效 JSON") from exc
+    if not isinstance(data, dict):
+        raise ServiceError("请求内容必须是 JSON 对象")
+
+    runtime = services().settings.runtime()
+    uploads = request.files.getlist("references")
+    if len(uploads) > runtime.max_assets_per_workspace:
+        raise ServiceError(
+            f"单次最多上传 {runtime.max_assets_per_workspace} 张垫图", status_code=413
+        )
+    reference_uploads = []
+    total_bytes = 0
+    for upload in uploads:
+        content = upload.stream.read(runtime.max_attachment_bytes + 1)
+        if len(content) > runtime.max_attachment_bytes:
+            raise ServiceError(f"单张垫图不能超过 {runtime.max_attachment_mb} MiB", status_code=413)
+        total_bytes += len(content)
+        reference_uploads.append((upload.filename or "reference", content))
+    if total_bytes > runtime.max_attachment_total_bytes:
+        raise ServiceError(
+            f"垫图合计不能超过 {runtime.max_attachment_total_mb} MiB", status_code=413
+        )
+
+    masks = request.files.getlist("mask")
+    if len(masks) > 1:
+        raise ServiceError("局部重绘只能上传一张蒙版", code="invalid_mask", status_code=422)
+    mask_content = None
+    if masks:
+        if not reference_uploads:
+            raise ServiceError("局部重绘必须同时上传一张原图", code="invalid_mask", status_code=422)
+        mask_content = masks[0].stream.read(MAX_MASK_BYTES + 1)
+        if len(mask_content) > MAX_MASK_BYTES:
+            raise ServiceError("蒙版不能超过 4 MiB", code="invalid_mask", status_code=422)
+
+    return data, tuple(reference_uploads), mask_content
+
+
+def _parse_generation(data: dict, *, has_references: bool = False) -> SubmitGeneration:
     defaults = {
         "channel_id": "",
         "model": "",
@@ -200,8 +262,18 @@ def _parse_generation(data: dict) -> SubmitGeneration:
         "size": "auto",
         "quality": "auto",
         "output_format": "png",
+        "moderation": "auto",
     }
-    if data.keys() - (defaults.keys() | {"batch_count", "compression"}):
+    optional = {
+        "batch_count",
+        "compression",
+        "transparent_background",
+        "generation_stage",
+        "generation_strategy",
+        "creative_direction_id",
+        "item_prompts",
+    }
+    if data.keys() - (defaults.keys() | optional):
         raise ServiceError("请求包含不支持的字段")
     values = {}
     for name, default in defaults.items():
@@ -215,19 +287,52 @@ def _parse_generation(data: dict) -> SubmitGeneration:
         values[name] = value.strip()
     if not values["channel_id"] or values["channel_id"] == AUTO_CHANNEL_ID:
         raise ServiceError("请选择一个生图渠道")
-    for name in ("quality", "output_format"):
+    for name in ("quality", "output_format", "moderation"):
         values[name] = values[name].lower()
     batch_count = data.get("batch_count", 1)
     compression = data.get("compression", 90)
     if type(batch_count) is not int or type(compression) is not int:
         raise ServiceError("生成数量和压缩质量必须是整数")
 
+    raw_item_prompts = data.get("item_prompts", [])
+    if not isinstance(raw_item_prompts, list) or any(
+        not isinstance(prompt, str) or "\x00" in prompt for prompt in raw_item_prompts
+    ):
+        raise ServiceError("逐张提示词参数无效")
+    try:
+        item_prompts = tuple(prompt.strip() for prompt in raw_item_prompts)
+        for prompt in item_prompts:
+            prompt.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ServiceError("逐张提示词参数无效") from exc
+    strategy = normalize_generation_strategy(data.get("generation_strategy", "sample"))
+    if strategy == "explore" and not item_prompts:
+        raise ServiceError(
+            "探索方案需要逐张提示词，请由 AI 提供 item_prompts",
+            code="generation_prompts_required",
+            status_code=422,
+        )
+    stage = data.get("generation_stage", "final")
+    creative_direction_id = data.get("creative_direction_id", "auto")
+    if not isinstance(stage, str) or not isinstance(creative_direction_id, str):
+        raise ServiceError("生成阶段或创作方向参数无效")
+    workflow = GenerationWorkflow.build(
+        stage=stage,
+        prompt_draft_id="",
+        draft=None,
+        creative_direction_id=creative_direction_id,
+        plan_metadata={"generation_strategy": strategy},
+    )
+
     return SubmitGeneration(
         **values,
-        mode="text2img",
+        mode="img2img" if has_references else "text2img",
         batch_count=batch_count,
         compression=compression,
         reference_ids=(),
+        item_prompts=item_prompts,
+        workflow=workflow.metadata,
+        transparent_background=json_bool(data.get("transparent_background", False)),
     )
 
 

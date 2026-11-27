@@ -12,12 +12,14 @@
 
 | 方法与路径 | 用途 |
 | --- | --- |
-| `GET /api/v1/config` | 查询可用余额、渠道、可选模型、单张价格和请求限制。 |
-| `POST /api/v1/generations` | 提交文生图任务，返回 `job` 和指向查询接口的 `Location`。 |
+| `GET /api/v1/config` | 查询可用余额、支持的生图渠道和模型、各渠道能力、价格及请求限制。 |
+| `POST /api/v1/generations` | 一次提交文生图、垫图编辑或局部重绘任务，返回 `job` 和指向查询接口的 `Location`。 |
 | `GET /api/v1/generations/{job_id}` | 查询任务状态、进度、费用及每张图片的下载地址。 |
 | `GET /api/v1/generations/{job_id}/images/{item_id}` | 下载该任务中生成成功的原图。 |
 
-提交需要 `Content-Type: application/json` 和 `Idempotency-Key: <UUID>`。JSON 请求体最多 192 KiB。每次新生成用一个 UUID。超时或连接中断后，用同一 UUID 和同一 JSON 重试。首次接受返回 **202**，在任务记录保留期间，同一账号的重复提交返回 **200** 和原任务。使用同一 UUID 提交不同参数会返回 **409**。
+提交需要 `Idempotency-Key: <UUID>`。纯文生图使用 `Content-Type: application/json`，请求体最多 192 KiB。垫图或蒙版使用 `multipart/form-data`，其中 `payload` 是 JSON 字符串，`references` 是可重复的图片文件字段，`mask` 是可选的单个蒙版文件字段。每次新生成用一个 UUID。超时或连接中断后，用同一 UUID 和完全相同的参数及图片文件重试。首次接受返回 **202**，在任务记录保留期间，同一账号的重复提交返回 **200** 和原任务。使用同一 UUID 提交不同参数、图片或蒙版会返回 **409**。
+
+垫图会自动把模式设为 `img2img`，没有垫图时使用 `text2img`。蒙版用于局部重绘，必须与唯一一张原图一起提交，且必须是与原图长宽比例一致的静态 PNG，最大 4 MiB。蒙版 alpha 小于 128 的透明区域会被重绘，alpha 大于或等于 128 的不透明区域用于保护。局部重绘沿用工作站限制，只支持 `sample` 策略。垫图数量、单图大小、总大小和模型侧限制可从 `config.limits` 与 `config.channels[].capabilities` 查询。
 
 ## 请求模板
 
@@ -33,6 +35,19 @@
 | `output_format` | 默认 `png`，可从 `channel.capabilities.formats` 选择其他格式。 |
 | `compression` | 整数 0 至 100，默认 90。 |
 | `batch_count` | 整数，默认 1，上限见 `limits.max_batch_images`。 |
+| `transparent_background` | 布尔值，默认 `false`。透明背景仅支持 PNG/WebP，且上游模型需支持。 |
+| `moderation` | `auto` 或 `low`，默认 `auto`。`low` 仅支持 GPT Image 2 系列。 |
+| `generation_stage` | 工作流阶段 `draft`、`refine` 或 `final`，默认 `final`。 |
+| `generation_strategy` | `sample` 或 `explore`，默认 `sample`。局部重绘只支持 `sample`。 |
+| `item_prompts` | 可选的逐张最终提示词列表。用于 `explore` 时必须提供，数量须等于 `batch_count`。不需要对话模型接口。 |
+| `creative_direction_id` | 可选的工作流元数据，默认 `auto`。 |
+
+将参考图和蒙版文件放入同一个 multipart 请求。下面的 Skill 命令会完成打包并只发送一次任务提交请求：
+
+```powershell
+python scripts/generate.py generate request.json --reference source.png --mask mask.png
+python scripts/generate.py generate request.json --reference subject.png --reference style.png
+```
 
 ## 等待与下载
 

@@ -4,5 +4,12 @@
   "size": "1024x1024",
   "quality": "auto",
   "output_format": "png",
-  "batch_count": 1
+  "compression": 90,
+  "batch_count": 1,
+  "transparent_background": false,
+  "moderation": "auto",
+  "generation_stage": "final",
+  "generation_strategy": "sample",
+  "item_prompts": [],
+  "creative_direction_id": "auto"
 }

@@ -8,11 +8,13 @@ from sqlalchemy import delete, select
 from ..config.channels import ChannelRegistry
 from ..extensions import db
 from ..models import (
+    GENERATION_API_WORKSPACE_KIND,
     Asset,
     ConversationAttachment,
     GenerationJob,
     GenerationReference,
     ImageTestRun,
+    Workspace,
     utcnow,
 )
 from ..storage import ImageStorage
@@ -67,6 +69,32 @@ class RetentionService:
                 errors += 1
                 LOGGER.warning("清理历史生成任务失败：%s", job_id, exc_info=True)
 
+        empty_api_workspaces = list(
+            db.session.scalars(
+                select(Workspace)
+                .where(
+                    Workspace.kind == GENERATION_API_WORKSPACE_KIND,
+                    ~select(GenerationJob.id)
+                    .where(GenerationJob.workspace_id == Workspace.id)
+                    .exists(),
+                )
+                .with_for_update()
+            )
+        )
+        deleted_assets = 0
+        for workspace in empty_api_workspaces:
+            workspace_id = workspace.id
+            try:
+                workspace_asset_count = len(workspace.assets)
+                self.storage.delete_workspace(workspace.user_id, workspace_id)
+                db.session.delete(workspace)
+                db.session.commit()
+                deleted_assets += workspace_asset_count
+            except Exception:
+                db.session.rollback()
+                errors += 1
+                LOGGER.warning("清理生图 API 工作站失败：%s", workspace_id, exc_info=True)
+
         try:
             deleted_runs = db.session.execute(
                 delete(ImageTestRun).where(
@@ -96,7 +124,6 @@ class RetentionService:
                 )
             )
         )
-        deleted_assets = 0
         for asset_id, storage_path in orphaned_assets:
             try:
                 self.storage.delete(storage_path)

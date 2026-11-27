@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
 import unittest
+from dataclasses import asdict
+from datetime import timedelta
 from decimal import Decimal
 from http.client import HTTPResponse
 from io import BytesIO
@@ -17,12 +20,25 @@ from unittest.mock import Mock, patch
 from uuid import uuid4
 from zipfile import ZipFile
 
-from sqlalchemy import event, select
+from sqlalchemy import event, func, select
 from werkzeug.serving import make_server
 
 from imagegen.extensions import db
-from imagegen.models import GENERATION_API_WORKSPACE_KIND, GenerationJob, User, Workspace
-from tests.support.platform import FakeProviderFactory, PlatformTestCase, png_bytes
+from imagegen.models import (
+    GENERATION_API_WORKSPACE_KIND,
+    Asset,
+    GenerationJob,
+    User,
+    Workspace,
+    utcnow,
+)
+from imagegen.web.generation_api import _parse_generation
+from tests.support.platform import (
+    FakeProviderFactory,
+    PlatformTestCase,
+    mask_png_bytes,
+    png_bytes,
+)
 
 
 class TestGenerationApi(PlatformTestCase):
@@ -83,6 +99,8 @@ class TestGenerationApi(PlatformTestCase):
         self.assertNotIn("workspace", config.json)
         self.assertEqual(config.json["available_balance_rmb"], "20.0000")
         self.assertEqual(config.json["channels"][0]["price_rmb"], "1.2500")
+        self.assertIn("img2img", config.json["channels"][0]["capabilities"]["modes"])
+        self.assertEqual(config.json["limits"]["max_mask_bytes"], 4 * 1024 * 1024)
         self.assertNotIn("test-key-not-secret", config.get_data(as_text=True))
         self.assertNotIn("relay.example", config.get_data(as_text=True))
 
@@ -309,6 +327,110 @@ class TestGenerationApi(PlatformTestCase):
         self.assertEqual(external.get(status_url, headers=other_headers).status_code, 404)
         self.assertEqual(external.get(image_url, headers=other_headers).status_code, 404)
 
+    def test_multipart_submission_supports_references_masks_and_retention(self):
+        token = self.services.generation_api_keys.issue_key(self.user.id)
+        client = self.app.test_client()
+        request_id = str(uuid4())
+        reference = png_bytes()
+        mask = mask_png_bytes()
+        payload = {"channel_id": "test", "prompt": "修改参考图中的帽子"}
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Idempotency-Key": request_id,
+        }
+
+        def submit(mask_content):
+            return client.post(
+                "/api/v1/generations",
+                headers=headers,
+                data={
+                    "payload": json.dumps(payload, ensure_ascii=False),
+                    "references": (BytesIO(reference), "source.png", "image/png"),
+                    "mask": (BytesIO(mask_content), "mask.png", "image/png"),
+                },
+            )
+
+        submitted = submit(mask)
+        self.assertEqual(submitted.status_code, 202, submitted.json)
+        job_id = submitted.json["job"]["id"]
+        job = db.session.get(GenerationJob, job_id)
+        workspace_id = job.workspace_id
+        asset_id = job.references[0].asset_id
+        self.assertEqual(job.mode, "img2img")
+        self.assertEqual(len(job.references), 1)
+        self.assertEqual(job.mask_target_asset_id, asset_id)
+        self.assertEqual(job.mask_width, 64)
+        self.assertEqual(job.mask_height, 48)
+
+        replay = submit(mask)
+        self.assertEqual(replay.status_code, 200)
+        self.assertEqual(replay.json["job"]["id"], job_id)
+        changed = submit(mask_png_bytes(box=(8, 6, 24, 18)))
+        self.assertEqual(changed.status_code, 409)
+        self.assertEqual(changed.json["code"], "idempotency_conflict")
+        self.assertEqual(db.session.scalar(select(func.count(Asset.id))), 1)
+
+        worker = self.create_worker()
+        worker.providers = FakeProviderFactory()
+        channel = self.app.extensions["channel_registry"].get("test")
+        self.assertTrue(worker._claim(job.items[0].id, channel))
+        worker._process_item(job.items[0].id)
+        provider_request = worker.providers.adapter.request
+        self.assertEqual(provider_request.references[0].content, reference)
+        self.assertIsNotNone(provider_request.mask)
+        self.assertEqual(provider_request.mask.mime_type, "image/png")
+
+        job.completed_at = utcnow() - timedelta(days=31)
+        db.session.commit()
+        self.assertEqual(worker.retention.cleanup(), {"jobs": 1, "assets": 1, "errors": 0})
+        self.assertIsNone(db.session.get(GenerationJob, job_id))
+        self.assertIsNone(db.session.get(Workspace, workspace_id))
+        self.assertIsNone(db.session.get(Asset, asset_id))
+
+    def test_multipart_submission_accepts_multiple_references_and_generation_options(self):
+        token = self.services.generation_api_keys.issue_key(self.user.id)
+        response = self.app.test_client().post(
+            "/api/v1/generations",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Idempotency-Key": str(uuid4()),
+            },
+            data={
+                "payload": json.dumps(
+                    {
+                        "channel_id": "test",
+                        "prompt": "角色设计",
+                        "size": "1024x1024",
+                        "quality": "high",
+                        "output_format": "png",
+                        "compression": 85,
+                        "batch_count": 2,
+                        "transparent_background": True,
+                        "moderation": "auto",
+                        "generation_stage": "refine",
+                        "generation_strategy": "explore",
+                        "item_prompts": ["暖色光线", "冷色光线"],
+                        "creative_direction_id": "character",
+                    }
+                ),
+                "references": [
+                    (BytesIO(png_bytes()), "subject.png", "image/png"),
+                    (BytesIO(png_bytes((35, 120, 180))), "style.png", "image/png"),
+                ],
+            },
+        )
+        self.assertEqual(response.status_code, 202, response.json)
+        job = db.session.get(GenerationJob, response.json["job"]["id"])
+        self.assertEqual(job.mode, "img2img")
+        self.assertEqual(len(job.references), 2)
+        self.assertEqual(job.quality, "high")
+        self.assertEqual(job.output_format, "png")
+        self.assertEqual(job.compression, 85)
+        self.assertTrue(job.transparent_background)
+        self.assertEqual(job.workflow["generation_stage"], "refine")
+        self.assertEqual(job.workflow["generation_strategy"], "explore")
+        self.assertEqual([item.prompt for item in job.items], ["暖色光线", "冷色光线"])
+
     def test_rotated_key_can_replay_legacy_job_from_a_regular_workspace(self):
         legacy_workspace = self.create_workspace()
         key_url = "/account/generation-api/key"
@@ -321,11 +443,17 @@ class TestGenerationApi(PlatformTestCase):
         token = account.post(key_url).json["api_key"]
         headers = {"Authorization": f"Bearer {token}", "Idempotency-Key": request_id}
         with patch(
-            "imagegen.services.generation_api._get_or_create_api_workspace",
+            "imagegen.services.generation_api._new_api_workspace",
             return_value=legacy_workspace,
         ):
             original = external.post(submit_url, headers=headers, json=body)
         self.assertEqual(original.status_code, 202)
+        job = db.session.get(GenerationJob, original.json["job"]["id"])
+        legacy_request = _parse_generation(body)
+        job.api_request_digest = hashlib.sha256(
+            json.dumps(asdict(legacy_request), sort_keys=True).encode("ascii")
+        ).hexdigest()
+        db.session.commit()
 
         rotated = account.post(key_url).json["api_key"]
         self.assertEqual(
@@ -391,17 +519,77 @@ class TestGenerationApi(PlatformTestCase):
         response = self.app.test_client().post(
             "/api/v1/generations",
             headers={"Authorization": f"Bearer {token}", "Idempotency-Key": str(uuid4())},
-            json={"channel_id": "test", "prompt": "测试图片", "batch_count": 20},
+            data={
+                "payload": json.dumps(
+                    {"channel_id": "test", "prompt": "测试图片", "batch_count": 20}
+                ),
+                "references": (BytesIO(png_bytes()), "source.png", "image/png"),
+            },
         )
         self.assertEqual(response.status_code, 402)
         self.assertEqual(response.json["code"], "insufficient_balance")
         self.assertIsNone(
             db.session.scalar(select(Workspace.id).where(Workspace.user_id == self.user.id))
         )
+        self.assertEqual(db.session.scalar(select(func.count(Asset.id))), 0)
+        storage_root = self.app.extensions["image_storage"].root
+        self.assertEqual(
+            list((storage_root / "users" / str(self.user.id) / "workspaces").glob("*")), []
+        )
         self.assertEqual(db.session.get(User, self.user.id).reserved_rmb, Decimal("0"))
 
 
 class TestGenerationApiSkill(unittest.TestCase):
+    def test_skill_sends_reference_and_mask_in_one_request(self):
+        script = (
+            Path(__file__).resolve().parents[2]
+            / "imagegen/skills/snow-image-api/scripts/generate.py"
+        )
+        module = run_path(str(script))
+        with TemporaryDirectory() as directory:
+            reference = Path(directory) / "source.png"
+            mask = Path(directory) / "mask.png"
+            reference.write_bytes(png_bytes())
+            mask.write_bytes(mask_png_bytes())
+            body, content_type = module["_multipart_generation"](
+                {"channel_id": "test", "prompt": "修改局部"}, [reference], mask
+            )
+
+            class RecordingOpener:
+                def __init__(self):
+                    self.requests = []
+
+                def open(self, request, timeout):
+                    self.requests.append((request, timeout))
+                    return BytesIO(b'{"accepted": true}')
+
+            client = module["GenerationApiClient"]("https://studio.example.test", "test-key")
+            opener = RecordingOpener()
+            client._opener = opener
+            self.assertEqual(
+                client.request_json(
+                    "generations",
+                    body=body,
+                    request_id=uuid4(),
+                    content_type=content_type,
+                ),
+                {"accepted": True},
+            )
+
+        self.assertEqual(len(opener.requests), 1)
+        request, timeout = opener.requests[0]
+        self.assertEqual(request.full_url, "https://studio.example.test/api/v1/generations")
+        self.assertEqual(request.get_header("Authorization"), "Bearer test-key")
+        self.assertTrue(
+            request.get_header("Content-type").startswith("multipart/form-data; boundary=")
+        )
+        self.assertIn(b'name="payload"', request.data)
+        self.assertIn(b'name="references"; filename="reference_0.png"', request.data)
+        self.assertIn(b'name="mask"; filename="mask.png"', request.data)
+        self.assertIn(png_bytes(), request.data)
+        self.assertIn(mask_png_bytes(), request.data)
+        self.assertEqual(timeout, 30)
+
     def test_skill_replaces_the_image_only_after_a_complete_download(self):
         script = (
             Path(__file__).resolve().parents[2]

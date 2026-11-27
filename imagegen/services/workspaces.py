@@ -226,7 +226,13 @@ class WorkspaceService:
             workspace.position = position
         db.session.commit()
 
-    def add_assets(self, workspace: Workspace, uploads: Iterable[tuple[str, bytes]]) -> list[Asset]:
+    def add_assets(
+        self,
+        workspace: Workspace,
+        uploads: Iterable[tuple[str, bytes]],
+        *,
+        commit: bool = True,
+    ) -> list[Asset]:
         uploads = list(uploads)
         if not uploads:
             raise ServiceError("请选择参考图")
@@ -270,7 +276,8 @@ class WorkspaceService:
                 saved_paths.append(asset.storage_path)
                 db.session.add(asset)
                 assets.append(asset)
-            db.session.commit()
+            if commit:
+                db.session.commit()
             return assets
         except Exception:
             db.session.rollback()

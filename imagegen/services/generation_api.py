@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict
+import logging
+from dataclasses import asdict, replace
 
 from sqlalchemy import ColumnElement, and_, select
 from sqlalchemy.orm import defer, joinedload
@@ -18,20 +19,42 @@ from ..models import (
     new_public_id,
 )
 from .generation_api_keys import GenerationApiKeyService
-from .generations import GenerationService, SubmitGeneration
+from .generations import GenerationMaskInput, GenerationService, SubmitGeneration
+from .workspaces import WorkspaceService
+
+LOGGER = logging.getLogger(__name__)
 
 
 class GenerationApiService:
-    def __init__(self, keys: GenerationApiKeyService, generations: GenerationService):
+    def __init__(
+        self,
+        keys: GenerationApiKeyService,
+        generations: GenerationService,
+        workspaces: WorkspaceService,
+    ):
         self.keys = keys
         self.generations = generations
+        self.workspaces = workspaces
 
     def submit(
-        self, key: GenerationApiKey, request_id: str, request: SubmitGeneration
+        self,
+        key: GenerationApiKey,
+        request_id: str,
+        request: SubmitGeneration,
+        *,
+        reference_uploads: tuple[tuple[str, bytes], ...] = (),
+        mask_content: bytes | None = None,
     ) -> tuple[GenerationJob, bool]:
-        digest = hashlib.sha256(
-            json.dumps(asdict(request), sort_keys=True).encode("ascii")
-        ).hexdigest()
+        if (
+            mask_content is not None
+            and request.workflow.get("generation_strategy", "sample") != "sample"
+        ):
+            raise ServiceError(
+                "局部重绘当前仅支持同提示词抽样",
+                code="mask_strategy_invalid",
+                status_code=422,
+            )
+        digest = _request_digest(request, reference_uploads, mask_content)
         user = self.keys.lock_active_owner(key)
 
         existing = _read_job(
@@ -45,16 +68,44 @@ class GenerationApiService:
                 "此请求 ID 已用于其他生成参数", code="idempotency_conflict", status_code=409
             )
 
+        if mask_content is not None and len(reference_uploads) != 1:
+            raise ServiceError(
+                "局部重绘必须且只能上传一张原图",
+                code="mask_reference_count_invalid",
+                status_code=422,
+            )
+
+        workspace = _new_api_workspace(user.id)
         try:
+            db.session.add(workspace)
+            assets = (
+                self.workspaces.add_assets(workspace, reference_uploads, commit=False)
+                if reference_uploads
+                else []
+            )
+            generation = replace(
+                request,
+                reference_ids=tuple(asset.id for asset in assets),
+                mode="img2img" if assets else "text2img",
+                mask=(
+                    GenerationMaskInput(target_asset_id=assets[0].id, content=mask_content)
+                    if mask_content is not None
+                    else None
+                ),
+            )
             job = self.generations.submit(
                 user.id,
-                _get_or_create_api_workspace(user.id),
-                request,
+                workspace,
+                generation,
                 api_request_id=request_id,
                 api_request_digest=digest,
             )
         except Exception:
             db.session.rollback()
+            try:
+                self.workspaces.storage.delete_workspace(user.id, workspace.id)
+            except Exception:
+                LOGGER.warning("清理未提交的生图 API 工作站失败：%s", workspace.id, exc_info=True)
             raise
         return job, True
 
@@ -93,23 +144,32 @@ class GenerationApiService:
         )
 
 
-def _get_or_create_api_workspace(user_id: int) -> Workspace:
-    # The caller holds the account lock until the workspace and job are committed.
-    workspace = db.session.scalar(
-        select(Workspace).where(
-            Workspace.user_id == user_id, Workspace.kind == GENERATION_API_WORKSPACE_KIND
-        )
+def _new_api_workspace(user_id: int) -> Workspace:
+    workspace_id = new_public_id()
+    return Workspace(
+        id=workspace_id,
+        user_id=user_id,
+        name=f"生图 API {workspace_id}",
+        kind=GENERATION_API_WORKSPACE_KIND,
+        settings={},
     )
-    if workspace is None:
-        workspace_id = new_public_id()
-        workspace = Workspace(
-            id=workspace_id,
-            user_id=user_id,
-            name=f"生图 API {workspace_id}",
-            kind=GENERATION_API_WORKSPACE_KIND,
-        )
-        db.session.add(workspace)
-    return workspace
+
+
+def _request_digest(
+    request: SubmitGeneration,
+    reference_uploads: tuple[tuple[str, bytes], ...],
+    mask_content: bytes | None,
+) -> str:
+    # Keep JSON-only digests compatible with API jobs submitted before file uploads were added.
+    payload = asdict(request)
+    if reference_uploads:
+        payload["reference_uploads"] = [
+            {"name": name, "sha256": hashlib.sha256(content).hexdigest()}
+            for name, content in reference_uploads
+        ]
+    if mask_content is not None:
+        payload["mask_content_sha256"] = hashlib.sha256(mask_content).hexdigest()
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("ascii")).hexdigest()
 
 
 def _read_job(*conditions: ColumnElement[bool]) -> GenerationJob | None:

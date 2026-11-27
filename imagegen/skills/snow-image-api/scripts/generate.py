@@ -32,11 +32,18 @@ class GenerationApiClient:
         self._opener = build_opener(NoRedirect())
 
     def open_response(
-        self, path: str, *, body: bytes | None = None, request_id: UUID | None = None
+        self,
+        path: str,
+        *,
+        body: bytes | None = None,
+        request_id: UUID | None = None,
+        content_type: str = "application/json",
     ) -> HTTPResponse:
         headers = {"Authorization": f"Bearer {self._api_key}"}
+        if body is not None:
+            headers["Content-Type"] = content_type
         if request_id is not None:
-            headers.update({"Content-Type": "application/json", "Idempotency-Key": str(request_id)})
+            headers["Idempotency-Key"] = str(request_id)
         request = Request(f"{self.base_url}/api/v1/{path}", data=body, headers=headers)
         try:
             return self._opener.open(request, timeout=30)
@@ -52,9 +59,16 @@ class GenerationApiClient:
             raise RuntimeError(message) from None
 
     def request_json(
-        self, path: str, *, body: bytes | None = None, request_id: UUID | None = None
+        self,
+        path: str,
+        *,
+        body: bytes | None = None,
+        request_id: UUID | None = None,
+        content_type: str = "application/json",
     ) -> dict:
-        with self.open_response(path, body=body, request_id=request_id) as response:
+        with self.open_response(
+            path, body=body, request_id=request_id, content_type=content_type
+        ) as response:
             return json.load(response)
 
     def get_job(self, job_id: str) -> dict:
@@ -104,6 +118,50 @@ def save_image(response: HTTPResponse, path: Path, mime_type: str) -> None:
         partial.replace(path)
 
 
+def _multipart_generation(
+    payload: dict, references: list[Path], mask: Path | None
+) -> tuple[bytes, str]:
+    boundary = f"----snow-image-api-{uuid4().hex}"
+    parts = []
+
+    def field(name: str, value: bytes, content_type: str | None = None) -> None:
+        headers = [f'Content-Disposition: form-data; name="{name}"']
+        if content_type:
+            headers.append(f"Content-Type: {content_type}")
+        parts.append(
+            f"--{boundary}\r\n".encode("ascii")
+            + "\r\n".join(headers).encode("ascii")
+            + b"\r\n\r\n"
+            + value
+            + b"\r\n"
+        )
+
+    field("payload", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    mime_types = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+    }
+    files = []
+    for index, path in enumerate(references):
+        extension = path.suffix.lower()
+        filename = f"reference_{index}{extension if extension in mime_types else ''}"
+        files.append(("references", path, filename))
+    if mask is not None:
+        files.append(("mask", mask, "mask.png"))
+    for name, path, filename in files:
+        content_type = mime_types.get(Path(filename).suffix.lower(), "application/octet-stream")
+        file_header = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'
+            f"Content-Type: {content_type}\r\n\r\n"
+        ).encode("ascii")
+        parts.append(file_header + path.read_bytes() + b"\r\n")
+    parts.append(f"--{boundary}--\r\n".encode("ascii"))
+    return b"".join(parts), f"multipart/form-data; boundary={boundary}"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=Path("snow-images"))
@@ -111,6 +169,14 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser("config", help="List available channels, prices and request limits")
     generate = commands.add_parser("generate", help="Submit a JSON request and download its images")
     generate.add_argument("request_file", type=Path)
+    generate.add_argument(
+        "--reference",
+        type=Path,
+        action="append",
+        default=[],
+        help="Upload a reference image. Repeat to include multiple images.",
+    )
+    generate.add_argument("--mask", type=Path, help="Upload a PNG mask for one reference image")
     generate.add_argument("--request-id", type=UUID, help="Reuse the UUID of the same submission")
     wait = commands.add_parser("wait", help="Resume waiting for an existing job")
     wait.add_argument("job_id", type=UUID)
@@ -164,13 +230,24 @@ def main() -> int:
             return 0
 
         if args.command == "generate":
+            if args.mask is not None and len(args.reference) != 1:
+                raise ValueError("A local-edit mask requires exactly one --reference image.")
             request_id = args.request_id or uuid4()
             payload = json.loads(args.request_file.read_text(encoding="utf-8-sig"))
+            if args.reference or args.mask is not None:
+                request_body, content_type = _multipart_generation(
+                    payload, args.reference, args.mask
+                )
+            else:
+                request_body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+                content_type = "application/json"
             print(f"Request ID: {request_id}", file=sys.stderr, flush=True)
-            request_body = json.dumps(payload).encode()
-            job = client.request_json("generations", body=request_body, request_id=request_id)[
-                "job"
-            ]
+            job = client.request_json(
+                "generations",
+                body=request_body,
+                request_id=request_id,
+                content_type=content_type,
+            )["job"]
             job_id = UUID(job["id"]).hex
         else:
             job_id = args.job_id.hex

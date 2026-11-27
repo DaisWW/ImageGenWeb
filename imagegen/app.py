@@ -162,7 +162,7 @@ def create_app(config: dict | None = None) -> Flask:
         generations=generations,
         image_test_suites=image_test_suites,
         image_test_runs=ImageTestRunService(generations, image_test_suites),
-        generation_api=GenerationApiService(generation_api_keys, generations),
+        generation_api=GenerationApiService(generation_api_keys, generations, workspaces),
         generation_api_keys=generation_api_keys,
         conversations=ConversationService(
             chat_models,
